@@ -76,19 +76,22 @@ private struct MenuBarPanel: View {
             Divider()
 
             HStack(spacing: 8) {
-                Image(systemName: brightness < 15 ? "sun.min" : "sun.max.fill")
+                Image(systemName: appModel.followSystemBrightness ? "sun.max.fill" : (brightness < 15 ? "sun.min" : "sun.max.fill"))
                     .foregroundStyle(.yellow)
                     .frame(width: 16)
                     .contentTransition(.symbolEffect(.replace))
-                Slider(value: $brightness, in: 0...100) { editing in
+                Slider(value: Binding(
+                    get: { brightness },
+                    set: { newValue in
+                        brightness = newValue
+                        appModel.setBrightness(Int(newValue))
+                    }
+                ), in: 0...100) { editing in
                     if !editing { appModel.commitBrightness() }
                 }
                 Text("\(Int(brightness))%")
                     .font(.callout.monospacedDigit())
                     .frame(width: 38, alignment: .trailing)
-            }
-            .onChange(of: brightness) { _, newValue in
-                appModel.setBrightness(Int(newValue))
             }
             .onChange(of: appModel.config.brightness) { _, newValue in
                 // 与主窗口滑杆互相同步;同值守卫避免回写循环

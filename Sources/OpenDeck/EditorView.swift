@@ -84,26 +84,49 @@ struct EditorView: View {
         .padding(.vertical, 4)
     }
 
-    /// 亮度:滑杆 + 百分比,拖动实时生效
+    /// 亮度:太阳图标 = 跟随开关(绿圈=跟随中,滑杆收起);点击展开滑杆进入手动
     private var brightnessControl: some View {
         HStack(spacing: 8) {
-            Image(systemName: brightness < 15 ? "sun.min" : "sun.max.fill")
-                .foregroundStyle(.yellow)
-                .contentTransition(.symbolEffect(.replace))
-            Slider(value: $brightness, in: 0...100) { editing in
-                if !editing { appModel.commitBrightness() }
+            Button {
+                appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
+            } label: {
+                Image(systemName: brightness < 15 ? "sun.min" : "sun.max.fill")
+                    .foregroundStyle(.yellow)
+                    .contentTransition(.symbolEffect(.replace))
+                    .padding(3)
+                    .overlay {
+                        // 跟随指示:太阳图标外的绿色圆圈
+                        Circle()
+                            .strokeBorder(appModel.followSystemBrightness ? Color.green : .clear, lineWidth: 2)
+                            .shadow(color: appModel.followSystemBrightness ? .green.opacity(0.55) : .clear, radius: 3)
+                    }
             }
-            .frame(width: 120)
+            .buttonStyle(.plain)
+            .help(appModel.followSystemBrightness ? "正在跟随 MacBook 亮度,点击改为手动" : "点击开启:亮度跟随 MacBook")
+
+            if !appModel.followSystemBrightness {
+                Slider(value: Binding(
+                    get: { brightness },
+                    set: { newValue in
+                        // 自定义 Binding:只有真实拖动走 setBrightness(程序性赋值直接写 @State,不经过这里)
+                        brightness = newValue
+                        appModel.setBrightness(Int(newValue))
+                    }
+                ), in: 0...100) { editing in
+                    if !editing { appModel.commitBrightness() }
+                }
+                .frame(width: 120)
+                .transition(.scale(scale: 0.6, anchor: .leading).combined(with: .opacity))
+            }
+
             Text("\(Int(brightness))%")
                 .font(.callout.monospacedDigit())
                 .frame(width: 38, alignment: .trailing)
         }
         .padding(.horizontal, 4)
-        .onChange(of: brightness) { _, newValue in
-            appModel.setBrightness(Int(newValue))
-        }
+        .animation(.snappy(duration: 0.25), value: appModel.followSystemBrightness)
         .onChange(of: appModel.config.brightness) { _, newValue in
-            // 与菜单栏面板互相同步;同值守卫避免回写循环
+            // 外部变化(跟随镜像/菜单栏)同步进本地;直接写 @State 不触发上面的用户路径
             if Int(brightness) != newValue {
                 brightness = Double(newValue)
             }
