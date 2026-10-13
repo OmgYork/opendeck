@@ -6,7 +6,7 @@ import Testing
 /// 协议纯函数黄金测试:字节布局全部对照 mirabox/HANDOFF.md §1.2
 @Suite("StreamDock293S 协议")
 struct StreamDock293STests {
-    @Test("蛇形键位映射:18 键双向一致")
+    @Test("顺序键位映射:15 键双向一致")
     func keyMapRoundTrip() {
         var seen = Set<UInt8>()
         for row in 0..<StreamDock293S.rows {
@@ -21,18 +21,17 @@ struct StreamDock293STests {
                 #expect(back?.column == column)
             }
         }
-        #expect(seen.count == 18)
+        #expect(seen.count == 15)
     }
 
-    @Test("键位表内容与硬件走线一致")
+    @Test("键位表内容与实拍解码一致:固件 id 自底行起算")
     func keyMapGolden() {
-        #expect(StreamDock293S.keyId(row: 0, column: 0) == 0x0d)
-        #expect(StreamDock293S.keyId(row: 0, column: 4) == 0x01)
-        #expect(StreamDock293S.keyId(row: 2, column: 4) == 0x03)
-        #expect(StreamDock293S.keyId(row: 0, column: 5) == 0x10)
-        #expect(StreamDock293S.keyId(row: 2, column: 5) == 0x12)
+        #expect(StreamDock293S.keyId(row: 0, column: 0) == 0x0b) // 物理顶行左 1
+        #expect(StreamDock293S.keyId(row: 0, column: 4) == 0x0f)
+        #expect(StreamDock293S.keyId(row: 1, column: 0) == 0x06)
+        #expect(StreamDock293S.keyId(row: 2, column: 4) == 0x05) // 物理底行右 1
         #expect(StreamDock293S.keyId(row: 3, column: 0) == nil)
-        #expect(StreamDock293S.keyId(row: 0, column: 6) == nil)
+        #expect(StreamDock293S.keyId(row: 0, column: 5) == nil) // 无软键列
     }
 
     @Test("命令包:CRT 前缀+补零到 1024")
@@ -77,30 +76,34 @@ struct StreamDock293STests {
         #expect(StreamDock293S.brightnessByte(percent: 120) == 100)
     }
 
-    @Test("输入报告解析:键 id/相位/软键/短报告")
+    @Test("输入报告解析:键 id/相位/短报告")
     func parseKeyEvents() {
         var report = [UInt8](repeating: 0, count: 32)
-        report[9] = 0x0d
+        report[9] = 0x01
         report[10] = 1
-        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 0, column: 0, phase: .down))
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 2, column: 0, phase: .down))
 
         report[10] = 0
-        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 0, column: 0, phase: .up))
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 2, column: 0, phase: .up))
 
-        report[9] = 0x12
+        report[9] = 0x0f
         report[10] = 1
-        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 2, column: 5, phase: .down))
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 0, column: 4, phase: .down))
 
         #expect(StreamDock293S.parseKeyEvent(fromReport: [UInt8](repeating: 0, count: 10)) == nil)
+
+        // 0x10-0x12 在 293V3 上不存在(此前误标为软键)
+        report[9] = 0x10
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == nil)
 
         report[9] = 0x99
         #expect(StreamDock293S.parseKeyEvent(fromReport: report) == nil)
     }
 
-    @Test("USB 身份识别")
+    @Test("USB 身份识别:293V3 两批次")
     func usbIds() {
         #expect(StreamDock293S.isKnownUSBId(vendorId: 0x6603, productId: 0x1005))
-        #expect(StreamDock293S.isKnownUSBId(vendorId: 0x5548, productId: 0x6670))
+        #expect(StreamDock293S.isKnownUSBId(vendorId: 0x6603, productId: 0x1006))
         #expect(!StreamDock293S.isKnownUSBId(vendorId: 0x0fd9, productId: 0x006c)) // Elgato,应拒绝
     }
 }

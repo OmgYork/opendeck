@@ -1,6 +1,6 @@
-// StreamDockHarness — 293S 物理验证工具
+// StreamDockHarness — 293V3 物理验证工具
 //
-// 用途:画满 18 键编号图(验证键位映射/图像链路),监听并打印按键事件(验证输入报告偏移)。
+// 用途:画满 15 键编号图(验证键位映射/图像链路),监听并打印按键事件(验证输入报告偏移)。
 // 退出码:0 = 收到至少一个按键事件;2 = 未找到设备;3 = 监听窗口内无按键。
 //
 // 用法:harness [--listen 秒](默认 90)
@@ -32,8 +32,7 @@ if ProcessInfo.processInfo.environment["TRACE"] != nil {
 var eventCount = 0
 controller.onKeyEvent = { event in
     eventCount += 1
-    let kind = event.column == 5 ? "软键" : "主键"
-    print("⌨️  r\(event.row)c\(event.column) \(kind) \(event.phase == .down ? "按下" : "抬起")")
+    print("⌨️  r\(event.row)c\(event.column) \(event.phase == .down ? "按下" : "抬起")")
 }
 
 controller.start()
@@ -48,27 +47,25 @@ let connected: Bool = {
     return false
 }()
 guard connected else {
-    print("❌ 未找到 293S 设备(退出码 2)")
+    print("❌ 未找到设备(退出码 2)")
     exit(2)
 }
 
 controller.setBrightness(80)
 
-// 画满 18 键:编号 + 方向三角(箭头朝上,若面板上显示为横向则说明 LCD 旋转,需在渲染层加 90° 校正)
+// 画满 15 键:顺序编号,验证键位映射与 UI 阅读顺序 1:1(左上 1,右下 15)
 let palette = [
     "#BF616A", "#D08770", "#EBCB8B", "#A3BE8C", "#88C0D0",
     "#5E81AC", "#B48EAD", "#8FBCBB", "#D85886", "#EC9A5F",
     "#EFD48B", "#9FCB87", "#77B5C9", "#81A1C1", "#C69ABE",
-    "#4C566A", "#434C5E", "#3B4252",
 ]
 for row in 0..<StreamDock293S.rows {
     for column in 0..<StreamDock293S.columns {
         let index = row * StreamDock293S.columns + column
-        let title = column == 5 ? "S\(row + 1)" : "\(index + 1)"
         guard let image = IconRenderer.render(
             size: StreamDock293S.keySize(column: column),
             backgroundColorHex: palette[index % palette.count],
-            title: title
+            title: "\(index + 1)"
         ) else {
             print("⚠️  r\(row)c\(column) 渲染失败")
             continue
@@ -80,7 +77,7 @@ for row in 0..<StreamDock293S.rows {
         controller.drawKey(row: row, column: column, image: image)
     }
 }
-print("✅ 已画满 18 键 —— 请查看面板:编号应为 1-15 + S1-S3,全部箭头朝上")
+print("✅ 已画满 15 键 —— 面板编号 1-15 应与阅读顺序一一对应(左上 1,右下 15)")
 print("—— 监听按键 \(Int(listenSeconds)) 秒,请在面板上按压任意键(6 个事件后提前结束)——")
 
 let deadline = Date().addingTimeInterval(listenSeconds)

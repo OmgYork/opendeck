@@ -9,8 +9,6 @@ import SwiftUI
 /// 交互遵循 fluid interfaces:悬停浮起、按下凹陷,弹簧可中断。
 struct KeycapView: View {
     let config: KeyConfig
-    /// 软键真实比例更小,网格与预览共用同一组件
-    var isSoftKey = false
     /// 预览场景禁用悬停动效
     var interactive = true
 

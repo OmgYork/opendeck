@@ -1,34 +1,38 @@
 import Foundation
 
-/// 293S(旧平台)协议常量与纯函数。
+/// Stream Dock 293V3(旧平台)协议常量与纯函数。
 /// 全部为无副作用计算,是单测的黄金标准;字节布局见 mirabox/HANDOFF.md §1.2。
+///
+/// 型号勘误(2026-10-13):本机设备 USB 0x6603:0x1005 在社区支持模块中明确定义为
+/// **293V3 = 5×3 = 15 键、键位 id 顺序排列、无软键列**(此前误按 HSV-293S 六列蛇形布局实现,
+/// 那条记录本身带 TODO: verify these 存疑标记;官方 app 报 6×3 属异常值)。
 public enum StreamDock293S {
     public static let rows = 3
-    public static let columns = 6
+    public static let columns = 5
     public static let packetSize = 1024
     /// 单键 JPEG 上限(设备端硬限制)
     public static let maxKeyJPEGBytes = 10_240
     /// 心跳周期,必须 <8s 否则设备自行重启
     public static let heartbeatInterval: TimeInterval = 7
 
-    /// 显示校正:实测 293S 的 LCD 安装方向导致图像水平镜像,渲染时需预翻转(2026-10-13 实测)
+    /// 显示校正:实测该批次 LCD 安装方向导致图像水平镜像,渲染时需预翻转(2026-10-13 实测;
+    /// 社区模块记 iconRotation 180°,与实测不符——以实测为准,待非对称字形复核)
     public static let mirrorsDisplayHorizontally = true
 
     static let cmdPrefix: [UInt8] = [0x43, 0x52, 0x54, 0x00, 0x00] // "CRT\0\0"
 
-    /// 蛇形键位(硬件走线),[row][column],第 5 列为软键
+    /// 键位映射:[逻辑行][列] → 固件 id。固件 id 从**物理底行**起算(0x01=左下),
+    /// 2026-10-13 实拍解码确认:逻辑第 0 行 = 物理顶行
     static let keyIds: [[UInt8]] = [
-        [0x0d, 0x0a, 0x07, 0x04, 0x01, 0x10],
-        [0x0e, 0x0b, 0x08, 0x05, 0x02, 0x11],
-        [0x0f, 0x0c, 0x09, 0x06, 0x03, 0x12],
+        [0x0b, 0x0c, 0x0d, 0x0e, 0x0f], // 物理顶行
+        [0x06, 0x07, 0x08, 0x09, 0x0a], // 物理中行
+        [0x01, 0x02, 0x03, 0x04, 0x05], // 物理底行
     ]
 
-    /// 已知 293S 系列 USB 身份(不同批次 PID 不同),打包为 vid<<16|pid
+    /// 已知 USB 身份:293V3 两批次(社区模块 293V3.ts),打包为 vid<<16|pid
     static let knownUSBIds: Set<UInt32> = [
         0x6603_1005, // 本机实测
-        0x6602_1014, 0x6603_1014, // companion HSV-293S
-        0x5548_6670, // companion HSV-293S-2
-        0x1500_3003, // companion HSV-293S-3
+        0x6603_1006,
     ]
 
     public static func isKnownUSBId(vendorId: Int, productId: Int) -> Bool {
@@ -52,9 +56,10 @@ public enum StreamDock293S {
         return nil
     }
 
-    /// 键面分辨率:主键 100×100,软键 80×80
+    /// 键面分辨率:全部主键 100×100
     public static func keySize(column: Int) -> Int {
-        column == 5 ? 80 : 100
+        _ = column
+        return 100
     }
 
     // MARK: - 命令构造(纯函数)

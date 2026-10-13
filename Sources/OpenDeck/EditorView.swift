@@ -168,10 +168,7 @@ struct EditorView: View {
                 Button {
                     editingTarget = EditTarget(index: index)
                 } label: {
-                    KeycapView(
-                        config: appModel.config.keyConfig(at: index),
-                        isSoftKey: index % StreamDock293S.columns == 5
-                    )
+                    KeycapView(config: appModel.config.keyConfig(at: index))
                 }
                 .buttonStyle(KeycapButtonStyle())
                 .help("编辑第 \(index + 1) 键")
@@ -179,10 +176,9 @@ struct EditorView: View {
         }
     }
 
-    // 第 6 列是设备软键(80×80,主键 100×100),收窄以贴近真实键面比例
+    // 5×3 全主键
     private static let gridColumns: [GridItem] =
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: StreamDock293S.columns - 1)
-        + [GridItem(.fixed(76), spacing: 12)]
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: StreamDock293S.columns)
 
     private var hint: some View {
         Text("单击键帽编辑,保存后立即上屏")

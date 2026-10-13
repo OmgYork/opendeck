@@ -26,10 +26,11 @@ struct IconRendererTests {
         }
     }
 
-    @Test("软键尺寸 80")
-    func softKeySize() {
-        #expect(StreamDock293S.keySize(column: 4) == 100)
-        #expect(StreamDock293S.keySize(column: 5) == 80)
+    @Test("键面尺寸统一 100")
+    func keySize() {
+        for column in 0..<StreamDock293S.columns {
+            #expect(StreamDock293S.keySize(column: column) == 100)
+        }
     }
 
     @Test("hex 颜色解析")

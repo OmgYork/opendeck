@@ -44,8 +44,8 @@ final class ConfigStore {
     private(set) var config: AppConfig
 
     private static let logger = Logger(subsystem: "opendeck", category: "config")
-    /// 293S 键板固定 18 键(5×3 主键 + 3 软键),index = row*6+column
-    private static let keyCount = 18
+    /// 293V3 键板固定 15 键(5×3),index = row*5+column
+    private static let keyCount = 15
     /// 默认键面底色(Nord 风格调色板),按键序轮转
     private static let defaultPalette = [
         "#BF616A", "#D08770", "#EBCB8B", "#A3BE8C", "#88C0D0",
@@ -169,17 +169,12 @@ final class ConfigStore {
     private static func defaultConfig() -> AppConfig {
         var keys = [KeyConfig]()
         keys.reserveCapacity(keyCount)
-        var mainNumber = 0
-        var softNumber = 0
         for index in 0..<keyCount {
-            // 每行第 6 列是软键(293S 布局),编号 S1–S3;主键按阅读顺序编 1–15
-            if index % 6 == 5 {
-                softNumber += 1
-                keys.append(KeyConfig(title: "S\(softNumber)", backgroundColorHex: defaultPalette[index % defaultPalette.count]))
-            } else {
-                mainNumber += 1
-                keys.append(KeyConfig(title: "\(mainNumber)", backgroundColorHex: defaultPalette[index % defaultPalette.count]))
-            }
+            // 5×3 全主键,按阅读顺序编 1–15
+            keys.append(KeyConfig(
+                title: "\(index + 1)",
+                backgroundColorHex: defaultPalette[index % defaultPalette.count]
+            ))
         }
         return AppConfig(pages: [Page(name: "默认页面", keys: keys)])
     }
