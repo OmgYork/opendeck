@@ -1,6 +1,6 @@
 import Foundation
-import IOKit
-import IOKit.hid
+@preconcurrency import IOKit
+@preconcurrency import IOKit.hid
 
 /// HID 传输层:设备发现/热插拔/串行写/输入回调/心跳。
 ///
@@ -83,15 +83,19 @@ final class HIDTransport: @unchecked Sendable {
         heartbeatTimer = nil
 
         if let dev = device {
-            // 与已入队的写命令保序:关闭动作排到串行队列尾执行
+            // 与已入队的写命令保序:关闭动作排到串行队列尾执行。
+            // 有界等待:设备固件无响应时 IOHIDDeviceClose 可能永久阻塞,不能拖死调用方
             // (此 SDK 中注销回调的参数非 Optional,无法传 nil;IOHIDDeviceClose 即注销一切)
-            writeQueue.sync { [weak self] in
+            let closed = DispatchSemaphore(value: 0)
+            writeQueue.async { [weak self] in
                 guard let self else { return }
                 IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
                 if let rl = self.lock.withLock({ self.runLoop }) {
                     IOHIDDeviceUnscheduleFromRunLoop(dev, rl, CFRunLoopMode.defaultMode.rawValue)
                 }
+                closed.signal()
             }
+            _ = closed.wait(timeout: .now() + 1)
         }
         if let manager, let runLoop {
             IOHIDManagerRegisterDeviceMatchingCallback(manager, nil, nil)

@@ -11,6 +11,9 @@ public enum StreamDock293S {
     /// 心跳周期,必须 <8s 否则设备自行重启
     public static let heartbeatInterval: TimeInterval = 7
 
+    /// 显示校正:实测 293S 的 LCD 安装方向导致图像水平镜像,渲染时需预翻转(2026-10-13 实测)
+    public static let mirrorsDisplayHorizontally = true
+
     static let cmdPrefix: [UInt8] = [0x43, 0x52, 0x54, 0x00, 0x00] // "CRT\0\0"
 
     /// 蛇形键位(硬件走线),[row][column],第 5 列为软键

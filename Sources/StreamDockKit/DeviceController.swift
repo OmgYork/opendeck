@@ -114,6 +114,8 @@ public final class DeviceController {
     private func handleAttached() {
         state = .running
         onLog?("设备已连接,执行校准")
+        // 握手必须最先:自重启过的设备(心跳丢失/断电后)在见到 CONNECT 前会静默丢弃一切屏幕命令(实测 2026-10-13)
+        transport.sendCommand(StreamDock293S.heartbeatCommand)
         transport.sendCommand(StreamDock293S.wakeCommand)
         setBrightness(brightnessPercent)
         clearAll()

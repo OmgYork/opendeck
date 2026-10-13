@@ -38,6 +38,11 @@ public enum IconRenderer {
             ctx.rotate(by: CGFloat(rotationDegrees) * .pi / 180)
             ctx.translateBy(x: -square.width / 2, y: -square.height / 2)
         }
+        if StreamDock293S.mirrorsDisplayHorizontally {
+            // 设备侧会水平镜像图像,这里预翻转抵消(模型层单一事实来源)
+            ctx.translateBy(x: square.width, y: 0)
+            ctx.scaleBy(x: -1, y: 1)
+        }
 
         let background = HexColor.parse(backgroundColorHex) ?? CGColor(srgbRed: 0.23, green: 0.26, blue: 0.35, alpha: 1)
         ctx.setFillColor(background)

@@ -3,3 +3,4 @@
 
 # SPM 构建产物(父仓库已忽略 .build/,此处双保险)
 /.build/
+/coldtest

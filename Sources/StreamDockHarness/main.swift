@@ -8,6 +8,8 @@
 import Foundation
 import StreamDockKit
 
+setbuf(stdout, nil) // 管道重定向时禁用块缓冲,事件实时可见
+
 let arguments = CommandLine.arguments
 let listenSeconds: TimeInterval
 if let index = arguments.firstIndex(of: "--listen"), index + 1 < arguments.count, let s = Double(arguments[index + 1]) {
