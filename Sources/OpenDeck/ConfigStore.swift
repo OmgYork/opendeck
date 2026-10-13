@@ -64,6 +64,8 @@ struct AppConfig: Codable {
     var layout: LayoutParams? = nil
     /// 场景联动的默认页:前台应用无绑定时显示此页(可选,旧配置缺省)
     var defaultPageID: UUID? = nil
+    /// 自动熄屏:设备空闲(无按键)达到该分钟数后自动熄屏;0/缺省 = 关
+    var autoScreenOffMinutes: Int? = nil
 }
 
 // MARK: - 配置存储
@@ -247,6 +249,15 @@ final class ConfigStore {
     var brightness: Int {
         get { config.brightness }
         set { config.brightness = max(0, min(100, newValue)) }
+    }
+
+    /// 自动熄屏分钟数(0 = 关);菜单直选,立即落盘
+    var autoScreenOffMinutes: Int {
+        get { config.autoScreenOffMinutes ?? 0 }
+        set {
+            config.autoScreenOffMinutes = max(0, newValue)
+            save()
+        }
     }
 
     /// 越界时返回空白键配置(手改文件兜底),不让 UI 网格崩溃

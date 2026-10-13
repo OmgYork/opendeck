@@ -99,6 +99,18 @@ struct EditorView: View {
                 } label: {
                     Label("插件管理…", systemImage: "puzzlepiece.extension")
                 }
+                Picker(selection: Binding(
+                    get: { appModel.config.autoScreenOffMinutes },
+                    set: { appModel.config.autoScreenOffMinutes = $0 }
+                )) {
+                    Text("自动熄屏:关").tag(0)
+                    Text("自动熄屏:5 分钟").tag(5)
+                    Text("自动熄屏:10 分钟").tag(10)
+                    Text("自动熄屏:30 分钟").tag(30)
+                    Text("自动熄屏:60 分钟").tag(60)
+                } label: {
+                    Label("自动熄屏", systemImage: "moon.zzz")
+                }
                 Button {
                     appModel.applyPageToDevice()
                 } label: {

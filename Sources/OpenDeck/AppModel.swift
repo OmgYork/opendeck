@@ -63,6 +63,7 @@ final class AppModel {
             self.pressedKeyIndices = event.phase == .down
                 ? self.pressedKeyIndices.union([index])
                 : self.pressedKeyIndices.subtracting([index])
+            self.lastDeviceActivityAt = Date()
             // 熄屏待机:任意按下沿唤醒,该次按压不产生动作
             if self.device.isScreenOff {
                 if event.phase == .down { self.device.wakeFromScreenOff() }
@@ -88,6 +89,7 @@ final class AppModel {
         if config.followSystemBrightness {
             startFollowingBrightness()
         }
+        startScreenOffWatchdog()
     }
 
     /// 应用退出时收割插件进程并释放设备,挂到 applicationWillTerminate
@@ -258,6 +260,31 @@ final class AppModel {
     func setFollowSystemBrightness(_ on: Bool) {
         config.followSystemBrightness = on
         on ? startFollowingBrightness() : stopFollowingBrightness()
+    }
+
+    // MARK: - 自动熄屏(空闲看门狗)
+
+    /// 最近一次设备按键时间(自动熄屏的空闲时钟;唤醒按键也会重置)
+    private var lastDeviceActivityAt = Date()
+    private var screenOffWatchdogTask: Task<Void, Never>?
+
+    private func startScreenOffWatchdog() {
+        guard screenOffWatchdogTask == nil else { return }
+        screenOffWatchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard let self else { return }
+                self.autoScreenOffCheck()
+            }
+        }
+    }
+
+    private func autoScreenOffCheck() {
+        let minutes = config.autoScreenOffMinutes
+        guard minutes > 0, device.state == .running, !device.isScreenOff else { return }
+        guard Date().timeIntervalSince(lastDeviceActivityAt) >= TimeInterval(minutes * 60) else { return }
+        device.screenOff()
+        appendLog("设备空闲超过 \(minutes) 分钟,已自动熄屏")
     }
 
     private var followTask: Task<Void, Never>?
