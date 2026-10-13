@@ -97,6 +97,11 @@ private struct MenuBarPanel: View {
                 }
             }
 
+            Toggle("亮度跟随 MacBook", isOn: Binding(
+                get: { appModel.followSystemBrightness },
+                set: { appModel.setFollowSystemBrightness($0) }
+            ))
+
             Toggle("登录时启动", isOn: Binding(
                 get: { appModel.isLaunchAtLoginEnabled },
                 set: { appModel.setLaunchAtLogin($0) }

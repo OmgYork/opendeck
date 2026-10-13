@@ -30,7 +30,7 @@ struct EditorView: View {
         .containerBackground(for: .window) {
             Color(nsColor: .windowBackgroundColor)
         }
-        .frame(minWidth: 700, minHeight: 560)
+        .frame(minWidth: 760, minHeight: 560)
         .task { appModel.start() }
         .onAppear {
             brightness = Double(appModel.config.config.brightness)
@@ -49,9 +49,15 @@ struct EditorView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) { statusPill }
+        // 状态与亮度并入同一工具栏项,固定尺寸避免与右侧按钮互相挤压重叠
+        ToolbarItem(placement: .principal) {
+            HStack(spacing: 14) {
+                statusPill
+                brightnessControl
+            }
+            .fixedSize()
+        }
         ToolbarItemGroup(placement: .primaryAction) {
-            brightnessControl
             Button {
                 appModel.applyPageToDevice()
             } label: {

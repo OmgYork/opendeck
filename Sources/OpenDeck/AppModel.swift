@@ -1,4 +1,5 @@
 import AppKit
+import IOKit
 import Observation
 import ServiceManagement
 import StreamDockKit
@@ -55,6 +56,10 @@ final class AppModel {
         // 先同步亮度再 start():设备连接校准时控制器会以已存值设置背光
         device.setBrightness(config.config.brightness)
         device.start()
+        // 配置了跟随系统亮度则启动轮询(设备连上后 1.5s 内完成首次镜像)
+        if config.followSystemBrightness {
+            startFollowingBrightness()
+        }
     }
 
     /// 应用退出时释放设备(发送断开命令并停止监控),挂到 applicationWillTerminate
@@ -90,8 +95,11 @@ final class AppModel {
 
     // MARK: - 亮度
 
-    /// 拖动中调用:更新内存与设备(实时反馈),不落盘
-    func setBrightness(_ percent: Int) {
+    /// 拖动滑杆调用:更新内存与设备(实时反馈),不落盘;跟随模式下手动调节自动退出跟随
+    func setBrightness(_ percent: Int, userInitiated: Bool = true) {
+        if userInitiated, config.followSystemBrightness {
+            setFollowSystemBrightness(false)
+        }
         let clamped = max(0, min(100, percent))
         config.brightness = clamped
         device.setBrightness(clamped)
@@ -100,6 +108,59 @@ final class AppModel {
     /// 拖动结束调用:一次性落盘,避免滑杆每帧写配置文件
     func commitBrightness() {
         config.save()
+    }
+
+    // MARK: - 亮度跟随系统
+
+    var followSystemBrightness: Bool {
+        config.followSystemBrightness
+    }
+
+    /// 开关「亮度跟随 MacBook」:开启后每 1.5s 镜像内建屏亮度(环境光自动调节即随之生效)
+    func setFollowSystemBrightness(_ on: Bool) {
+        config.followSystemBrightness = on
+        on ? startFollowingBrightness() : stopFollowingBrightness()
+    }
+
+    private var followTask: Task<Void, Never>?
+
+    private func startFollowingBrightness() {
+        followTask?.cancel()
+        followTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.mirrorSystemBrightnessOnce()
+                try? await Task.sleep(for: .seconds(1.5))
+            }
+        }
+        mirrorSystemBrightnessOnce()
+    }
+
+    private func stopFollowingBrightness() {
+        followTask?.cancel()
+        followTask = nil
+    }
+
+    private func mirrorSystemBrightnessOnce() {
+        guard config.followSystemBrightness, device.state == .running,
+              let percent = Self.systemBrightnessPercent() else { return }
+        setBrightness(percent, userInitiated: false)
+    }
+
+    /// 内建屏亮度(IODisplayConnect,0.0–1.0)→ 百分比;外接屏/读取失败返回 nil
+    private static func systemBrightnessPercent() -> Int? {
+        var iterator = io_iterator_t()
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iterator) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(iterator) }
+        while true {
+            let service = IOIteratorNext(iterator)
+            if service == 0 { break }
+            defer { IOObjectRelease(service) }
+            var level: Float = -1
+            if IODisplayGetFloatParameter(service, 0, kIODisplayBrightnessKey as CFString, &level) == KERN_SUCCESS, level >= 0 {
+                return max(0, min(100, Int((level * 100).rounded())))
+            }
+        }
+        return nil
     }
 
     // MARK: - 官方 app 冲突

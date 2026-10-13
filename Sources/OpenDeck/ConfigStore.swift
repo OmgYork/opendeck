@@ -31,6 +31,8 @@ struct AppConfig: Codable {
     var pages: [Page] = [Page()]
     var currentPageIndex: Int = 0
     var brightness: Int = 80
+    /// 亮度跟随 MacBook(环境光自动调节);可选保证旧配置文件缺键可解码
+    var followSystemBrightness: Bool? = false
 }
 
 // MARK: - 配置存储
@@ -91,6 +93,15 @@ final class ConfigStore {
         set {
             guard config.pages.indices.contains(newValue) else { return }
             config.currentPageIndex = newValue
+            save()
+        }
+    }
+
+    /// 亮度跟随 MacBook 的开关(nil 视为关)
+    var followSystemBrightness: Bool {
+        get { config.followSystemBrightness ?? false }
+        set {
+            config.followSystemBrightness = newValue
             save()
         }
     }
