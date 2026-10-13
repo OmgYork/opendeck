@@ -13,6 +13,9 @@ enum KeyAction: Codable, Hashable {
     case appleScript(String)
     case hotkey(keyCode: Int, modifiers: [String])  // modifiers 元素: "command"/"option"/"control"/"shift"
     case mediaKey(String)               // "playPause"/"next"/"previous"/"volumeUp"/"volumeDown"/"mute"
+    /// 插件动作:pluginID = .sdPlugin 目录名去后缀(= manifest UUID),contextID = 实例身份
+    /// (分配时生成的 UUID,持久化于此,跨重启稳定;settings 存 pluginSettings/<pluginID>.json)
+    case plugin(pluginID: String, actionUUID: String, contextID: String)
 }
 
 struct KeyConfig: Codable, Hashable {

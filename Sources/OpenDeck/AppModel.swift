@@ -14,6 +14,7 @@ final class AppModel {
 
     let device = DeviceController()
     let config = ConfigStore()
+    let pluginHost = PluginHostModel()
 
     /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)
     private(set) var officialAppRunning = false
@@ -38,6 +39,20 @@ final class AppModel {
         refreshOfficialAppFlag()
         observeWorkspaceApplications()
 
+        pluginHost.hooks.draw = { [weak self] index, image in
+            guard let self else { return }
+            self.device.drawKey(row: index / StreamDock293S.columns,
+                                column: index % StreamDock293S.columns, image: image)
+        }
+        pluginHost.hooks.backgroundColor = { [weak self] index in
+            self?.config.keyConfig(at: index).backgroundColorHex ?? "#3B4252"
+        }
+        pluginHost.hooks.open = { url in NSWorkspace.shared.open(url) }
+        pluginHost.hooks.log = { [weak self] line in
+            self?.appendLog(line)
+        }
+        pluginHost.start()
+
         device.onLog = { [weak self] line in
             self?.appendLog(line)
         }
@@ -48,8 +63,14 @@ final class AppModel {
             self.pressedKeyIndices = event.phase == .down
                 ? self.pressedKeyIndices.union([index])
                 : self.pressedKeyIndices.subtracting([index])
-            // 只在按下沿触发动作,抬起沿不重复执行
-            guard event.phase == .down, let action = self.config.keyConfig(at: index).action else { return }
+            let action = self.config.keyConfig(at: index).action
+            // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
+            if case .plugin = action {
+                self.pluginHost.handleKey(index: index, phase: event.phase)
+                return
+            }
+            // 原生动作只在按下沿触发,抬起沿不重复执行
+            guard event.phase == .down, let action else { return }
             Task { await ActionRunner.run(action) }
         }
 
@@ -62,8 +83,9 @@ final class AppModel {
         }
     }
 
-    /// 应用退出时释放设备(发送断开命令并停止监控),挂到 applicationWillTerminate
+    /// 应用退出时收割插件进程并释放设备,挂到 applicationWillTerminate
     func handleAppQuit() {
+        pluginHost.shutdown()
         device.shutdown()
     }
 
@@ -76,11 +98,13 @@ final class AppModel {
         }
     }
 
-    /// 单键重画:编辑保存后即时上屏
+    /// 单键重画:编辑保存后即时上屏;同时把插件动作的分配/移除同步给插件宿主
+    /// (启动整页刷新、单键编辑都会走到这里,是宿主实例与配置天然的对账点)
     func applyKey(at index: Int) {
         let row = index / StreamDock293S.columns
         let column = index % StreamDock293S.columns
         let key = config.keyConfig(at: index)
+        pluginHost.syncKey(at: index, action: key.action)
         guard let image = IconRenderer.render(
             size: StreamDock293S.keySize(column: column),
             backgroundColorHex: key.backgroundColorHex,

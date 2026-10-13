@@ -149,6 +149,7 @@ enum ActionStyle {
         case .appleScript: "chevron.left.forwardslash.chevron.right"
         case .hotkey: "keyboard"
         case .mediaKey: "play.circle"
+        case .plugin: "puzzlepiece.extension"
         }
     }
 
@@ -161,6 +162,7 @@ enum ActionStyle {
         case .appleScript: "AppleScript"
         case .hotkey: "热键"
         case .mediaKey: "媒体"
+        case .plugin: "插件"
         }
     }
 }

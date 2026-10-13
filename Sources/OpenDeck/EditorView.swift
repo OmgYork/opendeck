@@ -12,6 +12,7 @@ struct EditorView: View {
     @State private var editingTarget: EditTarget?
     @State private var brightness: Double = 0
     @State private var showLayoutTuning = false
+    @State private var showPluginManager = false
 
     var body: some View {
         ScrollView {
@@ -47,6 +48,9 @@ struct EditorView: View {
         .sheet(isPresented: $showLayoutTuning) {
             LayoutTuningSheet(appModel: appModel)
         }
+        .sheet(isPresented: $showPluginManager) {
+            PluginManagerSheet(appModel: appModel)
+        }
     }
 
     // MARK: 工具栏
@@ -64,6 +68,11 @@ struct EditorView: View {
                     showLayoutTuning = true
                 } label: {
                     Label("亮度布局调参…", systemImage: "slider.horizontal.3")
+                }
+                Button {
+                    showPluginManager = true
+                } label: {
+                    Label("插件管理…", systemImage: "puzzlepiece.extension")
                 }
                 Button {
                     appModel.applyPageToDevice()
@@ -257,6 +266,8 @@ private struct KeyEditView: View {
 
     let index: Int
     let appModel: AppModel
+    /// 原动作:同键保存同插件动作时复用 contextID(实例身份跨保存稳定)
+    private let originalAction: KeyAction?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -272,11 +283,14 @@ private struct KeyEditView: View {
     @State private var hotkeyKeyCode: Int?
     @State private var hotkeyModifiers: [String]
     @State private var mediaKeyValue: String
+    @State private var pluginID: String
+    @State private var pluginActionUUID: String
 
     init(index: Int, appModel: AppModel) {
         self.index = index
         self.appModel = appModel
         let key = appModel.config.keyConfig(at: index)
+        originalAction = key.action
         _title = State(initialValue: key.title)
         _colorHex = State(initialValue: key.backgroundColorHex)
         _iconPath = State(initialValue: key.iconPath)
@@ -289,6 +303,8 @@ private struct KeyEditView: View {
         var keyCode: Int?
         var modifiers: [String] = []
         var mediaKey = "playPause"
+        var pluginID = ""
+        var pluginActionUUID = ""
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url
@@ -297,6 +313,10 @@ private struct KeyEditView: View {
         case .appleScript(let script): kind = .appleScript; scriptText = script
         case .hotkey(let code, let mods): kind = .hotkey; keyCode = code; modifiers = mods
         case .mediaKey(let name): kind = .mediaKey; mediaKey = name
+        case .plugin(let id, let actionUUID, _):
+            kind = .plugin
+            pluginID = id
+            pluginActionUUID = actionUUID
         case nil: break
         }
         _kind = State(initialValue: kind)
@@ -307,6 +327,8 @@ private struct KeyEditView: View {
         _hotkeyKeyCode = State(initialValue: keyCode)
         _hotkeyModifiers = State(initialValue: modifiers)
         _mediaKeyValue = State(initialValue: mediaKey)
+        _pluginID = State(initialValue: pluginID)
+        _pluginActionUUID = State(initialValue: pluginActionUUID)
     }
 
     /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
@@ -473,6 +495,53 @@ private struct KeyEditView: View {
                 .labelsHidden()
                 .frame(width: 180)
             }
+        case .plugin:
+            pluginActionForm
+        }
+    }
+
+    /// 插件动作:已装 Node 插件 → 其 Keypad 型动作 两级选择
+    private var pluginActionForm: some View {
+        let nodePlugins = appModel.pluginHost.installedPlugins.filter { $0.manifest.family.isNode }
+        let selected = nodePlugins.first { $0.manifest.pluginUUID == pluginID }
+        return Group {
+            if nodePlugins.isEmpty {
+                LabeledContent("说明") {
+                    Text("尚未安装插件。请从菜单栏「⋯ → 插件管理…」安装 .sdPlugin 或导入官方插件")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                LabeledContent("插件") {
+                    Picker("", selection: $pluginID) {
+                        Text("未选择").tag("")
+                        ForEach(nodePlugins, id: \.manifest.pluginUUID) { plugin in
+                            Text(plugin.manifest.name).tag(plugin.manifest.pluginUUID)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                    .onChange(of: pluginID) { _, _ in pluginActionUUID = "" }
+                }
+                LabeledContent("动作") {
+                    if let selected {
+                        Picker("", selection: $pluginActionUUID) {
+                            Text("未选择").tag("")
+                            ForEach(selected.manifest.keypadActions, id: \.uuid) { action in
+                                Text(action.name).tag(action.uuid)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 220)
+                    } else {
+                        Text("—").foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("说明") {
+                    Text("动作参数面板(Property Inspector)将在 M3 提供;直播/录制等动作开箱即用")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -514,7 +583,22 @@ private struct KeyEditView: View {
             }
         case .mediaKey:
             .mediaKey(mediaKeyValue)
+        case .plugin:
+            assembledPluginAction
         }
+    }
+
+    /// 插件动作组装:同键保存同一动作 → 复用原 contextID;换动作 → 生成新实例
+    private var assembledPluginAction: KeyAction? {
+        guard !pluginID.isEmpty, !pluginActionUUID.isEmpty else { return nil }
+        let contextID: String
+        if case .plugin(let oldPlugin, let oldAction, let oldContext) = originalAction,
+           oldPlugin == pluginID, oldAction == pluginActionUUID {
+            contextID = oldContext
+        } else {
+            contextID = UUID().uuidString
+        }
+        return .plugin(pluginID: pluginID, actionUUID: pluginActionUUID, contextID: contextID)
     }
 
     private func save() {
@@ -534,6 +618,7 @@ enum ActionKind: Hashable, CaseIterable {
     case appleScript
     case hotkey
     case mediaKey
+    case plugin
 
     var label: String {
         switch self {
@@ -545,6 +630,7 @@ enum ActionKind: Hashable, CaseIterable {
         case .appleScript: "AppleScript"
         case .hotkey: "全局热键"
         case .mediaKey: "媒体控制"
+        case .plugin: "插件动作"
         }
     }
 }

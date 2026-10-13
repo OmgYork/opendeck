@@ -200,6 +200,8 @@ enum ActionRunner {
             await runHotkey(keyCode: keyCode, modifiers: modifiers)
         case .mediaKey(let name):
             postMediaKey(named: name)
+        case .plugin:
+            break // 插件动作走 PluginHostModel(按下/抬起两沿),不经此分发
         }
     }
 
