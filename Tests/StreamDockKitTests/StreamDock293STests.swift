@@ -76,19 +76,32 @@ struct StreamDock293STests {
         #expect(StreamDock293S.brightnessByte(percent: 120) == 100)
     }
 
+    @Test("输入键位与绘制键位是两套编号空间(实测)")
+    func inputKeyMapGolden() {
+        // 输入自顶行起算:按物理左上报 0x01,按物理右下报 0x0f
+        #expect(StreamDock293S.inputPosition(of: 0x01) == (row: 0, column: 0))
+        #expect(StreamDock293S.inputPosition(of: 0x05) == (row: 0, column: 4))
+        #expect(StreamDock293S.inputPosition(of: 0x06) == (row: 1, column: 0))
+        #expect(StreamDock293S.inputPosition(of: 0x0f) == (row: 2, column: 4))
+        // 绘制表与输入表在顶/底行对调:同一 id 两表位置不同(中行重合)
+        #expect(StreamDock293S.position(of: 0x01) == (row: 2, column: 0))
+        #expect(StreamDock293S.inputPosition(of: 0x01) != StreamDock293S.position(of: 0x01))
+        #expect(StreamDock293S.position(of: 0x06) == StreamDock293S.inputPosition(of: 0x06))
+    }
+
     @Test("输入报告解析:键 id/相位/短报告")
     func parseKeyEvents() {
         var report = [UInt8](repeating: 0, count: 32)
         report[9] = 0x01
         report[10] = 1
-        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 2, column: 0, phase: .down))
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 0, column: 0, phase: .down))
 
         report[10] = 0
-        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 2, column: 0, phase: .up))
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 0, column: 0, phase: .up))
 
         report[9] = 0x0f
         report[10] = 1
-        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 0, column: 4, phase: .down))
+        #expect(StreamDock293S.parseKeyEvent(fromReport: report) == KeyEvent(row: 2, column: 4, phase: .down))
 
         #expect(StreamDock293S.parseKeyEvent(fromReport: [UInt8](repeating: 0, count: 10)) == nil)
 

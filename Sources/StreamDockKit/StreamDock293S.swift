@@ -21,12 +21,21 @@ public enum StreamDock293S {
 
     static let cmdPrefix: [UInt8] = [0x43, 0x52, 0x54, 0x00, 0x00] // "CRT\0\0"
 
-    /// 键位映射:[逻辑行][列] → 固件 id。固件 id 从**物理底行**起算(0x01=左下),
-    /// 2026-10-13 实拍解码确认:逻辑第 0 行 = 物理顶行
+    /// 键位映射:[逻辑行][列] → 固件 id,用于**绘制**(BAT 命令)。
+    /// 绘制空间自底行起算(实拍解码:0x0b=物理左上,0x01=物理左下)
     static let keyIds: [[UInt8]] = [
         [0x0b, 0x0c, 0x0d, 0x0e, 0x0f], // 物理顶行
         [0x06, 0x07, 0x08, 0x09, 0x0a], // 物理中行
         [0x01, 0x02, 0x03, 0x04, 0x05], // 物理底行
+    ]
+
+    /// 键位映射,用于**输入报告解析**。
+    /// ⚠️ 固件的绘制与输入是两套编号空间(2026-10-13 按压实测):输入自顶行起算
+    /// (按物理左上报 0x01),与绘制空间在顶/底两行恰好对调,中行重合——勿合并为一张表
+    static let inputKeyIds: [[UInt8]] = [
+        [0x01, 0x02, 0x03, 0x04, 0x05], // 物理顶行
+        [0x06, 0x07, 0x08, 0x09, 0x0a], // 物理中行
+        [0x0b, 0x0c, 0x0d, 0x0e, 0x0f], // 物理底行
     ]
 
     /// 已知 USB 身份:293V3 两批次(社区模块 293V3.ts),打包为 vid<<16|pid
@@ -115,12 +124,20 @@ public enum StreamDock293S {
         return UInt8((pow(Double(clamped) / 100, 0.75) * 100).rounded())
     }
 
+    /// 输入报告键 id → 物理位置(走输入键位空间,勿用绘制表)
+    public static func inputPosition(of keyId: UInt8) -> (row: Int, column: Int)? {
+        for (r, row) in inputKeyIds.enumerated() {
+            if let c = row.firstIndex(of: keyId) { return (r, c) }
+        }
+        return nil
+    }
+
     /// 输入报告解析:report[9]=键 id,report[10]=0 抬起/非 0 按下
     public static func parseKeyEvent(fromReport report: [UInt8]) -> KeyEvent? {
         guard report.count >= 11 else { return nil }
         let key = report[9]
         let phase: KeyEvent.Phase = report[10] == 0 ? .up : .down
-        guard let pos = position(of: key) else { return nil }
+        guard let pos = inputPosition(of: key) else { return nil }
         return KeyEvent(row: pos.row, column: pos.column, phase: phase)
     }
 }
