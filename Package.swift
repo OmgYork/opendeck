@@ -17,6 +17,13 @@ let package = Package(
             path: "Sources/StreamDockHarness",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        // 原生管理器应用(SwiftUI)
+        .executableTarget(
+            name: "MiraDeck",
+            dependencies: ["StreamDockKit"],
+            path: "Sources/MiraDeck",
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
         .testTarget(
             name: "StreamDockKitTests",
             dependencies: ["StreamDockKit"],
