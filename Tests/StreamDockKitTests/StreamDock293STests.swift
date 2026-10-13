@@ -79,14 +79,20 @@ struct StreamDock293STests {
     @Test("输入键位与绘制键位是两套编号空间(实测)")
     func inputKeyMapGolden() {
         // 输入自顶行起算:按物理左上报 0x01,按物理右下报 0x0f
-        #expect(StreamDock293S.inputPosition(of: 0x01) == (row: 0, column: 0))
-        #expect(StreamDock293S.inputPosition(of: 0x05) == (row: 0, column: 4))
-        #expect(StreamDock293S.inputPosition(of: 0x06) == (row: 1, column: 0))
-        #expect(StreamDock293S.inputPosition(of: 0x0f) == (row: 2, column: 4))
+        let topLeft = StreamDock293S.inputPosition(of: 0x01)
+        #expect(topLeft?.row == 0 && topLeft?.column == 0)
+        let topRight = StreamDock293S.inputPosition(of: 0x05)
+        #expect(topRight?.row == 0 && topRight?.column == 4)
+        let midLeft = StreamDock293S.inputPosition(of: 0x06)
+        #expect(midLeft?.row == 1 && midLeft?.column == 0)
+        let bottomRight = StreamDock293S.inputPosition(of: 0x0f)
+        #expect(bottomRight?.row == 2 && bottomRight?.column == 4)
+
         // 绘制表与输入表在顶/底行对调:同一 id 两表位置不同(中行重合)
-        #expect(StreamDock293S.position(of: 0x01) == (row: 2, column: 0))
-        #expect(StreamDock293S.inputPosition(of: 0x01) != StreamDock293S.position(of: 0x01))
-        #expect(StreamDock293S.position(of: 0x06) == StreamDock293S.inputPosition(of: 0x06))
+        let drawBottomLeft = StreamDock293S.position(of: 0x01)
+        #expect(drawBottomLeft?.row == 2 && drawBottomLeft?.column == 0)
+        let drawMidLeft = StreamDock293S.position(of: 0x06)
+        #expect(drawMidLeft?.row == midLeft?.row && drawMidLeft?.column == midLeft?.column)
     }
 
     @Test("输入报告解析:键 id/相位/短报告")
