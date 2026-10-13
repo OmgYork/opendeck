@@ -13,6 +13,14 @@ enum KeyAction: Codable, Hashable {
     case appleScript(String)
     case hotkey(keyCode: Int, modifiers: [String])  // modifiers 元素: "command"/"option"/"control"/"shift"
     case mediaKey(String)               // "playPause"/"next"/"previous"/"volumeUp"/"volumeDown"/"mute"
+    // 设备控制动作(M2.5):AppModel 本地消化,不经 ActionRunner
+    case previousPage                   // 上一页(循环)
+    case nextPage                       // 下一页(循环)
+    case gotoPage(pageID: UUID)         // 前往指定页(按 Page.id 稳定引用)
+    case pageIndicator                  // 页面指示键:动态显示 "N/M"
+    case brightnessUp                   // 亮度 +10
+    case brightnessDown                 // 亮度 -10
+    case screenOff                      // 熄屏(任意按键唤醒)
     /// 插件动作:pluginID = .sdPlugin 目录名去后缀(= manifest UUID),contextID = 实例身份
     /// (分配时生成的 UUID,持久化于此,跨重启稳定;settings 存 pluginSettings/<pluginID>.json)
     case plugin(pluginID: String, actionUUID: String, contextID: String)
@@ -26,8 +34,10 @@ struct KeyConfig: Codable, Hashable {
 }
 
 struct Page: Codable, Hashable {
+    /// 稳定引用 id(「前往页面」动作的锚点,删页/重排不漂移);旧配置缺省,normalize 补齐
+    var id: UUID? = nil
     var name: String = "默认页面"
-    var keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 18)  // index = row*6+column
+    var keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 15)  // index = row*5+column
 }
 
 /// 亮度胶囊布局参数(pt):调参模式实时可调
@@ -84,6 +94,8 @@ final class ConfigStore {
         } else {
             config = Self.defaultConfig()
             // 首次启动(或配置损坏)立即落盘,保证后续启动读到的是真实文件
+            // normalize 补页面 id 等派生字段,与读盘路径行为一致
+            Self.normalize(&config)
             save()
         }
     }
@@ -121,6 +133,50 @@ final class ConfigStore {
             config.currentPageIndex = newValue
             save()
         }
+    }
+
+    // MARK: 页面管理(M2.5 多页面)
+
+    var pageCount: Int { config.pages.count }
+
+    func indexOfPage(id: UUID) -> Int? {
+        config.pages.firstIndex { $0.id == id }
+    }
+
+    /// 切换当前页(索引版,越界忽略)
+    func setCurrentPageIndex(_ index: Int) {
+        currentPageIndex = index
+    }
+
+    /// 新增页面(自动命名「页面 N」),返回其 id
+    @discardableResult
+    func addPage() -> UUID {
+        let id = UUID()
+        config.pages.append(Page(
+            id: id,
+            name: "页面 \(config.pages.count + 1)",
+            keys: Array(repeating: KeyConfig(), count: Self.keyCount)
+        ))
+        save()
+        return id
+    }
+
+    func renamePage(id: UUID, to newName: String) {
+        guard let index = indexOfPage(id: id) else { return }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        config.pages[index].name = trimmed
+        save()
+    }
+
+    /// 删除页面(至少保留 1 页);若删的是当前页,当前页回退到第 0 页
+    func deletePage(id: UUID) {
+        guard config.pages.count > 1, let index = indexOfPage(id: id) else { return }
+        config.pages.remove(at: index)
+        if !config.pages.indices.contains(config.currentPageIndex) {
+            config.currentPageIndex = 0
+        }
+        save()
     }
 
     /// 亮度跟随 MacBook 的开关(nil 视为关)
@@ -194,6 +250,7 @@ final class ConfigStore {
         if config.pages.isEmpty { config.pages = [Page()] }
         if !config.pages.indices.contains(config.currentPageIndex) { config.currentPageIndex = 0 }
         for pageIndex in config.pages.indices {
+            if config.pages[pageIndex].id == nil { config.pages[pageIndex].id = UUID() }
             let count = config.pages[pageIndex].keys.count
             if count < keyCount {
                 config.pages[pageIndex].keys += Array(repeating: KeyConfig(), count: keyCount - count)

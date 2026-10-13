@@ -200,8 +200,8 @@ enum ActionRunner {
             await runHotkey(keyCode: keyCode, modifiers: modifiers)
         case .mediaKey(let name):
             postMediaKey(named: name)
-        case .plugin:
-            break // 插件动作走 PluginHostModel(按下/抬起两沿),不经此分发
+        case .plugin, .previousPage, .nextPage, .gotoPage, .pageIndicator, .brightnessUp, .brightnessDown, .screenOff:
+            break // 插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction,均不经此分发
         }
     }
 

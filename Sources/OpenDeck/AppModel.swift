@@ -63,14 +63,21 @@ final class AppModel {
             self.pressedKeyIndices = event.phase == .down
                 ? self.pressedKeyIndices.union([index])
                 : self.pressedKeyIndices.subtracting([index])
+            // 熄屏待机:任意按下沿唤醒,该次按压不产生动作
+            if self.device.isScreenOff {
+                if event.phase == .down { self.device.wakeFromScreenOff() }
+                return
+            }
             let action = self.config.keyConfig(at: index).action
             // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
             if case .plugin = action {
                 self.pluginHost.handleKey(index: index, phase: event.phase)
                 return
             }
-            // 原生动作只在按下沿触发,抬起沿不重复执行
+            // 其余动作只在按下沿触发,抬起沿不重复执行
             guard event.phase == .down, let action else { return }
+            // 设备控制动作(页面/亮度/熄屏)本地消化,不经 ActionRunner
+            if self.handleDeviceAction(action) { return }
             Task { await ActionRunner.run(action) }
         }
 
@@ -89,6 +96,52 @@ final class AppModel {
         device.shutdown()
     }
 
+    // MARK: - 页面
+
+    /// 切换到指定页(按 id);同页重复切换无副作用
+    func switchPage(to id: UUID) {
+        guard let index = config.indexOfPage(id: id), index != config.config.currentPageIndex else { return }
+        config.setCurrentPageIndex(index)
+        applyPageToDevice()
+    }
+
+    /// 循环切换页(上一页/下一页;第 1 页的上一页 = 末页)
+    func switchPage(offset: Int) {
+        let count = config.pageCount
+        guard count > 1 else { return }
+        let target = ((config.config.currentPageIndex + offset) % count + count) % count
+        guard let id = config.config.pages[target].id else { return }
+        switchPage(to: id)
+    }
+
+    func addPage() {
+        let id = config.addPage()
+        switchPage(to: id)
+    }
+
+    /// 删除页;若删的是当前页(索引被回退),设备需重画新当前页
+    func deletePage(id: UUID) {
+        config.deletePage(id: id)
+        applyPageToDevice()
+    }
+
+    // MARK: - 设备控制动作
+
+    /// 页面/亮度/熄屏类动作:纯本地状态操作。返回 true 表示已消化
+    private func handleDeviceAction(_ action: KeyAction) -> Bool {
+        switch action {
+        case .previousPage: switchPage(offset: -1)
+        case .nextPage: switchPage(offset: 1)
+        case .gotoPage(let pageID): switchPage(to: pageID)
+        case .brightnessUp: setBrightness(config.brightness + 10); commitBrightness()
+        case .brightnessDown: setBrightness(config.brightness - 10); commitBrightness()
+        case .screenOff: device.screenOff()
+        case .pageIndicator: break // 纯显示键,按下无操作
+        default: return false
+        }
+        return true
+    }
+
     // MARK: - 键面上屏
 
     /// 当前页 18 键全部渲染并下发
@@ -99,17 +152,27 @@ final class AppModel {
     }
 
     /// 单键重画:编辑保存后即时上屏;同时把插件动作的分配/移除同步给插件宿主
-    /// (启动整页刷新、单键编辑都会走到这里,是宿主实例与配置天然的对账点)
+    /// (启动整页刷新、单键编辑、页面切换都会走到这里,是宿主实例与配置天然的对账点)
     func applyKey(at index: Int) {
         let row = index / StreamDock293S.columns
         let column = index % StreamDock293S.columns
         let key = config.keyConfig(at: index)
         pluginHost.syncKey(at: index, action: key.action)
+        // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
+        let title: String?
+        let iconPath: String?
+        if case .pageIndicator = key.action {
+            title = "\(config.config.currentPageIndex + 1)/\(config.pageCount)"
+            iconPath = nil
+        } else {
+            title = key.title.isEmpty ? nil : key.title
+            iconPath = key.iconPath
+        }
         guard let image = IconRenderer.render(
             size: StreamDock293S.keySize(column: column),
             backgroundColorHex: key.backgroundColorHex,
-            title: key.title.isEmpty ? nil : key.title,
-            iconPath: key.iconPath
+            title: title,
+            iconPath: iconPath
         ) else {
             appendLog("键面渲染失败(r\(row) c\(column),检查颜色/图标)")
             return
@@ -168,7 +231,7 @@ final class AppModel {
     }
 
     private func mirrorSystemBrightnessOnce() {
-        guard config.followSystemBrightness, device.state == .running,
+        guard config.followSystemBrightness, device.state == .running, !device.isScreenOff,
               let percent = Self.systemBrightnessPercent() else { return }
         guard abs(percent - lastMirroredBrightness) >= 1 else { return }
         lastMirroredBrightness = percent

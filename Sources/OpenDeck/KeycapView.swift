@@ -149,6 +149,13 @@ enum ActionStyle {
         case .appleScript: "chevron.left.forwardslash.chevron.right"
         case .hotkey: "keyboard"
         case .mediaKey: "play.circle"
+        case .previousPage: "chevron.left.2"
+        case .nextPage: "chevron.right.2"
+        case .gotoPage: "number.square"
+        case .pageIndicator: "rectangle.split.2x2"
+        case .brightnessUp: "sun.max.fill"
+        case .brightnessDown: "sun.min"
+        case .screenOff: "moon.zzz"
         case .plugin: "puzzlepiece.extension"
         }
     }
@@ -162,6 +169,13 @@ enum ActionStyle {
         case .appleScript: "AppleScript"
         case .hotkey: "热键"
         case .mediaKey: "媒体"
+        case .previousPage: "上一页"
+        case .nextPage: "下一页"
+        case .gotoPage: "前往页面"
+        case .pageIndicator: "页面指示"
+        case .brightnessUp: "亮度+"
+        case .brightnessDown: "亮度-"
+        case .screenOff: "熄屏"
         case .plugin: "插件"
         }
     }

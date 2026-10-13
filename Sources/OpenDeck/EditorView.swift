@@ -13,6 +13,9 @@ struct EditorView: View {
     @State private var brightness: Double = 0
     @State private var showLayoutTuning = false
     @State private var showPluginManager = false
+    @State private var pageDeleteConfirm = false
+    @State private var renameAlertShown = false
+    @State private var renameText = ""
 
     var body: some View {
         ScrollView {
@@ -20,6 +23,7 @@ struct EditorView: View {
                 if appModel.officialAppRunning {
                     conflictBanner
                 }
+                pageBar
                 chassis
                 hint
             }
@@ -156,6 +160,91 @@ struct EditorView: View {
         }
     }
 
+    // MARK: 页面栏
+
+    private var currentPageID: UUID? { appModel.config.currentPage.id }
+
+    /// 多页面切换栏:左右翻页 + 页面菜单(切换/添加/重命名/删除)
+    private var pageBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                appModel.switchPage(offset: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .disabled(appModel.config.pageCount < 2)
+
+            Menu {
+                ForEach(appModel.config.config.pages, id: \.id) { page in
+                    Button {
+                        if let id = page.id { appModel.switchPage(to: id) }
+                    } label: {
+                        if page.id == currentPageID {
+                            Label(page.name, systemImage: "checkmark")
+                        } else {
+                            Text(page.name)
+                        }
+                    }
+                }
+                Divider()
+                Button {
+                    appModel.addPage()
+                } label: {
+                    Label("添加页面", systemImage: "plus")
+                }
+                Button("重命名当前页…") {
+                    renameText = appModel.config.currentPage.name
+                    renameAlertShown = true
+                }
+                Button("删除当前页…", role: .destructive) {
+                    pageDeleteConfirm = true
+                }
+                .disabled(appModel.config.pageCount < 2)
+            } label: {
+                HStack(spacing: 5) {
+                    Text(appModel.config.currentPage.name)
+                        .lineLimit(1)
+                    Text("\(appModel.config.config.currentPageIndex + 1)/\(appModel.config.pageCount)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize()
+
+            Button {
+                appModel.switchPage(offset: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.borderless)
+            .disabled(appModel.config.pageCount < 2)
+
+            Spacer()
+            Text("键可分配:上一页 / 下一页 / 前往页面 / 页面指示")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 4)
+        .confirmationDialog(
+            "删除页面「\(appModel.config.currentPage.name)」?",
+            isPresented: $pageDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("删除(该页按键配置一并删除)", role: .destructive) {
+                if let id = currentPageID { appModel.deletePage(id: id) }
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .alert("重命名页面", isPresented: $renameAlertShown) {
+            TextField("页面名", text: $renameText)
+            Button("好") {
+                if let id = currentPageID { appModel.config.renamePage(id: id, to: renameText) }
+            }
+            Button("取消", role: .cancel) {}
+        }
+    }
+
     // MARK: 冲突警示
 
     private var conflictBanner: some View {
@@ -285,6 +374,7 @@ private struct KeyEditView: View {
     @State private var mediaKeyValue: String
     @State private var pluginID: String
     @State private var pluginActionUUID: String
+    @State private var gotoPageID: UUID?
 
     init(index: Int, appModel: AppModel) {
         self.index = index
@@ -305,6 +395,7 @@ private struct KeyEditView: View {
         var mediaKey = "playPause"
         var pluginID = ""
         var pluginActionUUID = ""
+        var gotoPageID: UUID?
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url
@@ -317,6 +408,13 @@ private struct KeyEditView: View {
             kind = .plugin
             pluginID = id
             pluginActionUUID = actionUUID
+        case .previousPage: kind = .previousPage
+        case .nextPage: kind = .nextPage
+        case .gotoPage(let pageID): kind = .gotoPage; gotoPageID = pageID
+        case .pageIndicator: kind = .pageIndicator
+        case .brightnessUp: kind = .brightnessUp
+        case .brightnessDown: kind = .brightnessDown
+        case .screenOff: kind = .screenOff
         case nil: break
         }
         _kind = State(initialValue: kind)
@@ -329,6 +427,7 @@ private struct KeyEditView: View {
         _mediaKeyValue = State(initialValue: mediaKey)
         _pluginID = State(initialValue: pluginID)
         _pluginActionUUID = State(initialValue: pluginActionUUID)
+        _gotoPageID = State(initialValue: gotoPageID)
     }
 
     /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
@@ -497,6 +596,31 @@ private struct KeyEditView: View {
             }
         case .plugin:
             pluginActionForm
+        case .previousPage:
+            LabeledContent("说明") { Text("循环切换到上一页(末页的上一页 = 首页)").foregroundStyle(.secondary) }
+        case .nextPage:
+            LabeledContent("说明") { Text("循环切换到下一页(首页的下一页 = 末页)").foregroundStyle(.secondary) }
+        case .gotoPage:
+            LabeledContent("目标页面") {
+                Picker("", selection: $gotoPageID) {
+                    Text("未选择").tag(UUID?.none)
+                    ForEach(appModel.config.config.pages, id: \.id) { page in
+                        if let id = page.id {
+                            Text(page.name).tag(UUID?.some(id))
+                        }
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+            }
+        case .pageIndicator:
+            LabeledContent("说明") { Text("键面实时显示当前页码(N/M),随页面切换自动刷新").foregroundStyle(.secondary) }
+        case .brightnessUp:
+            LabeledContent("说明") { Text("设备亮度 +10(按下时退出亮度跟随)").foregroundStyle(.secondary) }
+        case .brightnessDown:
+            LabeledContent("说明") { Text("设备亮度 -10(按下时退出亮度跟随)").foregroundStyle(.secondary) }
+        case .screenOff:
+            LabeledContent("说明") { Text("面板黑屏待机,按任意键唤醒(该次按压不触发动作)").foregroundStyle(.secondary) }
         }
     }
 
@@ -585,6 +709,20 @@ private struct KeyEditView: View {
             .mediaKey(mediaKeyValue)
         case .plugin:
             assembledPluginAction
+        case .previousPage:
+            .previousPage
+        case .nextPage:
+            .nextPage
+        case .gotoPage:
+            gotoPageID.map { .gotoPage(pageID: $0) }
+        case .pageIndicator:
+            .pageIndicator
+        case .brightnessUp:
+            .brightnessUp
+        case .brightnessDown:
+            .brightnessDown
+        case .screenOff:
+            .screenOff
         }
     }
 
@@ -618,6 +756,13 @@ enum ActionKind: Hashable, CaseIterable {
     case appleScript
     case hotkey
     case mediaKey
+    case previousPage
+    case nextPage
+    case gotoPage
+    case pageIndicator
+    case brightnessUp
+    case brightnessDown
+    case screenOff
     case plugin
 
     var label: String {
@@ -630,6 +775,13 @@ enum ActionKind: Hashable, CaseIterable {
         case .appleScript: "AppleScript"
         case .hotkey: "全局热键"
         case .mediaKey: "媒体控制"
+        case .previousPage: "上一页"
+        case .nextPage: "下一页"
+        case .gotoPage: "前往页面"
+        case .pageIndicator: "页面指示"
+        case .brightnessUp: "亮度增加"
+        case .brightnessDown: "亮度降低"
+        case .screenOff: "熄屏"
         case .plugin: "插件动作"
         }
     }
