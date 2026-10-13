@@ -119,6 +119,57 @@ final class AppModel {
         switchPage(to: id)
     }
 
+    func duplicatePage(id: UUID) {
+        _ = config.duplicatePage(id: id)
+    }
+
+    // MARK: - 场景联动(前台应用自动切换页面)
+
+    /// 编辑器窗口是否可见:官方语义为「应用窗口关闭时」才做前台切换,配置期间不打扰
+    var editorWindowVisible = true
+
+    /// 前台应用变化:优先切到绑定了该应用的页;无绑定且设了默认页则回默认页
+    func autoSwitchPageForFrontmostApp() {
+        guard !editorWindowVisible, !device.isScreenOff else { return }
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        let currentPageID = config.currentPage.id
+        if let bound = config.pageBoundToApp(bundleID) {
+            if bound.id != currentPageID, let id = bound.id {
+                switchPage(to: id)
+            }
+            return
+        }
+        if let defaultID = config.config.defaultPageID,
+           defaultID != currentPageID,
+           config.indexOfPage(id: defaultID) != nil {
+            switchPage(to: defaultID)
+        }
+    }
+
+    /// 已安装应用清单(场景联动下拉用;/Applications + /System/Applications,按名称排序)
+    nonisolated static func installedApps() -> [(bundleID: String, name: String)] {
+        var directories = FileManager.default.urls(for: .applicationDirectory, in: .systemDomainMask)
+        directories.append(URL(fileURLWithPath: "/System/Applications"))
+        var seen = Set<String>()
+        var apps: [(bundleID: String, name: String)] = []
+        for directory in directories {
+            guard let items = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil
+            ) else { continue }
+            for url in items where url.pathExtension == "app" {
+                guard let bundle = Bundle(url: url), let bundleID = bundle.bundleIdentifier,
+                      bundleID != "com.opendeck.app", !seen.contains(bundleID)
+                else { continue }
+                seen.insert(bundleID)
+                let name = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                    ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
+                    ?? url.deletingPathExtension().lastPathComponent
+                apps.append((bundleID, name))
+            }
+        }
+        return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     /// 删除页;若删的是当前页(索引被回退),设备需重画新当前页
     func deletePage(id: UUID) {
         config.deletePage(id: id)
@@ -297,12 +348,16 @@ final class AppModel {
         let names = [
             NSWorkspace.didLaunchApplicationNotification,
             NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didActivateApplicationNotification,
         ]
         for name in names {
             workspaceObservers.append(center.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.refreshOfficialAppFlag() }
+                Task { @MainActor in
+                    self?.refreshOfficialAppFlag()
+                    self?.autoSwitchPageForFrontmostApp()
+                }
             })
         }
     }

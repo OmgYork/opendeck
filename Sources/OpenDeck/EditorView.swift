@@ -13,9 +13,14 @@ struct EditorView: View {
     @State private var brightness: Double = 0
     @State private var showLayoutTuning = false
     @State private var showPluginManager = false
+    @State private var deleteTargetID: UUID?
     @State private var pageDeleteConfirm = false
+    @State private var renameTargetID: UUID?
     @State private var renameAlertShown = false
     @State private var renameText = ""
+    @State private var pageBindingTargetID: UUID?
+    @State private var pageBindingSheetShown = false
+    @State private var swipeMonitor = SwipePageMonitor()
 
     var body: some View {
         ScrollView {
@@ -23,8 +28,17 @@ struct EditorView: View {
                 if appModel.officialAppRunning {
                     conflictBanner
                 }
-                pageBar
                 chassis
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { swipeMonitor.gridFrame = geo.frame(in: .global) }
+                                .onChange(of: geo.frame(in: .global)) { _, frame in
+                                    swipeMonitor.gridFrame = frame
+                                }
+                        }
+                    )
+                pageBar
                 hint
             }
             .padding(.horizontal, 24)
@@ -42,6 +56,13 @@ struct EditorView: View {
             brightness = Double(appModel.config.config.brightness)
             // 设备未连接时 drawKey 只入缓存,连接校准时控制器会自动全量重画
             appModel.applyPageToDevice()
+            swipeMonitor.onSwipe = { appModel.switchPage(offset: $0) }
+            swipeMonitor.start()
+            appModel.editorWindowVisible = true
+        }
+        .onDisappear {
+            swipeMonitor.end()
+            appModel.editorWindowVisible = false
         }
         .onChange(of: appModel.device.state) { _, state in
             if state == .running { appModel.applyPageToDevice() }
@@ -164,84 +185,100 @@ struct EditorView: View {
 
     private var currentPageID: UUID? { appModel.config.currentPage.id }
 
-    /// 多页面切换栏:左右翻页 + 页面菜单(切换/添加/重命名/删除)
+    /// 多页面切换栏:每页一枚芯片平铺,点按切换;右键菜单重命名/删除;+ 追加
     private var pageBar: some View {
         HStack(spacing: 8) {
-            Button {
-                appModel.switchPage(offset: -1)
-            } label: {
-                Image(systemName: "chevron.left")
+            ForEach(Array(appModel.config.config.pages.enumerated()), id: \.element.id) { offset, page in
+                pageChip(offset: offset, page: page)
             }
-            .buttonStyle(.borderless)
-            .disabled(appModel.config.pageCount < 2)
-
-            Menu {
-                ForEach(appModel.config.config.pages, id: \.id) { page in
-                    Button {
-                        if let id = page.id { appModel.switchPage(to: id) }
-                    } label: {
-                        if page.id == currentPageID {
-                            Label(page.name, systemImage: "checkmark")
-                        } else {
-                            Text(page.name)
-                        }
+            Button {
+                appModel.addPage()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 30)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(.quaternary, lineWidth: 1)
                     }
-                }
-                Divider()
-                Button {
-                    appModel.addPage()
-                } label: {
-                    Label("添加页面", systemImage: "plus")
-                }
-                Button("重命名当前页…") {
-                    renameText = appModel.config.currentPage.name
-                    renameAlertShown = true
-                }
-                Button("删除当前页…", role: .destructive) {
-                    pageDeleteConfirm = true
-                }
-                .disabled(appModel.config.pageCount < 2)
-            } label: {
-                HStack(spacing: 5) {
-                    Text(appModel.config.currentPage.name)
-                        .lineLimit(1)
-                    Text("\(appModel.config.config.currentPageIndex + 1)/\(appModel.config.pageCount)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
-            .fixedSize()
-
-            Button {
-                appModel.switchPage(offset: 1)
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-            .buttonStyle(.borderless)
-            .disabled(appModel.config.pageCount < 2)
-
-            Spacer()
-            Text("键可分配:上一页 / 下一页 / 前往页面 / 页面指示")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            .buttonStyle(.plain)
+            .help("添加页面")
         }
         .padding(.horizontal, 4)
         .confirmationDialog(
-            "删除页面「\(appModel.config.currentPage.name)」?",
+            "删除页面「\(deleteTargetName)」?",
             isPresented: $pageDeleteConfirm,
             titleVisibility: .visible
         ) {
             Button("删除(该页按键配置一并删除)", role: .destructive) {
-                if let id = currentPageID { appModel.deletePage(id: id) }
+                if let id = deleteTargetID { appModel.deletePage(id: id) }
             }
-            Button("取消", role: .cancel) {}
+            Button("取消", role: .cancel) { deleteTargetID = nil }
         }
         .alert("重命名页面", isPresented: $renameAlertShown) {
             TextField("页面名", text: $renameText)
             Button("好") {
-                if let id = currentPageID { appModel.config.renamePage(id: id, to: renameText) }
+                if let id = renameTargetID { appModel.config.renamePage(id: id, to: renameText) }
             }
-            Button("取消", role: .cancel) {}
+            Button("取消", role: .cancel) { renameTargetID = nil }
+        }
+        .sheet(isPresented: $pageBindingSheetShown) {
+            if let id = pageBindingTargetID {
+                PageAppBindingSheet(appModel: appModel, pageID: id)
+            }
+        }
+    }
+
+    private var deleteTargetName: String {
+        guard let id = deleteTargetID,
+              let index = appModel.config.indexOfPage(id: id)
+        else { return "" }
+        return appModel.config.config.pages[index].name
+    }
+
+    /// 单枚页面芯片:点按切换;当前页高亮;右键重命名/删除
+    private func pageChip(offset: Int, page: Page) -> some View {
+        let isCurrent = page.id == currentPageID
+        return Button {
+            if let id = page.id, !isCurrent { appModel.switchPage(to: id) }
+        } label: {
+            Text("\(offset + 1)")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(isCurrent ? .primary : .secondary)
+                .frame(width: 32, height: 30)
+                .background(
+                    Color.primary.opacity(isCurrent ? 0.14 : 0.05),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(isCurrent ? .tertiary : .quaternary, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(page.name)
+        .contextMenu {
+            Button("前台应用自动切换…") {
+                pageBindingTargetID = page.id
+                pageBindingSheetShown = true
+            }
+            Button("复制页面") {
+                if let id = page.id { appModel.duplicatePage(id: id) }
+            }
+            Button("重命名…") {
+                renameTargetID = page.id
+                renameText = page.name
+                renameAlertShown = true
+            }
+            Button("删除…", role: .destructive) {
+                guard appModel.config.pageCount > 1 else { return }
+                deleteTargetID = page.id
+                pageDeleteConfirm = true
+            }
+            .disabled(appModel.config.pageCount < 2)
         }
     }
 
@@ -787,6 +824,63 @@ enum ActionKind: Hashable, CaseIterable {
     }
 }
 
+// MARK: - 触控板横扫切页
+
+/// app 本地 scrollWheel 监听:仅网格区内的水平主导滚动参与;一次手势(事件间隔 <0.25s)
+/// 最多翻 1 页,快扫的动量尾流不会连翻。自然滚动方向:双指左扫 = 下一页。
+@MainActor
+private final class SwipePageMonitor {
+    private var token: Any?
+    private var accumulated: CGFloat = 0
+    private var lastHorizontalAt = Date.distantPast
+    private var gestureConsumed = false
+    /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
+    private let threshold: CGFloat = 30
+    /// 网格底座的全局窗口坐标(由 EditorView 的 GeometryReader 实时回填);nil = 未就绪不拦截
+    var gridFrame: CGRect?
+    var onSwipe: ((Int) -> Void)?
+
+    func start() {
+        end()
+        token = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.handle(event) ?? event
+        }
+    }
+
+    func end() {
+        if let token {
+            NSEvent.removeMonitor(token)
+        }
+        token = nil
+        accumulated = 0
+        gestureConsumed = false
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        let dx = event.scrollingDeltaX
+        let dy = event.scrollingDeltaY
+        guard abs(dx) > abs(dy), abs(dx) >= 1 else { return event }
+        // 空间门控:光标不在网格区内,横扫不参与切页
+        guard let frame = gridFrame, frame.contains(NSEvent.mouseLocation) else { return event }
+        // 手势切分:水平事件静默 >0.25s 视为新一次扫动
+        let now = Date()
+        if now.timeIntervalSince(lastHorizontalAt) > 0.25 {
+            accumulated = 0
+            gestureConsumed = false
+        }
+        lastHorizontalAt = now
+        // 本手势已翻过页:吞掉余量(快扫的动量尾流),保证一次扫动只翻 1 页
+        guard !gestureConsumed else { return nil }
+        accumulated += dx
+        guard abs(accumulated) >= threshold else { return nil }
+        gestureConsumed = true
+        let direction = accumulated > 0 ? 1 : -1
+        accumulated = 0
+        onSwipe?(direction)
+        return nil
+    }
+}
+
 // MARK: - 全局热键捕获
 
 /// 录制期间用 NSEvent local monitor 截获本应用全部按键事件:
@@ -1020,5 +1114,68 @@ enum FilePicker {
         panel.prompt = prompt
         guard panel.runModal() == .OK else { return nil }
         return panel.urls.first?.path
+    }
+}
+
+
+// MARK: - 页面场景联动设置
+
+/// 前台应用自动切换:每页最多绑 3 个应用;可设为默认页
+private struct PageAppBindingSheet: View {
+    let appModel: AppModel
+    let pageID: UUID
+
+    @Environment(\.dismiss) private var dismiss
+    private static let apps = AppModel.installedApps()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Text("当 OpenDeck 编辑器窗口关闭且下列应用程序位于前台时,自动切换到本页。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Section("绑定的应用程序") {
+                    ForEach(0..<3, id: \.self) { slot in
+                        LabeledContent("应用程序 \(slot + 1)") {
+                            Picker("", selection: binding(for: slot)) {
+                                Text("无").tag(String?.none)
+                                ForEach(Self.apps, id: \.bundleID) { app in
+                                    Text(app.name).tag(String?.some(app.bundleID))
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 240)
+                        }
+                    }
+                }
+                Section {
+                    Toggle("设为默认页面(前台应用无绑定时显示本页)", isOn: defaultBinding)
+                }
+            }
+            .formStyle(.grouped)
+            Divider()
+            HStack {
+                Spacer()
+                Button("完成") { dismiss() }
+            }
+            .padding(12)
+        }
+        .frame(width: 480)
+    }
+
+    private func binding(for slot: Int) -> Binding<String?> {
+        Binding(
+            get: { appModel.config.pageAppBinding(id: pageID, slot: slot) },
+            set: { appModel.config.setPageAppBinding(id: pageID, slot: slot, bundleID: $0) }
+        )
+    }
+
+    private var defaultBinding: Binding<Bool> {
+        Binding(
+            get: { appModel.config.config.defaultPageID == pageID },
+            set: { appModel.config.setDefaultPage(id: $0 ? pageID : nil) }
+        )
     }
 }

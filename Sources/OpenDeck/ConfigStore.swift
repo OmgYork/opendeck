@@ -38,6 +38,8 @@ struct Page: Codable, Hashable {
     var id: UUID? = nil
     var name: String = "默认页面"
     var keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 15)  // index = row*5+column
+    /// 前台应用自动切换(场景联动):绑定到本页的应用 bundle id,最多 3 个,空串=未设
+    var boundAppBundleIDs: [String]? = nil
 }
 
 /// 亮度胶囊布局参数(pt):调参模式实时可调
@@ -60,6 +62,8 @@ struct AppConfig: Codable {
     /// 亮度跟随 MacBook(环境光自动调节);可选保证旧配置文件缺键可解码
     var followSystemBrightness: Bool? = false
     var layout: LayoutParams? = nil
+    /// 场景联动的默认页:前台应用无绑定时显示此页(可选,旧配置缺省)
+    var defaultPageID: UUID? = nil
 }
 
 // MARK: - 配置存储
@@ -176,6 +180,57 @@ final class ConfigStore {
         if !config.pages.indices.contains(config.currentPageIndex) {
             config.currentPageIndex = 0
         }
+        if config.defaultPageID == id {
+            config.defaultPageID = nil
+        }
+        save()
+    }
+
+    /// 复制页面(沿用键位/绑定,新 id,名称加「副本」),插到原页之后
+    @discardableResult
+    func duplicatePage(id: UUID) -> UUID? {
+        guard let index = indexOfPage(id: id) else { return nil }
+        var copy = config.pages[index]
+        copy.id = UUID()
+        copy.name = config.pages[index].name + " 副本"
+        config.pages.insert(copy, at: index + 1)
+        save()
+        return copy.id
+    }
+
+    // MARK: 场景联动(前台应用自动切换)
+
+    func page(id: UUID) -> Page? {
+        config.pages.first { $0.id == id }
+    }
+
+    /// 绑定了指定前台应用的页( nil = 无绑定)
+    func pageBoundToApp(_ bundleID: String) -> Page? {
+        config.pages.first { $0.boundAppBundleIDs?.contains(bundleID) == true }
+    }
+
+    /// 读取某页第 slot 个应用绑定(0-based,最多 3;nil = 未设)
+    func pageAppBinding(id: UUID, slot: Int) -> String? {
+        guard let page = page(id: id), let bindings = page.boundAppBundleIDs,
+              slot < bindings.count, !bindings[slot].isEmpty
+        else { return nil }
+        return bindings[slot]
+    }
+
+    /// 设置某页第 slot 个应用绑定;尾部空槽自动收紧,全空则置 nil
+    func setPageAppBinding(id: UUID, slot: Int, bundleID: String?) {
+        guard let index = indexOfPage(id: id) else { return }
+        var bindings = config.pages[index].boundAppBundleIDs ?? []
+        while bindings.count < 3 { bindings.append("") }
+        bindings[slot] = bundleID ?? ""
+        while bindings.last == "" { bindings.removeLast() }
+        config.pages[index].boundAppBundleIDs = bindings.isEmpty ? nil : bindings
+        save()
+    }
+
+    /// 默认页(前台应用无绑定时显示);nil = 不启用
+    func setDefaultPage(id: UUID?) {
+        config.defaultPageID = id
         save()
     }
 
