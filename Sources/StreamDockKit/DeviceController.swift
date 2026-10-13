@@ -9,6 +9,8 @@ import Observation
 public final class DeviceController {
     public private(set) var state: ConnectionState = .disconnected
     public private(set) var brightnessPercent: Int = 80
+    /// 熄屏待机中(心跳已暂停,设备将自重启黑屏;任意按键唤醒)
+    public private(set) var isScreenOff = false
 
     /// 按键事件回调(主线程)
     public var onKeyEvent: ((KeyEvent) -> Void)?
@@ -71,6 +73,27 @@ public final class DeviceController {
         transport.sendCommand(StreamDock293S.clearPanelCommand)
     }
 
+    // MARK: - 熄屏/唤醒
+
+    /// 熄屏:清屏 + 暂停心跳 → 设备 ≤8s 自重启进入黑屏待机。
+    /// 键面缓存保留,唤醒时全量重画。
+    public func screenOff() {
+        guard state == .running, !isScreenOff else { return }
+        isScreenOff = true
+        transport.sendCommand(StreamDock293S.clearPanelCommand)
+        transport.suspendHeartbeat()
+        onLog?("熄屏:心跳已暂停,设备进入待机(按任意键唤醒)")
+    }
+
+    /// 从熄屏唤醒:恢复心跳 + 完整校准(CONNECT→DIS→亮度→清屏→重画)
+    public func wakeFromScreenOff() {
+        guard isScreenOff else { return }
+        isScreenOff = false
+        transport.resumeHeartbeat()
+        calibrate()
+        onLog?("已从熄屏唤醒,校准完成")
+    }
+
     /// 画一个键:渲染责任在调用方(IconRenderer),此处负责 JPEG 编码+协议下发+缓存
     public func drawKey(row: Int, column: Int, image: CGImage) {
         guard StreamDock293S.rowIds(indicesValid: row, column),
@@ -119,7 +142,11 @@ public final class DeviceController {
     private func handleAttached() {
         state = .running
         onLog?("设备已连接,执行校准")
-        // 握手必须最先:自重启过的设备(心跳丢失/断电后)在见到 CONNECT 前会静默丢弃一切屏幕命令(实测 2026-10-13)
+        calibrate()
+    }
+
+    /// 校准序列:握手必须最先(自重启过的设备在见到 CONNECT 前静默丢弃一切屏幕命令,实测 2026-10-13)
+    private func calibrate() {
         transport.sendCommand(StreamDock293S.heartbeatCommand)
         transport.sendCommand(StreamDock293S.wakeCommand)
         setBrightness(brightnessPercent)

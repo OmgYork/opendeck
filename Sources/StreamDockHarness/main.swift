@@ -23,6 +23,7 @@ let listenSeconds: TimeInterval = {
 }()
 let pluginTestDirectory = optionValue("--plugin-test").map { URL(fileURLWithPath: $0, isDirectory: true) }
 let nodeOverride = optionValue("--node").map { URL(fileURLWithPath: $0) }
+let screenOffProbe = arguments.contains("--screenoff")
 let keyIndex: Int = {
     if let raw = optionValue("--key"), let index = Int(raw), (0..<15).contains(index) { return index }
     return 7 // 默认 r1c2(面板第 8 键)
@@ -62,6 +63,52 @@ guard connected else {
 }
 
 controller.setBrightness(80)
+
+// 熄屏机制探针:暂停心跳 → 设备应 ≤8s 自重启黑屏;黑屏期间按任意键,验证输入报告是否存活 + 唤醒恢复
+if screenOffProbe {
+    var darkInputs = 0
+    controller.onKeyEvent = { event in
+        Task { @MainActor in
+            darkInputs += 1
+            print("⌨️  [黑屏期输入 #\(darkInputs)] r\(event.row)c\(event.column) \(event.phase == .down ? "按下" : "抬起")")
+            if controller.isScreenOff, event.phase == .down {
+                controller.wakeFromScreenOff()
+                print("☀️  已触发唤醒(首个按下沿即唤醒,该次按压不产生其它动作)")
+            }
+        }
+    }
+    for row in 0..<StreamDock293S.rows {
+        for column in 0..<StreamDock293S.columns {
+            let index = row * StreamDock293S.columns + column
+            if let image = IconRenderer.render(size: StreamDock293S.keySize(column: column),
+                                               backgroundColorHex: "#5E81AC", title: "\(index + 1)") {
+                controller.drawKey(row: row, column: column, image: image)
+            }
+        }
+    }
+    print("🧪 熄屏探针:面板已画满编号图,3 秒后触发熄屏…")
+    RunLoop.current.run(until: Date().addingTimeInterval(3))
+    controller.screenOff()
+    print("🕯️  熄屏指令已发。面板应在 ≤\(Int(StreamDock293S.heartbeatInterval) + 2) 秒黑屏。")
+    print("—— 黑屏后请按任意键几次(60 秒窗口):验证黑屏期间输入报告是否存活 + 自动唤醒 ——")
+    let deadline = Date().addingTimeInterval(60)
+    while Date() < deadline, darkInputs == 0 {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+    if darkInputs == 0 {
+        // 30 秒无输入:再等一拍仍无 → 判定黑屏期间输入不上报,需走回退方案
+        RunLoop.current.run(until: Date().addingTimeInterval(5))
+    }
+    if controller.isScreenOff { controller.wakeFromScreenOff() }
+    RunLoop.current.run(until: Date().addingTimeInterval(2))
+    controller.shutdown()
+    if darkInputs > 0 {
+        print("✅ 黑屏期间输入报告存活(共 \(darkInputs) 个事件),按键唤醒方案成立(退出码 0)")
+        exit(0)
+    }
+    print("❌ 黑屏 35 秒无任何输入报告——按键唤醒不成立,需走回退方案(菜单栏开关)(退出码 4)")
+    exit(4)
+}
 
 // 插件宿主闭环冒烟:接管后续流程,结束时直接退出
 if let pluginTestDirectory {

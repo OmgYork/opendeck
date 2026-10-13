@@ -159,6 +159,12 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - `swift run` 直跑时 stdout 是块缓冲,日志要 `setvbuf(stdout, nil, _IOLBF, 0)`(OpenDeckApp.init 已加);协议收发有 DEBUG 级 📥/📤 镜像
 - swift-testing 的 `#require` 在 async 上下文要用 `try #require`,锁用 `OSAllocatedUnfairLock`
 
+### 6.5 熄屏机制(探针实测 2026-10-13,harness `--screenoff`)
+- **机制 = 清屏 + 暂停心跳**:设备 ≤9s 自重启进入黑屏待机(无需显式 sleep 命令,companion 驱动与官方二进制均无)
+- **黑屏待机期间输入报告存活**:按键正常上报,按下沿即可唤醒(恢复心跳 + CONNECT/DIS/亮度/清屏/重画校准序列),唤醒按压本身不触发动作
+- API:`DeviceController.screenOff()/wakeFromScreenOff()/isScreenOff`;`HIDTransport.suspendHeartbeat()/resumeHeartbeat()`;键面缓存保留,唤醒自动全量重画
+- 官方 app 的「自动熄屏」设置推测同机制(空闲停心跳),M3 可加
+
 ### 6.5 已知限制(→ M3)
 - SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;Property Inspector 未做(动作参数不可配,直播/录制等零参动作不受影响);HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装
 - M3 优先级建议:PI(WKWebView)> 多页面 > HTML 家族 > 自研插件实战(如 ZCode 状态灯:hook 写状态文件/打本地端口 → 插件推色)
