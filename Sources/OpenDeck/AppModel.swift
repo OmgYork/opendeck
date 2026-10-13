@@ -123,9 +123,12 @@ final class AppModel {
     }
 
     private var followTask: Task<Void, Never>?
+    /// 上次镜像到设备的百分比:轮询读值便宜,但 USB 写没必要重复
+    private var lastMirroredBrightness = -1
 
     private func startFollowingBrightness() {
         followTask?.cancel()
+        lastMirroredBrightness = -1 // 重新进入跟随:强制首次下发
         followTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.mirrorSystemBrightnessOnce()
@@ -143,6 +146,8 @@ final class AppModel {
     private func mirrorSystemBrightnessOnce() {
         guard config.followSystemBrightness, device.state == .running,
               let percent = Self.systemBrightnessPercent() else { return }
+        guard abs(percent - lastMirroredBrightness) >= 1 else { return }
+        lastMirroredBrightness = percent
         setBrightness(percent, userInitiated: false)
     }
 

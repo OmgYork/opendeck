@@ -8,17 +8,17 @@ import UniformTypeIdentifiers
 public enum IconRenderer {
     /// 画一张键面图。
     /// - Parameters:
-    ///   - size: 键面边长(293S:主键 100,软键 80)
+    ///   - size: 键面边长(293V3:100)
     ///   - backgroundColorHex: "#RRGGBB" 或 "#RRGGBBAA"
     ///   - title: 居中标题(支持中文)
     ///   - iconPath: 可选底图路径(按比例铺满居中裁切)
-    ///   - rotationDegrees: 整图旋转(设备 LCD 若横向安装,传 90/270 校正)
+    ///   - rotationDegrees: 整图旋转,默认取设备型号的显示校正角(设备以 180° 旋转显示)
     public static func render(
         size: Int,
         backgroundColorHex: String,
         title: String?,
         iconPath: String? = nil,
-        rotationDegrees: Int = 0
+        rotationDegrees: Int = StreamDock293S.displayRotationDegrees
     ) -> CGImage? {
         guard size > 0 else { return nil }
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
@@ -37,11 +37,6 @@ public enum IconRenderer {
             ctx.translateBy(x: square.width / 2, y: square.height / 2)
             ctx.rotate(by: CGFloat(rotationDegrees) * .pi / 180)
             ctx.translateBy(x: -square.width / 2, y: -square.height / 2)
-        }
-        if StreamDock293S.mirrorsDisplayHorizontally {
-            // 设备侧会水平镜像图像,这里预翻转抵消(模型层单一事实来源)
-            ctx.translateBy(x: square.width, y: 0)
-            ctx.scaleBy(x: -1, y: 1)
         }
 
         let background = HexColor.parse(backgroundColorHex) ?? CGColor(srgbRed: 0.23, green: 0.26, blue: 0.35, alpha: 1)

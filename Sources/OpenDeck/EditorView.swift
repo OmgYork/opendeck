@@ -49,14 +49,9 @@ struct EditorView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        // 状态与亮度并入同一工具栏项,固定尺寸避免与右侧按钮互相挤压重叠
-        ToolbarItem(placement: .principal) {
-            HStack(spacing: 14) {
-                statusPill
-                brightnessControl
-            }
-            .fixedSize()
-        }
+        // 工具栏项一律不自绘玻璃(系统已给单层玻璃,自绘会叠成两层)
+        ToolbarItem(placement: .principal) { statusPill }
+        ToolbarItem(placement: .primaryAction) { brightnessControl }
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 appModel.applyPageToDevice()
@@ -74,7 +69,7 @@ struct EditorView: View {
         }
     }
 
-    /// 连接状态徽章:玻璃胶囊,与应用整体材质语言一致
+    /// 连接状态徽章
     private var statusPill: some View {
         let connected = appModel.device.state == .running
         return HStack(spacing: 7) {
@@ -82,15 +77,14 @@ struct EditorView: View {
                 .fill(connected ? Color.green : Color.gray)
                 .frame(width: 8, height: 8)
                 .shadow(color: connected ? .green.opacity(0.6) : .clear, radius: 3)
-            Text(connected ? "Stream Dock 293S" : "未连接设备")
+            Text(connected ? "Stream Dock 293V3" : "未连接设备")
                 .font(.callout.weight(.semibold))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .glassEffect(in: Capsule())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
     }
 
-    /// 亮度:玻璃胶囊内的滑杆,拖动实时生效
+    /// 亮度:滑杆 + 百分比,拖动实时生效
     private var brightnessControl: some View {
         HStack(spacing: 8) {
             Image(systemName: brightness < 15 ? "sun.min" : "sun.max.fill")
@@ -104,9 +98,7 @@ struct EditorView: View {
                 .font(.callout.monospacedDigit())
                 .frame(width: 38, alignment: .trailing)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .glassEffect(in: Capsule())
+        .padding(.horizontal, 4)
         .onChange(of: brightness) { _, newValue in
             appModel.setBrightness(Int(newValue))
         }
