@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import StreamDockKit
 import SwiftUI
 
@@ -6,6 +7,11 @@ import SwiftUI
 struct OpenDeckApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appModel = AppModel()
+
+    init() {
+        // swift run 直跑时 stdout 重定向为块缓冲,日志会憋到退出才出;行缓冲让开发期实时可见
+        setvbuf(stdout, nil, _IOLBF, 0)
+    }
 
     var body: some Scene {
         WindowGroup("OpenDeck") {

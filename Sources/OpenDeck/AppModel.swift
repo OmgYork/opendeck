@@ -245,6 +245,7 @@ final class AppModel {
     }
 
     private func appendLog(_ line: String) {
+        print("📜 \(line)") // 镜像到 stdout:swift run 直跑时可观察(swift run 以 stdout 缓冲行模式输出)
         recentLogs.append(line)
         if recentLogs.count > 12 {
             recentLogs.removeFirst(recentLogs.count - 12)

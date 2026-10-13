@@ -95,7 +95,7 @@ public final class PluginServer: @unchecked Sendable {
         setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
         // 非阻塞:level-triggered 读源已保证就绪才进 accept,再阻塞式 accept 会卡死串行队列(实测踩坑)
         let flags = fcntl(descriptor, F_GETFL, 0)
-        fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+        _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
 
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)

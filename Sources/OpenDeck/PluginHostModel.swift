@@ -213,13 +213,13 @@ final class PluginHostModel {
     // MARK: - 协议消息
 
     private func handleMessage(connection: PluginServer.Connection, data: Data) {
-        guard let pluginUUID = pluginByConnection[connection.id],
-              let runtime = runtimes[pluginUUID]
-        else { return } // 未注册的连接不发业务消息
-
-        switch SDProtocol.parse(data) {
-        case .registered(let uuid):
+        // 注册包必须先行处理:它建立连接→插件的归属关系,路由守卫在其后才成立
+        if let first = SDProtocol.parse(data), case .registered(let uuid) = first {
             pluginByConnection[connection.id] = uuid
+            guard let runtime = runtimes[uuid] else {
+                hooks.log("未知插件注册(未配置):\(uuid)")
+                return
+            }
             runtime.connection = connection
             runtime.registered = true
             runtime.respawnAttempts = 0
@@ -228,6 +228,16 @@ final class PluginHostModel {
             for instance in instances.values where instance.pluginUUID == uuid {
                 sendWillAppear(instance, runtime: runtime)
             }
+            return
+        }
+
+        guard let pluginUUID = pluginByConnection[connection.id],
+              let runtime = runtimes[pluginUUID]
+        else { return } // 未注册的连接不发业务消息
+
+        switch SDProtocol.parse(data) {
+        case .registered:
+            break // 已由上方注册分支处理
 
         case .setImage(let context, let image, let state, let target):
             guard let instance = self.instance(context: context) else { return }
@@ -425,6 +435,7 @@ final class PluginHostModel {
         runtime.wantsSpawn = false
         runtime.process = process
         process.start()
+        hooks.log("已拉起插件进程:\(runtime.manifest.pluginUUID) @:\(port)")
     }
 
     /// 进程退出后的重启判定(handleDisconnect 管连接级,这里管进程级)
