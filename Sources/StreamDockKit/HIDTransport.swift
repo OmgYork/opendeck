@@ -34,6 +34,8 @@ final class HIDTransport: @unchecked Sendable {
     var onDeviceAttached: (@Sendable () -> Void)?
     var onDeviceDetached: (@Sendable () -> Void)?
     var onLog: (@Sendable (String) -> Void)?
+    /// 每次成功写入的报文追踪(诊断用;在写线程触发)
+    var onWrite: (@Sendable ([UInt8]) -> Void)?
 
     // MARK: - 生命周期
 
@@ -138,6 +140,8 @@ final class HIDTransport: @unchecked Sendable {
         }
         if kr != kIOReturnSuccess {
             onLog?(String(format: "写入失败 0x%08x(%d 字节)", kr, bytes.count))
+        } else {
+            onWrite?(bytes)
         }
     }
 

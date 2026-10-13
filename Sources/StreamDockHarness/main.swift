@@ -21,6 +21,14 @@ if let index = arguments.firstIndex(of: "--listen"), index + 1 < arguments.count
 let controller = DeviceController()
 controller.onLog = { print("ℹ️  \($0)") }
 
+// TRACE=1 时打印每个报文的前缀(与 coldtest --quick 的字节流做 diff 用)
+if ProcessInfo.processInfo.environment["TRACE"] != nil {
+    controller.enableWriteTrace { bytes in
+        let hex = bytes.prefix(14).map { String(format: "%02x", $0) }.joined(separator: " ")
+        print("✍️  \(bytes.count)B: \(hex)")
+    }
+}
+
 var eventCount = 0
 controller.onKeyEvent = { event in
     eventCount += 1
@@ -64,6 +72,10 @@ for row in 0..<StreamDock293S.rows {
         ) else {
             print("⚠️  r\(row)c\(column) 渲染失败")
             continue
+        }
+        // 首键落盘:发送内容与设备显示内容一致性的人工核对样本
+        if index == 0, let jpeg = IconRenderer.jpeg(from: image) {
+            try? jpeg.write(to: URL(fileURLWithPath: "/tmp/miradeck-key0.jpg"))
         }
         controller.drawKey(row: row, column: column, image: image)
     }

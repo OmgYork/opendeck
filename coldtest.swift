@@ -49,7 +49,12 @@ func write(_ payload: [UInt8]) -> Bool {
     let kr = bytes.withUnsafeMutableBufferPointer { buf in
         IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x00, buf.baseAddress!, buf.count)
     }
-    if kr != kIOReturnSuccess { print(String(format: "⚠️ 写入失败 0x%08x", kr)) }
+    if kr != kIOReturnSuccess {
+        print(String(format: "⚠️ 写入失败 0x%08x", kr))
+    } else if ProcessInfo.processInfo.environment["TRACE"] != nil {
+        let hex = bytes.prefix(14).map { String(format: "%02x", $0) }.joined(separator: " ")
+        print("✍️  \(bytes.count)B: \(hex)")
+    }
     return kr == kIOReturnSuccess
 }
 
@@ -113,6 +118,30 @@ let inputCallback: IOHIDReportCallback = { _, _, _, _, _, report, reportLength i
 }
 
 // MARK: - 主流程
+
+// --quick:跳过强制重启矩阵,直接跑已验证的 V0 序列(用于与 Kit harness 做字节 diff)
+if CommandLine.arguments.contains("--quick") {
+    guard let dev = findDevice(vid: vendorId, pid: productId) else { print("❌ 未找到设备"); exit(2) }
+    device = dev
+    guard IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else { print("❌ 打开失败"); exit(2) }
+    IOHIDDeviceScheduleWithRunLoop(dev, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+    print("✅ 设备已打开(quick 模式)")
+    sendCmd(Cmd.heartbeat)
+    CFRunLoopRunInMode(.defaultMode, 0.1, false)
+    sendCmd(Cmd.wake)
+    sendCmd(Cmd.brightness(69))
+    sendCmd(Cmd.clearPanel)
+    if let jpeg = makeJPEG("7", red: 0.75, green: 0.25, blue: 0.25), jpeg.count <= maxKeyJPEGBytes {
+        for row in 0..<3 { drawKey(keyIds[row][2], jpeg: jpeg) }
+    }
+    CFRunLoopRunInMode(.defaultMode, 8, false)
+    sendCmd(Cmd.heartbeat)
+    CFRunLoopRunInMode(.defaultMode, 5, false)
+    sendCmd([0x43, 0x4c, 0x45, 0x00, 0x00, 0x44, 0x43])
+    IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+    print("—— quick 结束(中央列应显示红色 7)——")
+    exit(0)
+}
 
 guard let dev = findDevice(vid: vendorId, pid: productId) else {
     print("❌ 未找到设备"); exit(2)
