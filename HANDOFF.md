@@ -98,9 +98,9 @@ mirabox/
 驱动库 + 静态键位配置(JSON 持久化)+ 原生动作 5 种 + 简单编辑器。
 验收:退出官方 app → 启动自研 app → 15 键显示自定义图标 → 按键触发对应动作 → 重启后配置保留 → 空闲 CPU <2%。
 
-**M2 — 插件宿主 v1**
+**M2 — 插件宿主 v1(✅ 已落地并验收,2026-10-13,提交链 f3e9e0d→549ee31→收尾提交)**
 WebSocket 宿主 + node 拉起 + 事件闭环(keyDown/keyUp→插件,setImage→键面)+ per-context settings 持久化。
-验收:官方 OBS 插件免修改装入,能在面板上显示状态图并响应按键。
+验收:官方 OBS 插件免修改装入,能在面板上显示状态图并响应按键。✅ 全部达成(实测记录见 §6)。
 
 **M3 — 兼容与体验打磨**
 Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏幕休眠唤醒、逐插件适配。
@@ -127,3 +127,38 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 | 按键上报物理验证 | 跑 `./probe` 按面板键,看 `⌨️` 输出 | M1 验收前提 |
 | 背景图/动画/LED 能力 | 探针加三条命令试发,肉眼验证 | 视觉层上限(锦上添花) |
 | 休眠-唤醒行为记录 | 等设备自动休眠,记录唤醒条件 | 状态机细节 |
+
+---
+
+## 6. M2 落地记录(2026-10-13,全部本机实测)
+
+### 6.1 架构落地
+- 新 SPM 库 **`PluginHost`**(零依赖):`SDProtocol`(v2 协议编解码/纯函数)、`SDManifest`(宽容解析+图片扩展名探测)、`PluginServer`(WebSocket 服务端)、`PluginProcess`(node 拉起与收割)、`PluginRegistry`(拷贝制安装/官方导入/废纸篓卸载)、`PluginSettingsStore`、`PluginImageDecoder`
+- 应用侧 **`PluginHostModel`**(@MainActor 协调器):context 实例表、按需拉起(崩溃有界重启 ×3)、消息路由(按消息自带 context)、settings 内存缓存(OBS 每秒 setGlobalSettings,无变化不落盘)、IconRenderer 合成上屏(180° 预旋转 + JPEG≤10KB 复用 Kit 管线)
+- **插件根(拷贝制)**:`~/Library/Application Support/OpenDeck/plugins/`;settings 在 `pluginSettings/<pluginUUID>.json`;管理器入口:编辑器 ⋯ 菜单
+- `KeyAction` 增 `case plugin(pluginID:actionUUID:contextID:)`,contextID 分配时生成并持久化(同键保存复用)
+- 冒烟工具:Harness `--plugin-test`、`Scripts/opendeck.fake.sdPlugin`(零依赖手写 RFC6455 客户端)、`Scripts/fake-obs.py`(8765 假 OBS,协议见 6.3)
+
+### 6.2 协议事实(实测铁证)
+- 官方拉起命令行(pgrep 实抓):`node20 <插件>/plugin/index.js -port P -pluginUUID U -registerEvent registerPlugin -info <纯JSON argv单元素,无URL编码>`;info 内 `application.language=zh_CN`、`devices[].type=0`、colors 五键;官方把**设备序列号**当 pluginUUID 传(插件只回显,宿主可用 manifest UUID)
+- **注册包必须先于路由守卫处理**:`{uuid,event:"registerPlugin"}` 是建立连接归属表的消息,放进通用守卫会鸡生蛋死锁(已踩)
+- 插件收到首条宿主消息即发 `getGlobalSettings`,**宿主必答 `didReceiveGlobalSettings`**(OBS 插件硬需求)
+- OBS 插件 18 个动作全 `"Controllers": []`(**空数组=不限制**,误滤会全军覆没);重度多状态 + 全系 `DisableAutomaticStates: true`;`setImage` 空串 = 恢复 manifest 默认图;不依赖 PI 不崩
+- 事件推送格式(helper→插件):`{jsonrpc:"2.0",method:"event",params:{event_type,data}}`;OBS 插件订阅**空列表**但靠 `_emit(event_type)` 分发,监听 `streaming.started/stopped` 等字面量
+- 多状态自动轮换仅在 `!DisableAutomaticStates` 时由宿主代劳(keyUp 后)
+
+### 6.3 OBS 生态事实
+- OBS 插件对 OBS 的桥接:自带 helper `StreamDockOBSPlugin.plugin` 部署到 `obs-studio/plugins/`,开 **ws://localhost:8765** JSON-RPC 2.0(**不是**官方 obs-websocket 4455),方法名带命名空间(`streaming.start/stop/active`、`events.subscribe`…,完整清单可从 bundle `this.call("…")` 抠出);地址硬编码,不读配置
+- **helper 是 x86_64-only 且要求更新版 OBS 符号**(`_obs_sceneitem_get_info2`),在 Apple Silicon 原生 OBS 上 dlopen 失败 → **真 OBS 在线联调在本机不可用(MiraBox 生态缺陷,非宿主问题)**;验收用 `Scripts/fake-obs.py` 伪造 8765 完成
+- OBS 插件对 `streaming.active` 的应答按**裸布尔值**消费;「直播」动作两态图(亮图标/暗图标渐变)肉眼差异极小,验收时勿误判为"没反应"
+
+### 6.4 基建教训(执行 agent 必读)
+- **NWListener 在无 Info.plist 裸进程中一律 EINVAL**(macOS 15+ 本地网络隐私;所有参数组合含纯 TCP 实测全灭,沙箱外同样)。PluginServer 最终为 **BSD socket 手写 RFC6455**(CryptoKit SHA1 握手、掩码帧解析、分片累积),仅回环+临时端口,零权限面
+- **阻塞式监听 fd 上二次 accept 会卡死串行队列**(症状:TCP 连上但握手无响应)——监听 fd 必须 O_NONBLOCK + 水平触发源一次一个
+- **构建失败会被静默吞掉**:`swift build` 后必须显式确认成功再验证,否则"修复后重启"跑的还是旧二进制(本轮因此多查一小时)
+- `swift run` 直跑时 stdout 是块缓冲,日志要 `setvbuf(stdout, nil, _IOLBF, 0)`(OpenDeckApp.init 已加);协议收发有 DEBUG 级 📥/📤 镜像
+- swift-testing 的 `#require` 在 async 上下文要用 `try #require`,锁用 `OSAllocatedUnfairLock`
+
+### 6.5 已知限制(→ M3)
+- SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;Property Inspector 未做(动作参数不可配,直播/录制等零参动作不受影响);HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装
+- M3 优先级建议:PI(WKWebView)> 多页面 > HTML 家族 > 自研插件实战(如 ZCode 状态灯:hook 写状态文件/打本地端口 → 插件推色)

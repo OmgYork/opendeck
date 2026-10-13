@@ -213,6 +213,13 @@ final class PluginHostModel {
     // MARK: - 协议消息
 
     private func handleMessage(connection: PluginServer.Connection, data: Data) {
+        #if DEBUG
+        if let raw = try? JSONSerialization.jsonObject(with: data),
+           let obj = raw as? [String: Any], let ev = obj["event"] as? String {
+            let stateValue = (obj["payload"] as? [String: Any])?["state"].map { "\($0)" } ?? "-"
+            print("📥 \(ev) state=\(stateValue) ctx=\(obj["context"] ?? "?")")
+        }
+        #endif
         // 注册包必须先行处理:它建立连接→插件的归属关系,路由守卫在其后才成立
         if let first = SDProtocol.parse(data), case .registered(let uuid) = first {
             pluginByConnection[connection.id] = uuid
@@ -490,6 +497,11 @@ final class PluginHostModel {
 
     private func send(_ event: JSONValue, runtime: Runtime) {
         guard let connection = runtime.connection else { return }
+        #if DEBUG
+        if case .object(let o) = event, let ev = o["event"]?.stringValue {
+            print("📤 \(ev) ctx=\(o["context"]?.stringValue ?? "-")")
+        }
+        #endif
         server.send(SDProtocol.encode(event), to: connection)
     }
 
