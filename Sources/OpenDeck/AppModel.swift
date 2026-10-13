@@ -16,6 +16,8 @@ final class AppModel {
 
     /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)
     private(set) var officialAppRunning = false
+    /// 当前物理按下的键(index 集合)——UI 键帽同步凹陷,验证「按哪颗亮哪颗」
+    private(set) var pressedKeyIndices: Set<Int> = []
     /// 最近设备日志(尾部最新),仅供状态栏展示,环形保留一屏即可
     private(set) var recentLogs: [String] = []
 
@@ -39,10 +41,14 @@ final class AppModel {
             self?.appendLog(line)
         }
         device.onKeyEvent = { [weak self] event in
-            // 只在按下沿触发动作,抬起沿不重复执行
-            guard let self, event.phase == .down else { return }
+            guard let self else { return }
             let index = event.row * StreamDock293S.columns + event.column
-            guard let action = self.config.keyConfig(at: index).action else { return }
+            // @Observable 靠属性赋值触发观测,集合原地增删不生效,须整体重赋
+            self.pressedKeyIndices = event.phase == .down
+                ? self.pressedKeyIndices.union([index])
+                : self.pressedKeyIndices.subtracting([index])
+            // 只在按下沿触发动作,抬起沿不重复执行
+            guard event.phase == .down, let action = self.config.keyConfig(at: index).action else { return }
             Task { await ActionRunner.run(action) }
         }
 

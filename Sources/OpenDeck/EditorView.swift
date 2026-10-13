@@ -168,7 +168,10 @@ struct EditorView: View {
                 Button {
                     editingTarget = EditTarget(index: index)
                 } label: {
-                    KeycapView(config: appModel.config.keyConfig(at: index))
+                    KeycapView(
+                        config: appModel.config.keyConfig(at: index),
+                        remotePressed: appModel.pressedKeyIndices.contains(index)
+                    )
                 }
                 .buttonStyle(KeycapButtonStyle())
                 .help("编辑第 \(index + 1) 键")

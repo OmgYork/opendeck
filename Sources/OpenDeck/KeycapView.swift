@@ -11,6 +11,8 @@ struct KeycapView: View {
     let config: KeyConfig
     /// 预览场景禁用悬停动效
     var interactive = true
+    /// 物理设备上正被按住(远程按压态:凹陷 + 发光描边)
+    var remotePressed = false
 
     @State private var hovering = false
 
@@ -82,14 +84,30 @@ struct KeycapView: View {
                 .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
         }
         .aspectRatio(1, contentMode: .fit)
-        .scaleEffect(hovering && interactive ? 1.045 : 1)
+        .overlay {
+            if remotePressed {
+                // 物理按压的即时可视反馈:发光描边
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.65), lineWidth: 2.5)
+                    .shadow(color: .white.opacity(0.35), radius: 6)
+            }
+        }
+        .scaleEffect(scale, anchor: .center)
         .shadow(
-            color: .black.opacity(hovering && interactive ? 0.28 : 0.16),
-            radius: hovering && interactive ? 10 : 4,
-            y: hovering && interactive ? 5 : 2
+            color: .black.opacity(lifted ? 0.28 : 0.16),
+            radius: lifted ? 10 : 4,
+            y: lifted ? 5 : 2
         )
         .animation(.snappy(duration: 0.22), value: hovering && interactive)
+        .animation(.snappy(duration: 0.12), value: remotePressed)
         .onHover { hovering = $0 }
+    }
+
+    /// 视觉层级:远程按压(凹陷)< 悬停(浮起)< 默认
+    private var lifted: Bool { hovering && interactive && !remotePressed }
+    private var scale: CGFloat {
+        if remotePressed { return 0.94 }
+        return lifted ? 1.045 : 1
     }
 }
 
