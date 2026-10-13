@@ -165,6 +165,14 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - API:`DeviceController.screenOff()/wakeFromScreenOff()/isScreenOff`;`HIDTransport.suspendHeartbeat()/resumeHeartbeat()`;键面缓存保留,唤醒自动全量重画
 - 官方 app 的「自动熄屏」设置推测同机制(空闲停心跳),M3 可加
 
+### 6.6 M2.5 多页面 + 设备控制 + 场景联动(2026-10-14 落地,全部实测)
+- **多页面**:`Page.id`(normalize 补齐,旧配置无感)+ 页面 CRUD + 芯片栏(每页一枚平铺芯片:点按切换、当前页高亮、右键重命名/删除/场景联动/复制、`+` 追加,位于网格下方居中)
+- **触控板横扫切页**:app 本地 scrollWheel 监听,双指左扫=下一页;**空间门控**(光标须在网格底座内)+ **手势切分**(水平事件静默 >0.25s 视为新扫动,一次扫动至多翻 1 页,动量尾流吞掉)——防误触与连翻双关键
+- **设备控制动作 7 个**(KeyAction 新 case,AppModel.handleDeviceAction 本地消化,不经 ActionRunner):previousPage/nextPage(循环)、gotoPage(Page.id 稳定引用)、pageIndicator(键面动态 N/M)、brightnessUp/Down(±10,退出跟随并落盘)、screenOff;熄屏待机时任意按下沿唤醒且不触发动作,亮度跟随轮询待机期暂停
+- **场景联动**(官方「场景」设置移植):`Page.boundAppBundleIDs`(最多绑 3 应用)+ `AppConfig.defaultPageID`;前台应用激活 → 绑定页优先,无绑定回默认页;**生效条件与官方一致 = 编辑器窗口关闭**(`editorWindowVisible` 标志)+ 非熄屏;应用清单扫 /Applications 与 /System/Applications;已用 osascript 激活 Safari/Finder 断言 config 索引完成自动化自验
+- **自动熄屏**:`AppConfig.autoScreenOffMinutes`(0/缺省=关),AppModel 空闲看门狗 15s 周期检查(最近按键时间含唤醒按压);入口 = 编辑器 ⋯ 菜单
+- 页面切换经 applyPage→syncKey 链自动同步插件实例显隐,零额外代码
+
 ### 6.5 已知限制(→ M3)
 - SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;Property Inspector 未做(动作参数不可配,直播/录制等零参动作不受影响);HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装
 - M3 优先级建议:PI(WKWebView)> 多页面 > HTML 家族 > 自研插件实战(如 ZCode 状态灯:hook 写状态文件/打本地端口 → 插件推色)
