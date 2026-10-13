@@ -89,7 +89,7 @@ struct EditorView: View {
     /// 亮度:太阳图标 = 跟随开关;内容槽定宽,「自适应」文案与滑杆 blurReplace 交叉溶解。
     /// 设计原则:两种状态占同一空间,零布局动画——胶囊恒定,切换天然丝滑
     private var brightnessControl: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             Button {
                 appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
             } label: {
@@ -119,13 +119,15 @@ struct EditorView: View {
                     ), in: 0...100) { editing in
                         if !editing { appModel.commitBrightness() }
                     }
+                    .frame(width: 124)
+                    // macOS 滑杆轨道两侧自带 ~10pt 内缩,负边距抵消,让轨道视觉填满槽位
+                    .padding(.horizontal, -12)
                 }
             }
-            .frame(width: 110)
-            .transition(.blurReplace)
+            .frame(width: 124)
         }
         // 内边距与状态胶囊规格对齐:图标不贴边
-        .padding(.leading, 12)
+        .padding(.leading, 10)
         .padding(.trailing, 12)
         .padding(.vertical, 5)
         .animation(.smooth(duration: 0.35), value: appModel.followSystemBrightness)
