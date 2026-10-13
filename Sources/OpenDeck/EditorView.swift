@@ -96,7 +96,7 @@ struct EditorView: View {
                     .foregroundStyle(.yellow)
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.bounce, value: appModel.followSystemBrightness)
-                    .padding(3)
+                    .padding(6)
                     .overlay {
                         // 跟随指示:太阳图标外的绿色圆圈
                         Circle()
@@ -121,13 +121,18 @@ struct EditorView: View {
                     if !editing { appModel.commitBrightness() }
                 }
                 .frame(width: 110)
+                // 编舞:滑杆先行快速淡出,太阳位移与胶囊收缩随后由容器弹簧接管
                 .transition(
-                    .scale(scale: 0.55, anchor: .leading)
-                    .combined(with: .opacity)
+                    .opacity
+                    .animation(.easeOut(duration: 0.15))
+                    .combined(with: .scale(scale: 0.7, anchor: .trailing))
                 )
             }
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: appModel.followSystemBrightness)
+        // 玻璃胶囊内留白:收起形态与菜单胶囊同高、圆圈不贴边
+        .padding(.vertical, 6)
+        .padding(.horizontal, 4)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: appModel.followSystemBrightness)
         .onChange(of: appModel.config.brightness) { _, newValue in
             // 外部变化(跟随镜像/菜单栏)同步进本地;直接写 @State 不触发上面的用户路径
             if Int(brightness) != newValue {
