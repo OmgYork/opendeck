@@ -75,7 +75,7 @@ for row in 0..<StreamDock293S.rows {
         }
         // 首键落盘:发送内容与设备显示内容一致性的人工核对样本
         if index == 0, let jpeg = IconRenderer.jpeg(from: image) {
-            try? jpeg.write(to: URL(fileURLWithPath: "/tmp/miradeck-key0.jpg"))
+            try? jpeg.write(to: URL(fileURLWithPath: "/tmp/opendeck-key0.jpg"))
         }
         controller.drawKey(row: row, column: column, image: image)
     }

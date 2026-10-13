@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "MiraDeck",
+    name: "OpenDeck",
     platforms: [.macOS(.v14)],
     targets: [
         // 驱动库:纯逻辑 + IOKit,可单测
@@ -19,9 +19,9 @@ let package = Package(
         ),
         // 原生管理器应用(SwiftUI)
         .executableTarget(
-            name: "MiraDeck",
+            name: "OpenDeck",
             dependencies: ["StreamDockKit"],
-            path: "Sources/MiraDeck",
+            path: "Sources/OpenDeck",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(

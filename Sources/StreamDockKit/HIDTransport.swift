@@ -17,7 +17,7 @@ final class HIDTransport: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private let writeQueue = DispatchQueue(label: "miradeck.hid.write")
+    private let writeQueue = DispatchQueue(label: "opendeck.hid.write")
     private let bootSemaphore = DispatchSemaphore(value: 0)
 
     private var manager: IOHIDManager?

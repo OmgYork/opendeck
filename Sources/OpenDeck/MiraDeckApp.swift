@@ -3,12 +3,12 @@ import StreamDockKit
 import SwiftUI
 
 @main
-struct MiraDeckApp: App {
+struct OpenDeckApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appModel = AppModel()
 
     var body: some Scene {
-        WindowGroup("MiraDeck") {
+        WindowGroup("OpenDeck") {
             EditorView(appModel: appModel)
                 .frame(minWidth: 640, minHeight: 480)
                 .onAppear { appDelegate.appModel = appModel }
@@ -16,7 +16,7 @@ struct MiraDeckApp: App {
         .defaultSize(width: 760, height: 560)
 
         // 用窗口样式而非菜单样式:菜单样式的 NSMenu 承载不了亮度 Slider
-        MenuBarExtra("MiraDeck", systemImage: "rectangle.grid.3x2") {
+        MenuBarExtra("OpenDeck", systemImage: "rectangle.grid.3x2") {
             MenuBarPanel(appModel: appModel)
         }
         .menuBarExtraStyle(.window)
@@ -93,7 +93,7 @@ private struct MenuBarPanel: View {
             }
             .frame(maxWidth: .infinity)
 
-            Button("退出 MiraDeck") {
+            Button("退出 OpenDeck") {
                 // 经 applicationWillTerminate 触发设备清理,不走直接 exit
                 NSApp.terminate(nil)
             }

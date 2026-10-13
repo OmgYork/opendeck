@@ -52,7 +52,7 @@ enum ActionError: LocalizedError {
 /// 无论模块默认隔离设置为何,都不会占用主线程。
 /// 函数只返回结构化错误、不做上报,由主线程的 ActionRunner 统一记日志/弹窗。
 nonisolated enum ActionExecutor {
-    private static let logger = Logger(subsystem: "miradeck", category: "action")
+    private static let logger = Logger(subsystem: "opendeck", category: "action")
     /// 子进程超时(秒):构建/网络类脚本给足时间,又不至于永久占死
     private static let processTimeoutSeconds: Int64 = 60
     /// SIGTERM 后宽限(秒):仍不退则 SIGKILL 兜底(脚本可能捕获或忽略 TERM)
@@ -170,7 +170,7 @@ nonisolated enum ActionExecutor {
 /// 键动作统一入口:UI 与按键事件只调 run(_:),调度与上报细节收敛在这里。
 @MainActor
 enum ActionRunner {
-    private static let logger = Logger(subsystem: "miradeck", category: "action")
+    private static let logger = Logger(subsystem: "opendeck", category: "action")
 
     static func run(_ action: KeyAction) async {
         switch action {
@@ -279,7 +279,7 @@ enum ActionRunner {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "需要辅助功能权限"
-        alert.informativeText = "发送快捷键动作需要“辅助功能”授权。请在「系统设置 > 隐私与安全性 > 辅助功能」中勾选 MiraDeck,然后重试。"
+        alert.informativeText = "发送快捷键动作需要“辅助功能”授权。请在「系统设置 > 隐私与安全性 > 辅助功能」中勾选 OpenDeck,然后重试。"
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn,

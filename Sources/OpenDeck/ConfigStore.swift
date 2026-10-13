@@ -43,7 +43,7 @@ struct AppConfig: Codable {
 final class ConfigStore {
     private(set) var config: AppConfig
 
-    private static let logger = Logger(subsystem: "miradeck", category: "config")
+    private static let logger = Logger(subsystem: "opendeck", category: "config")
     /// 293S 键板固定 18 键(5×3 主键 + 3 软键),index = row*6+column
     private static let keyCount = 18
     /// 默认键面底色(Nord 风格调色板),按键序轮转
@@ -51,11 +51,11 @@ final class ConfigStore {
         "#BF616A", "#D08770", "#EBCB8B", "#A3BE8C", "#88C0D0",
         "#5E81AC", "#B48EAD", "#8FBCBB", "#4C566A",
     ]
-    /// ~/Library/Application Support/MiraDeck/config.json
+    /// ~/Library/Application Support/OpenDeck/config.json
     /// 目录链的创建交给 ensureDirectory(非抛出的 urls(for:in:) 只做定位)
     private static let configFileURL: URL = {
         let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return applicationSupport.appendingPathComponent("MiraDeck/config.json")
+        return applicationSupport.appendingPathComponent("OpenDeck/config.json")
     }()
 
     init() {
