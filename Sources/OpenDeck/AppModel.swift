@@ -107,13 +107,18 @@ final class AppModel {
         applyPageToDevice()
     }
 
-    /// 循环切换页(上一页/下一页;第 1 页的上一页 = 末页)
-    func switchPage(offset: Int) {
-        let count = config.pageCount
-        guard count > 1 else { return }
-        let target = ((config.config.currentPageIndex + offset) % count + count) % count
-        guard let id = config.config.pages[target].id else { return }
-        switchPage(to: id)
+    /// 循环切换页:withinScene=true 时在当前场景内翻页(两级手势的「垂直」方向)
+    func switchPage(offset: Int, withinScene: Bool = true) {
+        guard let target = config.targetPageIndex(offset: offset, withinScene: withinScene),
+              target != config.config.currentPageIndex
+        else { return }
+        config.setCurrentPageIndex(target)
+        applyPageToDevice()
+    }
+
+    /// 循环切换场景(两级手势的「水平」方向),落到目标场景的第一页
+    func switchScene(offset: Int) {
+        switchPage(offset: offset, withinScene: false)
     }
 
     func addPage() {
@@ -183,11 +188,11 @@ final class AppModel {
     /// 页面/亮度/熄屏类动作:纯本地状态操作。返回 true 表示已消化
     private func handleDeviceAction(_ action: KeyAction) -> Bool {
         switch action {
-        case .previousPage: switchPage(offset: -1)
-        case .nextPage: switchPage(offset: 1)
+        case .previousPage: switchPage(offset: -1, withinScene: true)
+        case .nextPage: switchPage(offset: 1, withinScene: true)
+        case .previousScene: switchScene(offset: -1)
+        case .nextScene: switchScene(offset: 1)
         case .gotoPage(let pageID): switchPage(to: pageID)
-        case .brightnessUp: setBrightness(config.brightness + 10); commitBrightness()
-        case .brightnessDown: setBrightness(config.brightness - 10); commitBrightness()
         case .screenOff: device.screenOff()
         case .pageIndicator: break // 纯显示键,按下无操作
         default: return false
@@ -215,7 +220,11 @@ final class AppModel {
         let title: String?
         let iconPath: String?
         if case .pageIndicator = key.action {
-            title = "\(config.config.currentPageIndex + 1)/\(config.pageCount)"
+            if let info = config.currentPagePositionInScene {
+                title = "\(info.position + 1)/\(info.count)"
+            } else {
+                title = nil
+            }
             iconPath = nil
         } else {
             title = key.title.isEmpty ? nil : key.title

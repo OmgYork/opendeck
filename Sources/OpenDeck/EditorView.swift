@@ -18,6 +18,9 @@ struct EditorView: View {
     @State private var renameTargetID: UUID?
     @State private var renameAlertShown = false
     @State private var renameText = ""
+    @State private var sceneTargetID: UUID?
+    @State private var sceneAlertShown = false
+    @State private var sceneText = ""
     @State private var pageBindingTargetID: UUID?
     @State private var pageBindingSheetShown = false
     @State private var swipeMonitor = SwipePageMonitor()
@@ -56,7 +59,13 @@ struct EditorView: View {
             brightness = Double(appModel.config.config.brightness)
             // 设备未连接时 drawKey 只入缓存,连接校准时控制器会自动全量重画
             appModel.applyPageToDevice()
-            swipeMonitor.onSwipe = { appModel.switchPage(offset: $0) }
+            swipeMonitor.onSwipe = { isHorizontal, direction in
+                if isHorizontal {
+                    appModel.switchScene(offset: direction)
+                } else {
+                    appModel.switchPage(offset: direction, withinScene: true)
+                }
+            }
             swipeMonitor.start()
             appModel.editorWindowVisible = true
         }
@@ -237,6 +246,13 @@ struct EditorView: View {
             }
             Button("取消", role: .cancel) { renameTargetID = nil }
         }
+        .alert("所属场景(同场景的页归为一组,垂直扫动在其内翻页)", isPresented: $sceneAlertShown) {
+            TextField("场景名", text: $sceneText)
+            Button("好") {
+                if let id = sceneTargetID { appModel.config.setSceneName(id: id, to: sceneText) }
+            }
+            Button("取消", role: .cancel) { sceneTargetID = nil }
+        }
         .sheet(isPresented: $pageBindingSheetShown) {
             if let id = pageBindingTargetID {
                 PageAppBindingSheet(appModel: appModel, pageID: id)
@@ -271,8 +287,13 @@ struct EditorView: View {
                 }
         }
         .buttonStyle(.plain)
-        .help(page.name)
+        .help("\(page.name) · 场景:\(page.sceneName ?? "默认场景")")
         .contextMenu {
+            Button("所属场景…") {
+                sceneTargetID = page.id
+                sceneText = page.sceneName ?? "默认场景"
+                sceneAlertShown = true
+            }
             Button("前台应用自动切换…") {
                 pageBindingTargetID = page.id
                 pageBindingSheetShown = true
@@ -459,10 +480,10 @@ private struct KeyEditView: View {
             pluginActionUUID = actionUUID
         case .previousPage: kind = .previousPage
         case .nextPage: kind = .nextPage
+        case .previousScene: kind = .previousScene
+        case .nextScene: kind = .nextScene
         case .gotoPage(let pageID): kind = .gotoPage; gotoPageID = pageID
         case .pageIndicator: kind = .pageIndicator
-        case .brightnessUp: kind = .brightnessUp
-        case .brightnessDown: kind = .brightnessDown
         case .screenOff: kind = .screenOff
         case nil: break
         }
@@ -646,9 +667,13 @@ private struct KeyEditView: View {
         case .plugin:
             pluginActionForm
         case .previousPage:
-            LabeledContent("说明") { Text("循环切换到上一页(末页的上一页 = 首页)").foregroundStyle(.secondary) }
+            LabeledContent("说明") { Text("在当前场景内循环切到上一页").foregroundStyle(.secondary) }
         case .nextPage:
-            LabeledContent("说明") { Text("循环切换到下一页(首页的下一页 = 末页)").foregroundStyle(.secondary) }
+            LabeledContent("说明") { Text("在当前场景内循环切到下一页").foregroundStyle(.secondary) }
+        case .previousScene:
+            LabeledContent("说明") { Text("循环切到上一场景(落到其第一页)").foregroundStyle(.secondary) }
+        case .nextScene:
+            LabeledContent("说明") { Text("循环切到下一场景(落到其第一页)").foregroundStyle(.secondary) }
         case .gotoPage:
             LabeledContent("目标页面") {
                 Picker("", selection: $gotoPageID) {
@@ -664,10 +689,6 @@ private struct KeyEditView: View {
             }
         case .pageIndicator:
             LabeledContent("说明") { Text("键面实时显示当前页码(N/M),随页面切换自动刷新").foregroundStyle(.secondary) }
-        case .brightnessUp:
-            LabeledContent("说明") { Text("设备亮度 +10(按下时退出亮度跟随)").foregroundStyle(.secondary) }
-        case .brightnessDown:
-            LabeledContent("说明") { Text("设备亮度 -10(按下时退出亮度跟随)").foregroundStyle(.secondary) }
         case .screenOff:
             LabeledContent("说明") { Text("面板黑屏待机,按任意键唤醒(该次按压不触发动作)").foregroundStyle(.secondary) }
         }
@@ -762,14 +783,14 @@ private struct KeyEditView: View {
             .previousPage
         case .nextPage:
             .nextPage
+        case .previousScene:
+            .previousScene
+        case .nextScene:
+            .nextScene
         case .gotoPage:
             gotoPageID.map { .gotoPage(pageID: $0) }
         case .pageIndicator:
             .pageIndicator
-        case .brightnessUp:
-            .brightnessUp
-        case .brightnessDown:
-            .brightnessDown
         case .screenOff:
             .screenOff
         }
@@ -807,10 +828,10 @@ enum ActionKind: Hashable, CaseIterable {
     case mediaKey
     case previousPage
     case nextPage
+    case previousScene
+    case nextScene
     case gotoPage
     case pageIndicator
-    case brightnessUp
-    case brightnessDown
     case screenOff
     case plugin
 
@@ -826,10 +847,10 @@ enum ActionKind: Hashable, CaseIterable {
         case .mediaKey: "媒体控制"
         case .previousPage: "上一页"
         case .nextPage: "下一页"
+        case .previousScene: "上一场景"
+        case .nextScene: "下一场景"
         case .gotoPage: "前往页面"
         case .pageIndicator: "页面指示"
-        case .brightnessUp: "亮度增加"
-        case .brightnessDown: "亮度降低"
         case .screenOff: "熄屏"
         case .plugin: "插件动作"
         }
@@ -843,14 +864,18 @@ enum ActionKind: Hashable, CaseIterable {
 @MainActor
 private final class SwipePageMonitor {
     private var token: Any?
-    private var accumulated: CGFloat = 0
-    private var lastHorizontalAt = Date.distantPast
-    private var gestureConsumed = false
+    /// 双轴独立累积与消费标记:一次手势同一轴至多触发一次
+    private var horizontalAccumulated: CGFloat = 0
+    private var verticalAccumulated: CGFloat = 0
+    private var horizontalConsumed = false
+    private var verticalConsumed = false
+    private var lastGestureEventAt = Date.distantPast
     /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
     private let threshold: CGFloat = 30
     /// 网格底座的全局窗口坐标(由 EditorView 的 GeometryReader 实时回填);nil = 未就绪不拦截
     var gridFrame: CGRect?
-    var onSwipe: ((Int) -> Void)?
+    /// 回调:isHorizontal(水平=切场景/垂直=场景内翻页)+ 方向(+1 下一/-1 上一)
+    var onSwipe: ((_ isHorizontal: Bool, _ direction: Int) -> Void)?
 
     func start() {
         end()
@@ -864,31 +889,54 @@ private final class SwipePageMonitor {
             NSEvent.removeMonitor(token)
         }
         token = nil
-        accumulated = 0
-        gestureConsumed = false
+        horizontalAccumulated = 0
+        verticalAccumulated = 0
+        horizontalConsumed = false
+        verticalConsumed = false
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
         let dx = event.scrollingDeltaX
         let dy = event.scrollingDeltaY
-        guard abs(dx) > abs(dy), abs(dx) >= 1 else { return event }
-        // 空间门控:光标不在网格区内,横扫不参与切页
-        guard let frame = gridFrame, frame.contains(NSEvent.mouseLocation) else { return event }
-        // 手势切分:水平事件静默 >0.25s 视为新一次扫动
+        let horizontalDominant = abs(dx) > abs(dy)
+        // 主轴判定:两轴分量都不足 1 的抖动直接放行
+        guard horizontalDominant || abs(dy) >= 1 else { return event }
+        // 空间门控:光标不在网格区内,扫动不参与切页。
+        // 坐标系陷阱:NSEvent.mouseLocation 是屏幕坐标(左下原点),SwiftUI .global 是左上原点,y 须翻转
+        let screenHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        let mouse = NSEvent.mouseLocation
+        guard let frame = gridFrame,
+              frame.contains(CGPoint(x: mouse.x, y: screenHeight - mouse.y))
+        else { return event }
+        // 手势切分:事件静默 >0.25s 视为新一次扫动,双轴累积与消费标记全部复位
         let now = Date()
-        if now.timeIntervalSince(lastHorizontalAt) > 0.25 {
-            accumulated = 0
-            gestureConsumed = false
+        if now.timeIntervalSince(lastGestureEventAt) > 0.25 {
+            horizontalAccumulated = 0
+            verticalAccumulated = 0
+            horizontalConsumed = false
+            verticalConsumed = false
         }
-        lastHorizontalAt = now
-        // 本手势已翻过页:吞掉余量(快扫的动量尾流),保证一次扫动只翻 1 页
-        guard !gestureConsumed else { return nil }
-        accumulated += dx
-        guard abs(accumulated) >= threshold else { return nil }
-        gestureConsumed = true
-        let direction = accumulated > 0 ? 1 : -1
-        accumulated = 0
-        onSwipe?(direction)
+        lastGestureEventAt = now
+
+        if horizontalDominant {
+            guard !horizontalConsumed else { return nil }
+            horizontalAccumulated += dx
+            guard abs(horizontalAccumulated) >= threshold else { return nil }
+            horizontalConsumed = true
+            // 自然滚动:双指左扫 deltaX 为正 = 看右侧内容 = 下一场景
+            let direction = horizontalAccumulated > 0 ? 1 : -1
+            horizontalAccumulated = 0
+            onSwipe?(true, direction)
+            return nil
+        }
+        guard !verticalConsumed else { return nil }
+        verticalAccumulated += dy
+        guard abs(verticalAccumulated) >= threshold else { return nil }
+        verticalConsumed = true
+        // 自然滚动:双指上扫 deltaY 为正 = 看下方内容 = 场景内下一页
+        let direction = verticalAccumulated > 0 ? 1 : -1
+        verticalAccumulated = 0
+        onSwipe?(false, direction)
         return nil
     }
 }

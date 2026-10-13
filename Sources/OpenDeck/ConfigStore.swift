@@ -14,12 +14,12 @@ enum KeyAction: Codable, Hashable {
     case hotkey(keyCode: Int, modifiers: [String])  // modifiers 元素: "command"/"option"/"control"/"shift"
     case mediaKey(String)               // "playPause"/"next"/"previous"/"volumeUp"/"volumeDown"/"mute"
     // 设备控制动作(M2.5):AppModel 本地消化,不经 ActionRunner
-    case previousPage                   // 上一页(循环)
-    case nextPage                       // 下一页(循环)
+    case previousPage                   // 上一页(场景内循环)
+    case nextPage                       // 下一页(场景内循环)
+    case previousScene                  // 上一场景(横向)
+    case nextScene                      // 下一场景(横向)
     case gotoPage(pageID: UUID)         // 前往指定页(按 Page.id 稳定引用)
     case pageIndicator                  // 页面指示键:动态显示 "N/M"
-    case brightnessUp                   // 亮度 +10
-    case brightnessDown                 // 亮度 -10
     case screenOff                      // 熄屏(任意按键唤醒)
     /// 插件动作:pluginID = .sdPlugin 目录名去后缀(= manifest UUID),contextID = 实例身份
     /// (分配时生成的 UUID,持久化于此,跨重启稳定;settings 存 pluginSettings/<pluginID>.json)
@@ -40,6 +40,8 @@ struct Page: Codable, Hashable {
     var keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 15)  // index = row*5+column
     /// 前台应用自动切换(场景联动):绑定到本页的应用 bundle id,最多 3 个,空串=未设
     var boundAppBundleIDs: [String]? = nil
+    /// 所属场景(同名的页归为一个场景;垂直手势在场景内翻页,水平手势切场景)
+    var sceneName: String? = nil
 }
 
 /// 亮度胶囊布局参数(pt):调参模式实时可调
@@ -154,14 +156,15 @@ final class ConfigStore {
         currentPageIndex = index
     }
 
-    /// 新增页面(自动命名「页面 N」),返回其 id
+    /// 新增页面(自动命名「页面 N」,加入当前场景),返回其 id
     @discardableResult
     func addPage() -> UUID {
         let id = UUID()
         config.pages.append(Page(
             id: id,
             name: "页面 \(config.pages.count + 1)",
-            keys: Array(repeating: KeyConfig(), count: Self.keyCount)
+            keys: Array(repeating: KeyConfig(), count: Self.keyCount),
+            sceneName: currentSceneName
         ))
         save()
         return id
@@ -233,6 +236,66 @@ final class ConfigStore {
     /// 默认页(前台应用无绑定时显示);nil = 不启用
     func setDefaultPage(id: UUID?) {
         config.defaultPageID = id
+        save()
+    }
+
+    // MARK: 场景分组(两级手势导航)
+
+    private func sceneName(of page: Page) -> String {
+        page.sceneName ?? "默认场景"
+    }
+
+    /// 场景名列表(按首次出现顺序,去重)
+    var sceneNames: [String] {
+        var seen = Set<String>()
+        var names: [String] = []
+        for page in config.pages {
+            let name = sceneName(of: page)
+            if !seen.contains(name) {
+                seen.insert(name)
+                names.append(name)
+            }
+        }
+        return names
+    }
+
+    var currentSceneName: String? {
+        guard config.pages.indices.contains(config.currentPageIndex) else { return nil }
+        return sceneName(of: config.pages[config.currentPageIndex])
+    }
+
+    /// 当前页在场景内的序号(0-based)与场景内页数(页面指示键用)
+    var currentPagePositionInScene: (position: Int, count: Int)? {
+        guard config.pages.indices.contains(config.currentPageIndex) else { return nil }
+        let scene = sceneName(of: config.pages[config.currentPageIndex])
+        let indices = config.pages.indices.filter { sceneName(of: config.pages[$0]) == scene }
+        guard let position = indices.firstIndex(of: config.currentPageIndex) else { return nil }
+        return (position, indices.count)
+    }
+
+    /// 页面切换目标索引:withinScene=true 在当前场景内循环翻页;false 在场景列表间循环(切到目标场景第一页)
+    func targetPageIndex(offset: Int, withinScene: Bool) -> Int? {
+        guard config.pages.indices.contains(config.currentPageIndex) else { return nil }
+        let pages = config.pages
+        let currentIndex = config.currentPageIndex
+        let cycle = { (value: Int, modulus: Int) -> Int in ((value % modulus) + modulus) % modulus }
+        if withinScene {
+            let scene = sceneName(of: pages[currentIndex])
+            let indices = pages.indices.filter { sceneName(of: pages[$0]) == scene }
+            guard indices.count > 1, let position = indices.firstIndex(of: currentIndex) else { return nil }
+            return indices[cycle(position + offset, indices.count)]
+        }
+        let scenes = sceneNames
+        guard scenes.count > 1, let scenePosition = scenes.firstIndex(of: sceneName(of: pages[currentIndex])) else { return nil }
+        let targetScene = scenes[cycle(scenePosition + offset, scenes.count)]
+        return pages.firstIndex { sceneName(of: $0) == targetScene }
+    }
+
+    /// 设置页面所属场景(空名归入「默认场景」)
+    func setSceneName(id: UUID, to name: String) {
+        guard let index = indexOfPage(id: id) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        config.pages[index].sceneName = trimmed.isEmpty ? "默认场景" : trimmed
         save()
     }
 
