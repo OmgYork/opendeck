@@ -20,6 +20,17 @@ public enum IconRenderer {
         iconPath: String? = nil,
         rotationDegrees: Int = StreamDock293S.displayRotationDegrees
     ) -> CGImage? {
+        guard let upright = composeUpright(
+            size: size, backgroundColorHex: backgroundColorHex, title: title, iconPath: iconPath
+        ) else { return nil }
+        // 设备以 180° 旋转显示,预旋转输出;图与文同源同变换,方向恒一致
+        return rotated(upright, byDegrees: rotationDegrees)
+    }
+
+    /// 在正立空间合成键面(identity CTM、identity textMatrix——文字天然正立)
+    private static func composeUpright(
+        size: Int, backgroundColorHex: String, title: String?, iconPath: String?
+    ) -> CGImage? {
         guard size > 0 else { return nil }
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         guard let ctx = CGContext(
@@ -32,23 +43,33 @@ public enum IconRenderer {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
 
-        let square = CGSize(width: size, height: size)
-        if rotationDegrees != 0 {
-            ctx.translateBy(x: square.width / 2, y: square.height / 2)
-            ctx.rotate(by: CGFloat(rotationDegrees) * .pi / 180)
-            ctx.translateBy(x: -square.width / 2, y: -square.height / 2)
-        }
-
+        let square = CGRect(x: 0, y: 0, width: size, height: size)
         let background = HexColor.parse(backgroundColorHex) ?? CGColor(srgbRed: 0.23, green: 0.26, blue: 0.35, alpha: 1)
         ctx.setFillColor(background)
-        ctx.fill(CGRect(origin: .zero, size: square))
+        ctx.fill(square)
 
         if let iconPath, let icon = loadImage(at: iconPath) {
-            drawAspectFill(icon, in: ctx, square: square)
+            drawAspectFill(icon, in: ctx, square: square.size)
         }
         if let title, !title.isEmpty {
-            drawTitle(title, in: ctx, square: square, on: background)
+            drawTitle(title, in: ctx, square: square.size, on: background)
         }
+        return ctx.makeImage()
+    }
+
+    /// 整图旋转(方形图无裁切问题)
+    private static func rotated(_ image: CGImage, byDegrees degrees: Int) -> CGImage? {
+        guard degrees != 0 else { return image }
+        let side = max(image.width, image.height)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                  data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        ctx.translateBy(x: CGFloat(side) / 2, y: CGFloat(side) / 2)
+        ctx.rotate(by: CGFloat(degrees) * .pi / 180)
+        ctx.draw(image, in: CGRect(x: -CGFloat(image.width) / 2, y: -CGFloat(image.height) / 2, width: CGFloat(image.width), height: CGFloat(image.height)))
         return ctx.makeImage()
     }
 
@@ -133,15 +154,13 @@ public enum IconRenderer {
         else { return }
 
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        let textHeight = fontSize * 1.1
-        // 位图上下文 y 轴朝下,翻转文字
-        ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        // CG 位图 y 轴朝上:键面底部 = 小 y,字形自基线向上生长;textMatrix 保持 identity
+        // (竖翻 Mᵥ 是此前文字颠倒的根因——它会叠加在 CTM 之上,与预旋转合成出错误方向)
         ctx.textPosition = CGPoint(
             x: max(4, (square.width - width) / 2),
-            y: square.height / 2 + textHeight / 2 - fontSize * 0.16
+            y: square.height * 0.08
         )
         CTLineDraw(line, ctx)
-        ctx.textMatrix = .identity
     }
 
     private static func fontSizeFactor(forCount count: Int) -> CGFloat {
