@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import ServiceManagement
 import StreamDockKit
 
 /// 应用级模型:粘合驱动层(DeviceController)与配置层(ConfigStore)。
@@ -108,6 +109,25 @@ final class AppModel {
         NSWorkspace.shared.runningApplications
             .first { $0.bundleIdentifier == Self.officialBundleID }?
             .terminate()
+    }
+
+    // MARK: - 登录项
+
+    /// 是否已注册开机自启(裸二进制运行时注册会失败,打包成 .app 后有效)
+    var isLaunchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            appendLog("登录项设置失败:\(error.localizedDescription)")
+        }
     }
 
     // MARK: - 私有

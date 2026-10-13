@@ -97,6 +97,11 @@ private struct MenuBarPanel: View {
                 }
             }
 
+            Toggle("登录时启动", isOn: Binding(
+                get: { appModel.isLaunchAtLoginEnabled },
+                set: { appModel.setLaunchAtLogin($0) }
+            ))
+
             Button {
                 appModel.applyPageToDevice()
             } label: {
