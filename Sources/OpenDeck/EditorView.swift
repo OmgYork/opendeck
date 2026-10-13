@@ -52,14 +52,16 @@ struct EditorView: View {
         // 工具栏项一律不自绘玻璃(系统已给单层玻璃,自绘会叠成两层)
         ToolbarItem(placement: .principal) { statusPill }
         ToolbarItem(placement: .primaryAction) { brightnessControl }
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-                appModel.applyPageToDevice()
-            } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-            }
-            .help("把当前页重新画到设备上")
+        // ToolbarSpacer:分隔玻璃组,让亮度与菜单各成一体
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItem(placement: .primaryAction) {
             Menu {
+                Button {
+                    appModel.applyPageToDevice()
+                } label: {
+                    Label("重新应用到设备", systemImage: "arrow.triangle.2.circlepath")
+                }
+                Divider()
                 Button("帮助") {}
                 Divider()
                 Button("退出 OpenDeck") { NSApp.terminate(nil) }
@@ -90,14 +92,17 @@ struct EditorView: View {
             Button {
                 appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
             } label: {
-                Image(systemName: brightness < 15 ? "sun.min" : "sun.max.fill")
+                Image(systemName: brightness < 15 && !appModel.followSystemBrightness ? "sun.min" : "sun.max.fill")
                     .foregroundStyle(.yellow)
                     .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: appModel.followSystemBrightness)
                     .padding(3)
                     .overlay {
                         // 跟随指示:太阳图标外的绿色圆圈
                         Circle()
-                            .strokeBorder(appModel.followSystemBrightness ? Color.green : .clear, lineWidth: 2)
+                            .strokeBorder(Color.green, lineWidth: 2)
+                            .opacity(appModel.followSystemBrightness ? 1 : 0)
+                            .scaleEffect(appModel.followSystemBrightness ? 1 : 0.55)
                             .shadow(color: appModel.followSystemBrightness ? .green.opacity(0.55) : .clear, radius: 3)
                     }
             }
@@ -115,16 +120,14 @@ struct EditorView: View {
                 ), in: 0...100) { editing in
                     if !editing { appModel.commitBrightness() }
                 }
-                .frame(width: 120)
-                .transition(.scale(scale: 0.6, anchor: .leading).combined(with: .opacity))
+                .frame(width: 110)
+                .transition(
+                    .scale(scale: 0.55, anchor: .leading)
+                    .combined(with: .opacity)
+                )
             }
-
-            Text("\(Int(brightness))%")
-                .font(.callout.monospacedDigit())
-                .frame(width: 38, alignment: .trailing)
         }
-        .padding(.horizontal, 4)
-        .animation(.snappy(duration: 0.25), value: appModel.followSystemBrightness)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: appModel.followSystemBrightness)
         .onChange(of: appModel.config.brightness) { _, newValue in
             // 外部变化(跟随镜像/菜单栏)同步进本地;直接写 @State 不触发上面的用户路径
             if Int(brightness) != newValue {
