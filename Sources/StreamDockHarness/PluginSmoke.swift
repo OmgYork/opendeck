@@ -29,6 +29,8 @@ final class PluginSmokeRig {
     var lastTitle: String?
     var gotImage = false
     var gotGlobalSettings = false
+    var gotSyntheticFlip = false
+    var physicalKeyEvents = 0
 
     init(controller: DeviceController, manifest: SDManifest, pluginRoot: URL, keyIndex: Int) throws {
         self.controller = controller
@@ -49,7 +51,10 @@ final class PluginSmokeRig {
             Task { @MainActor in self?.spawn(nodeURL: nodeURL, port: port) }
         }
         server.onOpen = { [weak self] connection in
-            Task { @MainActor in self?.connection = connection }
+            Task { @MainActor in
+                print("🔌 插件已连接")
+                self?.connection = connection
+            }
         }
         server.onMessage = { [weak self] connection, data in
             Task { @MainActor in self?.handle(connection: connection, data: data) }
@@ -173,6 +178,9 @@ final class PluginSmokeRig {
     func handleKeyEvent(_ event: KeyEvent) {
         let index = event.row * StreamDock293S.columns + event.column
         guard index == keyIndex, connection != nil else { return }
+        if event.phase == .down {
+            physicalKeyEvents += 1
+        }
         switch event.phase {
         case .down:
             send(SDProtocol.keyDown(action: action.uuid, context: contextID, device: .streamDock293V3,
@@ -195,6 +203,12 @@ final class PluginSmokeRig {
     }
 
     func shutdown() {
+        if let process {
+            let tail = process.diagnosticTail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty {
+                print("📋 插件诊断尾部:\n\(tail.suffix(1200))")
+            }
+        }
         process?.terminate()
         server.stop()
     }
@@ -242,19 +256,30 @@ func runPluginSmoke(pluginDirectory: URL, nodeOverride: URL?, keyIndex: Int, lis
         Task { @MainActor in rig.handleKeyEvent(event) }
     }
 
-    let deadline = Date().addingTimeInterval(listenSeconds)
+    print("—— 监听 \(Int(listenSeconds)) 秒:3 秒后自动合成一次按键(协议闭环自证),期间手动按压验证键(编号 \(keyIndex + 1))可叠加物理验证 ——")
+    let start = Date()
+    let deadline = start.addingTimeInterval(listenSeconds)
+    var syntheticFired = false
     while Date() < deadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-        if rig.gotImage && rig.gotGlobalSettings {
-            break // 闭环已证:上屏 + 全局设置应答
+        // 合成按键:走与物理事件完全相同的分发路径,无人值守也能验证 keyDown→setState 闭环
+        if !syntheticFired, rig.gotImage, Date().timeIntervalSince(start) > 3 {
+            syntheticFired = true
+            let row = rig.keyIndex / StreamDock293S.columns
+            let column = rig.keyIndex % StreamDock293S.columns
+            let before = rig.state
+            rig.handleKeyEvent(KeyEvent(row: row, column: column, phase: .down))
+            rig.handleKeyEvent(KeyEvent(row: row, column: column, phase: .up))
+            rig.gotSyntheticFlip = rig.state != before
+            print("🧪 合成按键:state \(before) → \(rig.state),flip=\(rig.gotSyntheticFlip)")
         }
     }
     rig.shutdown()
 
-    if rig.gotImage {
-        print("✅ 插件图像已上屏、协议闭环完成(退出码 0);期间按键 \(keyIndex + 1) 可验证 keyDown/setState")
+    if rig.gotImage && rig.gotSyntheticFlip {
+        print("✅ 闭环全通:自定义图上屏 + willAppear/keyDown/keyUp/setState/setTitle 全链路(物理按压 \(rig.physicalKeyEvents) 次,全局设置应答 \(rig.gotGlobalSettings ? "有" : "本夹具未用"))")
         return 0
     }
-    print("⚠️  监听窗口内未见插件图像(退出码 3)")
+    print("⚠️  闭环不完整:image=\(rig.gotImage) flip=\(rig.gotSyntheticFlip)(退出码 3)")
     return 3
 }

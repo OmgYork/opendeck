@@ -1,20 +1,32 @@
+import CryptoKit
 import Foundation
-import Network
 
-/// 插件侧 WebSocket 服务端:NWListener + NWProtocolWebSocket,只监听 127.0.0.1,端口由系统分配。
-/// 回调全部在内部串行队列触发;上层(主线程模型)自行跳线程。每个连接即一个插件进程。
+/// 插件侧 WebSocket 服务端:BSD socket 手写 RFC6455(仅回环,临时端口)。
+/// 不用 NWListener:macOS 15+ 本地网络隐私对无 Info.plist 的裸进程直接 EINVAL(实测 2026-10-13),
+/// 而回环监听本不需要任何网络权限,自实现反而消除整类环境风险。
+/// 所有连接状态收敛在内部串行队列;回调跳出到任意线程,上层自行转主线程。
 public final class PluginServer: @unchecked Sendable {
+    /// 状态由服务端串行队列独占守卫,跨线程传递安全
     public final class Connection: @unchecked Sendable {
         public let id: UUID
-        fileprivate let socket: NWConnection
+        fileprivate let fileDescriptor: Int32
         fileprivate var isClosed = false
+        fileprivate var inbox = Data()
+        fileprivate var outbox = Data()
+        fileprivate var readSource: DispatchSourceRead?
+        /// 握手完成前收到的是 HTTP 升级请求
+        fileprivate var isHandshaken = false
+        /// 分片帧累积(opcode 0x1 首帧 + 0x0 续帧,直到 FIN)
+        fileprivate var pendingOpcode: UInt8 = 0
+        fileprivate var pendingPayload = Data()
 
-        fileprivate init(id: UUID, socket: NWConnection) {
+        fileprivate init(id: UUID, fileDescriptor: Int32) {
             self.id = id
-            self.socket = socket
+            self.fileDescriptor = fileDescriptor
         }
     }
 
+    /// 监听就绪(带实际端口)
     public var onReady: (@Sendable (UInt16) -> Void)?
     public var onOpen: (@Sendable (Connection) -> Void)?
     public var onMessage: (@Sendable (Connection, Data) -> Void)?
@@ -22,54 +34,32 @@ public final class PluginServer: @unchecked Sendable {
     public var onError: (@Sendable (String) -> Void)?
 
     private let queue = DispatchQueue(label: "opendeck.plugin.server")
-    private var listener: NWListener?
+    private var listenDescriptor: Int32 = -1
+    private var readSource: DispatchSourceRead?
     private var connections: [UUID: Connection] = [:]
     private(set) public var port: UInt16 = 0
 
     public init() {}
 
     public func start() {
-        let parameters = NWParameters()
-        parameters.allowLocalEndpointReuse = true
-        // 插件只从本机连接;不暴露到局域网
-        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: .any)
-        let options = NWProtocolWebSocket.Options()
-        options.autoReplyPing = true
-        parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
-
-        do {
-            let listener = try NWListener(using: parameters, on: .any)
-            self.listener = listener
-            listener.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .ready:
-                    let port = self?.listener?.port?.rawValue ?? 0
-                    self?.port = port
-                    self?.onReady?(port)
-                case .failed(let error):
-                    self?.onError?("WebSocket 监听失败: \(error)")
-                default:
-                    break
-                }
-            }
-            listener.newConnectionHandler = { [weak self] socket in
-                self?.accept(socket)
-            }
-            listener.start(queue: queue)
-        } catch {
-            onError?("WebSocket 监听创建失败: \(error.localizedDescription)")
+        queue.async { [weak self] in
+            self?.bindLoopback()
         }
     }
 
     public func stop() {
         queue.async { [weak self] in
             guard let self else { return }
-            self.listener?.cancel()
-            self.listener = nil
+            self.readSource?.cancel()
+            self.readSource = nil
             for connection in self.connections.values {
-                connection.socket.cancel()
+                self.shutdown(connection)
             }
             self.connections.removeAll()
+            if self.listenDescriptor >= 0 {
+                Darwin.close(self.listenDescriptor)
+                self.listenDescriptor = -1
+            }
         }
     }
 
@@ -77,69 +67,276 @@ public final class PluginServer: @unchecked Sendable {
     public func send(_ data: Data, to connection: Connection) {
         queue.async { [weak self] in
             guard let self, !connection.isClosed else { return }
-            let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-            let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-            connection.socket.send(
-                content: data,
-                contentContext: context,
-                isComplete: true,
-                completion: .contentProcessed { [weak self] error in
-                    if let error {
-                        self?.onError?("发送失败: \(error)")
-                    }
-                }
-            )
+            self.enqueueFrame(opcode: 0x1, payload: data, connection: connection)
+            self.flush(connection)
         }
     }
 
     public func close(_ connection: Connection) {
         queue.async { [weak self] in
             guard let self, !connection.isClosed else { return }
-            connection.isClosed = true
-            connection.socket.cancel()
+            self.enqueueFrame(opcode: 0x8, payload: Data(), connection: connection)
+            self.flush(connection)
+            self.shutdown(connection)
             self.connections.removeValue(forKey: connection.id)
             self.onClose?(connection)
         }
     }
 
-    // MARK: - 私有(queue 上执行)
+    // MARK: - 监听与接受(queue 上执行)
 
-    private func accept(_ socket: NWConnection) {
-        let connection = Connection(id: UUID(), socket: socket)
-        connections[connection.id] = connection
-        socket.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .ready:
-                self?.onOpen?(connection)
-            case .failed, .cancelled:
-                self?.finish(connection)
-            default:
-                break
+    private func bindLoopback() {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            onError?("socket 创建失败 errno=\(errno)")
+            return
+        }
+        var reuse: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        // 非阻塞:level-triggered 读源已保证就绪才进 accept,再阻塞式 accept 会卡死串行队列(实测踩坑)
+        let flags = fcntl(descriptor, F_GETFL, 0)
+        fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_port = 0 // 临时端口
+        address.sin_addr = in_addr(s_addr: INADDR_LOOPBACK.bigEndian)
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        socket.start(queue: queue)
-        receiveLoop(connection)
+        guard bindResult == 0, listen(descriptor, 8) == 0 else {
+            onError!("监听失败 errno=\(errno)")
+            Darwin.close(descriptor)
+            return
+        }
+
+        var boundAddress = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        guard getsockname(descriptor, withUnsafeMutablePointer(to: &boundAddress) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
+        }, &length) == 0 else {
+            onError!("getsockname 失败")
+            Darwin.close(descriptor)
+            return
+        }
+        port = UInt16(bigEndian: boundAddress.sin_port)
+        listenDescriptor = descriptor
+
+        let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
+        source.setEventHandler { [weak self] in
+            self?.acceptPending()
+        }
+        source.setCancelHandler { [weak self] in
+            guard let self, self.listenDescriptor >= 0 else { return }
+            Darwin.close(self.listenDescriptor)
+            self.listenDescriptor = -1
+        }
+        source.resume()
+        readSource = source
+        onReady?(port)
     }
 
-    private func receiveLoop(_ connection: Connection) {
-        // receiveMessage 对 WebSocket 返回一条完整消息(自动拼装分片帧)
-        connection.socket.receiveMessage { [weak self] data, _, _, error in
-            guard let self else { return }
-            if let data, !data.isEmpty {
-                self.onMessage?(connection, data)
+    private func acceptPending() {
+        // 一次事件只 accept 一个:fd 已非阻塞且读源水平触发,还有积压会立刻再次进来
+        if true {
+            var address = sockaddr()
+            var length = socklen_t(MemoryLayout<sockaddr>.size)
+            let descriptor = withUnsafeMutablePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    accept(listenDescriptor, $0, &length)
+                }
             }
-            if error == nil {
-                self.receiveLoop(connection)
+            guard descriptor >= 0 else { return } // EAGAIN = 没了
+
+            var nodelay: Int32 = 1
+            setsockopt(descriptor, Int32(IPPROTO_TCP), TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
+
+            let connection = Connection(id: UUID(), fileDescriptor: descriptor)
+            connections[connection.id] = connection
+            let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
+            source.setEventHandler { [weak self] in
+                self?.readAvailable(connection)
+            }
+            source.setCancelHandler { [weak connection] in
+                guard let connection else { return }
+                Darwin.close(connection.fileDescriptor)
+            }
+            connection.readSource = source
+            source.resume()
+            onOpen?(connection)
+        }
+    }
+
+    private func readAvailable(_ connection: Connection) {
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let count = read(connection.fileDescriptor, &buffer, buffer.count)
+        if count <= 0 {
+            // 0 = 对端关闭,-1 = EAGAIN/ECONNRESET 等
+            finish(connection)
+            return
+        }
+        connection.inbox.append(contentsOf: buffer[0..<count])
+        drainInbox(connection)
+    }
+
+    private func drainInbox(_ connection: Connection) {
+        if !connection.isHandshaken {
+            completeHandshakeIfNeeded(connection)
+            if !connection.isHandshaken { return } // 升级请求未收全
+        }
+        while true {
+            guard let frame = parseFrame(connection) else { break }
+            switch frame.opcode {
+            case 0x1, 0x2: // text / binary
+                if frame.isFinal {
+                    onMessage?(connection, frame.payload)
+                } else {
+                    connection.pendingOpcode = frame.opcode
+                    connection.pendingPayload = frame.payload
+                }
+            case 0x0: // 续帧
+                connection.pendingPayload.append(frame.payload)
+                if frame.isFinal {
+                    onMessage?(connection, connection.pendingPayload)
+                    connection.pendingPayload.removeAll()
+                }
+            case 0x8: // close
+                enqueueFrame(opcode: 0x8, payload: Data(), connection: connection)
+                flush(connection)
+                finish(connection)
+                return
+            case 0x9: // ping → pong
+                enqueueFrame(opcode: 0xA, payload: frame.payload, connection: connection)
+            default:
+                break // pong 等,忽略
+            }
+        }
+    }
+
+    // MARK: - WebSocket 握手(queue 上执行)
+
+    private func completeHandshakeIfNeeded(_ connection: Connection) {
+        let headerTerminator = Data("\r\n\r\n".utf8)
+        guard let range = connection.inbox.range(of: headerTerminator) else { return }
+        let headerText = String(data: connection.inbox[connection.inbox.startIndex..<range.lowerBound], encoding: .utf8) ?? ""
+        connection.inbox.removeSubrange(connection.inbox.startIndex..<range.upperBound)
+
+        guard headerText.uppercased().contains("UPGRADE: WEBSOCKET"),
+              let keyLine = headerText
+                  .split(separator: "\r\n")
+                  .first(where: { $0.uppercased().hasPrefix("SEC-WEBSOCKET-KEY:") }),
+              let clientKey = String(keyLine.split(separator: ":", maxSplits: 1).last ?? "")
+                  .trimmingCharacters(in: .whitespaces) as String?,
+              !clientKey.isEmpty
+        else {
+            onError!("非法 WebSocket 升级请求")
+            finish(connection)
+            return
+        }
+
+        // RFC6455:accept = base64(sha1(key + GUID))
+        let magic = clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        let digest = Data(Insecure.SHA1.hash(data: Data(magic.utf8)))
+        let acceptKey = digest.base64EncodedString()
+        let response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(acceptKey)\r\n\r\n"
+        connection.outbox.append(Data(response.utf8))
+        flush(connection)
+        connection.isHandshaken = true
+    }
+
+    // MARK: - 帧编解码(queue 上执行)
+
+    private struct Frame {
+        let opcode: UInt8
+        let isFinal: Bool
+        let payload: Data
+    }
+
+    /// 服务端帧不掩码;客户端(插件)帧必须掩码
+    private func parseFrame(_ connection: Connection) -> Frame? {
+        let data = connection.inbox
+        guard data.count >= 2 else { return nil }
+        let bytes = [UInt8](data)
+        let opcode = bytes[0] & 0x7F
+        let isFinal = (bytes[0] & 0x80) != 0
+        let masked = (bytes[1] & 0x80) != 0
+        var length = Int(bytes[1] & 0x7F)
+        var offset = 2
+        if length == 126 {
+            guard data.count >= 4 else { return nil }
+            length = Int(bytes[2]) << 8 | Int(bytes[3])
+            offset = 4
+        } else if length == 127 {
+            guard data.count >= 10 else { return nil }
+            length = 0
+            for byte in bytes[2..<10] {
+                length = length << 8 | Int(byte)
+            }
+            offset = 10
+        }
+        var maskKey: [UInt8] = []
+        if masked {
+            guard data.count >= offset + 4 else { return nil }
+            maskKey = Array(bytes[offset..<(offset + 4)])
+            offset += 4
+        }
+        guard data.count >= offset + length else { return nil }
+        var payload = Data(bytes[offset..<(offset + length)])
+        if masked {
+            for index in 0..<payload.count {
+                payload[index] ^= maskKey[index % 4]
+            }
+        }
+        connection.inbox.removeFirst(offset + length)
+        return Frame(opcode: opcode, isFinal: isFinal, payload: payload)
+    }
+
+    private func enqueueFrame(opcode: UInt8, payload: Data, connection: Connection) {
+        var header: [UInt8]
+        let length = payload.count
+        if length < 126 {
+            header = [0x80 | opcode, UInt8(length)]
+        } else if length < 65536 {
+            header = [0x80 | opcode, 126, UInt8(length >> 8), UInt8(length & 0xFF)]
+        } else {
+            header = [0x80 | opcode, 127]
+            header.append(contentsOf: (0..<8).reversed().map { UInt8((length >> ($0 * 8)) & 0xFF) })
+        }
+        connection.outbox.append(Data(header))
+        connection.outbox.append(payload)
+    }
+
+    private func flush(_ connection: Connection) {
+        while !connection.outbox.isEmpty {
+            let written = connection.outbox.withUnsafeBytes { rawBuffer in
+                write(connection.fileDescriptor, rawBuffer.baseAddress, rawBuffer.count)
+            }
+            if written > 0 {
+                connection.outbox.removeFirst(written)
+            } else if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                // 写缓冲满:留到下次 read 事件后重试(消息都很小,足够)
+                return
             } else {
-                self.finish(connection)
+                finish(connection)
+                return
             }
         }
     }
 
     private func finish(_ connection: Connection) {
         guard !connection.isClosed else { return }
-        connection.isClosed = true
+        shutdown(connection)
         connections.removeValue(forKey: connection.id)
         onClose?(connection)
+    }
+
+    private func shutdown(_ connection: Connection) {
+        connection.isClosed = true
+        connection.readSource?.cancel()
+        connection.readSource = nil
     }
 }

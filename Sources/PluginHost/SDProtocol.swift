@@ -31,8 +31,15 @@ public enum SDProtocol {
         device: Device,
         appVersion: String = "6.5.0.20744"
     ) -> JSONValue {
-        let language = Locale.preferredLanguages.first?
-            .split(separator: "-").prefix(2).joined(separator: "_") ?? "en"
+        // 官方 app 风格的语言码(zh-Hans-CN → zh_CN;无地区则 zh)
+        let language: String = {
+            let parts = (Locale.preferredLanguages.first ?? "en").split(separator: "-").map(String.init)
+            guard let first = parts.first else { return "en" }
+            if let region = parts.last, region.count == 2, parts.count > 1 {
+                return "\(first)_\(region.uppercased())"
+            }
+            return first
+        }()
         return .object([
             "application": .object([
                 "font": .string(".AppleSystemUIFont"),
