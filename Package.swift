@@ -15,10 +15,10 @@ let package = Package(
             name: "PluginHost",
             path: "Sources/PluginHost"
         ),
-        // CLI 验证工具:画满键位 + 打印按键事件
+        // CLI 验证工具:画满键位 + 打印按键事件 + 插件宿主冒烟
         .executableTarget(
             name: "StreamDockHarness",
-            dependencies: ["StreamDockKit"],
+            dependencies: ["StreamDockKit", "PluginHost"],
             path: "Sources/StreamDockHarness",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),

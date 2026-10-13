@@ -20,8 +20,22 @@ public enum IconRenderer {
         iconPath: String? = nil,
         rotationDegrees: Int = StreamDock293S.displayRotationDegrees
     ) -> CGImage? {
+        let icon = iconPath.flatMap { loadImage(at: $0) }
+        return render(size: size, backgroundColorHex: backgroundColorHex, title: title,
+                      baseImage: icon, rotationDegrees: rotationDegrees)
+    }
+
+    /// 插件图像路径:现成位图(setImage 解码产物)作底图 + 可选标题 → 预旋转输出。
+    /// 与 iconPath 变体同一条合成管线,保证设备上方向/排版一致。
+    public static func render(
+        size: Int,
+        backgroundColorHex: String,
+        title: String?,
+        baseImage: CGImage?,
+        rotationDegrees: Int = StreamDock293S.displayRotationDegrees
+    ) -> CGImage? {
         guard let upright = composeUpright(
-            size: size, backgroundColorHex: backgroundColorHex, title: title, iconPath: iconPath
+            size: size, backgroundColorHex: backgroundColorHex, title: title, icon: baseImage
         ) else { return nil }
         // 设备以 180° 旋转显示,预旋转输出;图与文同源同变换,方向恒一致
         return rotated(upright, byDegrees: rotationDegrees)
@@ -29,7 +43,7 @@ public enum IconRenderer {
 
     /// 在正立空间合成键面(identity CTM、identity textMatrix——文字天然正立)
     private static func composeUpright(
-        size: Int, backgroundColorHex: String, title: String?, iconPath: String?
+        size: Int, backgroundColorHex: String, title: String?, icon: CGImage?
     ) -> CGImage? {
         guard size > 0 else { return nil }
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
@@ -48,7 +62,7 @@ public enum IconRenderer {
         ctx.setFillColor(background)
         ctx.fill(square)
 
-        if let iconPath, let icon = loadImage(at: iconPath) {
+        if let icon {
             drawAspectFill(icon, in: ctx, square: square.size)
         }
         if let title, !title.isEmpty {

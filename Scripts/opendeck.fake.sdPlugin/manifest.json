@@ -1,0 +1,20 @@
+{
+  "Name": "FakePlugin",
+  "Version": "1.0.0",
+  "SDKVersion": 1,
+  "CodePath": "plugin/index.js",
+  "Nodejs": { "Version": "20" },
+  "OS": [
+    { "Platform": "mac", "MinimumVersion": "10.11" }
+  ],
+  "Actions": [
+    {
+      "UUID": "opendeck.fake.toggle",
+      "Name": "红绿切换",
+      "States": [
+        { "Image": "images/off" },
+        { "Image": "images/on" }
+      ]
+    }
+  ]
+}
