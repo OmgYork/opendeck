@@ -69,8 +69,13 @@ struct SDManifestTests {
         #expect(media.disableAutomaticStates == false) // 缺省 false → 宿主需自动轮换
     }
 
-    @Test("HTML 家族识别(M2 不支持)与 Knob 型过滤")
+    @Test("HTML 家族识别(M2 不支持)与 Knob 型过滤;空 Controllers = 不限制")
     func parseHTMLAndKnob() throws {
+        let unrestricted = try SDManifest.parse(
+            Data(#"{"CodePath":"plugin/index.js","Nodejs":{"Version":"20"},"Actions":[{"UUID":"u","Name":"U","Controllers":[]}]}"#.utf8),
+            directoryName: "com.x.u.sdPlugin"
+        )
+        #expect(unrestricted.keypadActions.count == 1) // OBS 插件实况:空数组 = 全控制器可用
         let html = try SDManifest.parse(
             Data(#"{"Name":"clock","CodePath":"index.html","Actions":[{"UUID":"a","Name":"A"}]}"#.utf8),
             directoryName: "com.x.clock.sdPlugin"

@@ -25,7 +25,8 @@ public struct SDManifest: Sendable, Equatable {
         public let stateImages: [String?]
         public let disableAutomaticStates: Bool
         public let propertyInspectorPath: String?
-        /// Controllers 缺省 = Keypad;含 "Keypad" 才能放到 15 键板上(Knob/Card 型过滤)
+        /// Controllers 缺省或空数组 = 不限制(官方 OBS 插件即空数组);仅当显式列出且不含
+        /// "Keypad"(如 ["Knob"]/["Card"])才不能放到 15 键板上
         public let isKeypadAction: Bool
 
         public var stateCount: Int { stateImages.count }
@@ -64,7 +65,7 @@ public struct SDManifest: Sendable, Equatable {
                 stateImages: stateImages,
                 disableAutomaticStates: mirrorAction.DisableAutomaticStates ?? false,
                 propertyInspectorPath: mirrorAction.PropertyInspectorPath,
-                isKeypadAction: mirrorAction.Controllers.map { $0.contains("Keypad") } ?? true
+                isKeypadAction: mirrorAction.Controllers.map { $0.isEmpty || $0.contains("Keypad") } ?? true
             )
         }
 

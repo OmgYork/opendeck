@@ -79,6 +79,8 @@ final class PluginHostModel {
     private var instances: [String: Instance] = [:]
     private var pluginByConnection: [UUID: String] = [:]
     private var serverStarted = false
+    /// settings 文档缓存:OBS 等插件高频 setGlobalSettings,无变化不落盘
+    private var settingsCache: [String: PluginSettingsDocument] = [:]
 
     init() {}
 
@@ -165,7 +167,7 @@ final class PluginHostModel {
             hooks.log("插件未安装,动作暂不生效:\(pluginID)")
             return
         }
-        let record = settingsStore.document(pluginUUID: pluginID).contexts[contextID] ?? PluginContextRecord()
+        let record = document(pluginUUID: pluginID).contexts[contextID] ?? PluginContextRecord()
         instances[contextID] = Instance(
             contextID: contextID,
             pluginUUID: pluginID,
@@ -260,9 +262,9 @@ final class PluginHostModel {
 
         case .setSettings(let context, let settings):
             guard let instance = self.instance(context: context) else { return }
-            var document = settingsStore.document(pluginUUID: instance.pluginUUID)
+            var document = document(pluginUUID: instance.pluginUUID)
             document.contexts[instance.contextID, default: PluginContextRecord()].settings = settings
-            settingsStore.save(document, pluginUUID: instance.pluginUUID)
+            saveDocument(document, pluginUUID: instance.pluginUUID)
 
         case .getSettings(let context):
             guard let instance = self.instance(context: context) else { return }
@@ -274,15 +276,15 @@ final class PluginHostModel {
             ), runtime: runtime)
 
         case .setGlobalSettings(_, let settings):
-            var document = settingsStore.document(pluginUUID: pluginUUID)
+            var document = document(pluginUUID: pluginUUID)
             document.globalSettings = settings
-            settingsStore.save(document, pluginUUID: pluginUUID)
+            saveDocument(document, pluginUUID: pluginUUID)
 
         case .getGlobalSettings:
             // OBS 插件硬需求:必答,否则其全局设置为空
             send(SDProtocol.didReceiveGlobalSettings(
                 pluginUUID: pluginUUID,
-                settings: settingsStore.document(pluginUUID: pluginUUID).globalSettings
+                settings: document(pluginUUID: pluginUUID).globalSettings
             ), runtime: runtime)
 
         case .showOk:
@@ -345,14 +347,27 @@ final class PluginHostModel {
 
     private func setState(_ instance: Instance, _ state: Int) {
         instance.state = state
-        var document = settingsStore.document(pluginUUID: instance.pluginUUID)
+        var document = document(pluginUUID: instance.pluginUUID)
         document.contexts[instance.contextID, default: PluginContextRecord()].state = state
-        settingsStore.save(document, pluginUUID: instance.pluginUUID)
+        saveDocument(document, pluginUUID: instance.pluginUUID)
         redraw(instance)
     }
 
+    private func document(pluginUUID: String) -> PluginSettingsDocument {
+        if let cached = settingsCache[pluginUUID] { return cached }
+        let document = settingsStore.document(pluginUUID: pluginUUID)
+        settingsCache[pluginUUID] = document
+        return document
+    }
+
+    private func saveDocument(_ document: PluginSettingsDocument, pluginUUID: String) {
+        guard settingsCache[pluginUUID] != document else { return }
+        settingsCache[pluginUUID] = document
+        settingsStore.save(document, pluginUUID: pluginUUID)
+    }
+
     private func currentSettings(_ instance: Instance) -> JSONValue {
-        settingsStore.document(pluginUUID: instance.pluginUUID).contexts[instance.contextID]?.settings ?? .object([:])
+        document(pluginUUID: instance.pluginUUID).contexts[instance.contextID]?.settings ?? .object([:])
     }
 
     // MARK: - 进程管理
@@ -437,7 +452,7 @@ final class PluginHostModel {
     // MARK: - 发送辅助
 
     private func sendWillAppear(_ instance: Instance, runtime: Runtime) {
-        let record = settingsStore.document(pluginUUID: instance.pluginUUID).contexts[instance.contextID] ?? PluginContextRecord()
+        let record = document(pluginUUID: instance.pluginUUID).contexts[instance.contextID] ?? PluginContextRecord()
         send(SDProtocol.willAppear(
             action: instance.actionUUID,
             context: instance.contextID,
@@ -497,6 +512,7 @@ final class PluginHostModel {
             runtime.registered = false
             runtimes.removeValue(forKey: id)
         }
+        settingsCache.removeValue(forKey: id)
         reloadInstalledPlugins()
     }
 
