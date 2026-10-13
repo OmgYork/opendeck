@@ -86,13 +86,14 @@ struct EditorView: View {
         .padding(.vertical, 4)
     }
 
-    /// 亮度:太阳图标 = 跟随开关;跟随态显示「自适应」(滑杆收起),手动态展开滑杆
+    /// 亮度:太阳图标 = 跟随开关;内容槽定宽,「自适应」文案与滑杆 blurReplace 交叉溶解。
+    /// 设计原则:两种状态占同一空间,零布局动画——胶囊恒定,切换天然丝滑
     private var brightnessControl: some View {
         HStack(spacing: 10) {
             Button {
                 appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
             } label: {
-                Image(systemName: brightness < 15 && !appModel.followSystemBrightness ? "sun.min" : "sun.max.fill")
+                Image(systemName: !appModel.followSystemBrightness && brightness < 15 ? "sun.min" : "sun.max.fill")
                     .foregroundStyle(.yellow)
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.bounce, value: appModel.followSystemBrightness)
@@ -101,41 +102,33 @@ struct EditorView: View {
             .buttonStyle(.plain)
             .help(appModel.followSystemBrightness ? "正在自适应 MacBook 亮度,点击改为手动" : "点击开启:亮度自适应 MacBook")
 
-            if appModel.followSystemBrightness {
-                Text("自适应")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .move(edge: .leading)),
-                        removal: .opacity
-                    ))
-            } else {
-                Slider(value: Binding(
-                    get: { brightness },
-                    set: { newValue in
-                        // 自定义 Binding:只有真实拖动走 setBrightness(程序性赋值直接写 @State,不经过这里)
-                        brightness = newValue
-                        appModel.setBrightness(Int(newValue))
+            // 内容槽:两态同占一格,blurReplace = 旧内容模糊消散、新内容浮现
+            ZStack {
+                if appModel.followSystemBrightness {
+                    Text("自适应")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Slider(value: Binding(
+                        get: { brightness },
+                        set: { newValue in
+                            // 自定义 Binding:只有真实拖动走 setBrightness(程序性赋值直接写 @State,不经过这里)
+                            brightness = newValue
+                            appModel.setBrightness(Int(newValue))
+                        }
+                    ), in: 0...100) { editing in
+                        if !editing { appModel.commitBrightness() }
                     }
-                ), in: 0...100) { editing in
-                    if !editing { appModel.commitBrightness() }
                 }
-                .frame(width: 110)
-                // 编舞(非对称):进跟随=滑杆向右收缩淡出(已认可);进手动=滑杆从太阳后方滑入
-                .transition(.asymmetric(
-                    insertion: .move(edge: .leading).combined(with: .opacity),
-                    removal: .opacity
-                        .animation(.easeInOut(duration: 0.3))
-                        .combined(with: .scale(scale: 0.75, anchor: .trailing))
-                ))
             }
+            .frame(width: 110)
+            .transition(.blurReplace)
         }
         // 内边距与状态胶囊规格对齐:图标不贴边
         .padding(.leading, 12)
         .padding(.trailing, 12)
         .padding(.vertical, 5)
-        // 节奏:整段编排 ~0.6s,阻尼调高少弹跳
-        .animation(.spring(response: 0.5, dampingFraction: 0.9), value: appModel.followSystemBrightness)
+        .animation(.smooth(duration: 0.35), value: appModel.followSystemBrightness)
         .onChange(of: appModel.config.brightness) { _, newValue in
             // 外部变化(跟随镜像/菜单栏)同步进本地;直接写 @State 不触发上面的用户路径
             if Int(brightness) != newValue {
