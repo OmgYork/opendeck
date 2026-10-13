@@ -23,13 +23,14 @@ struct EditorView: View {
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
+            // 滚动视图已按玻璃工具栏自动让位,这里只补一点呼吸空隙
             .padding(.top, 8)
         }
         .toolbar { toolbar }
         .containerBackground(for: .window) {
             Color(nsColor: .windowBackgroundColor)
         }
-        .frame(minWidth: 640, minHeight: 480)
+        .frame(minWidth: 700, minHeight: 560)
         .task { appModel.start() }
         .onAppear {
             brightness = Double(appModel.config.config.brightness)
@@ -140,23 +141,25 @@ struct EditorView: View {
 
     // MARK: 键盘底座
 
-    /// 设备底座:暗色实体面板承载键帽网格,暗示「这里就是那台硬件」
+    /// 设备底座:暗色实体面板承载键帽网格,暗示「这里就是那台硬件」。
+    /// 用 background(而非 Shape.overlay)承载体积——后者在 ScrollView 里拿不到高度会塌陷
     private var chassis: some View {
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [Color(nsColor: .underPageBackgroundColor), Color(nsColor: .windowBackgroundColor)],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
-            .overlay {
-                keyGrid.padding(16)
-            }
-            .overlay {
+        keyGrid
+            .padding(18)
+            .background {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(.quaternary, lineWidth: 1)
+                    .fill(
+                        LinearGradient(
+                            colors: [.black.opacity(0.38), .black.opacity(0.22)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .strokeBorder(.white.opacity(0.07), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.30), radius: 16, y: 6)
             }
-            .shadow(color: .black.opacity(0.20), radius: 14, y: 5)
     }
 
     private var keyGrid: some View {
