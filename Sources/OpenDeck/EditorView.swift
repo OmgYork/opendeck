@@ -86,9 +86,9 @@ struct EditorView: View {
         .padding(.vertical, 4)
     }
 
-    /// 亮度:太阳图标 = 跟随开关(绿圈=跟随中,滑杆收起);点击展开滑杆进入手动
+    /// 亮度:太阳图标 = 跟随开关;跟随态显示「自适应」(滑杆收起),手动态展开滑杆
     private var brightnessControl: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Button {
                 appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
             } label: {
@@ -96,20 +96,20 @@ struct EditorView: View {
                     .foregroundStyle(.yellow)
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.bounce, value: appModel.followSystemBrightness)
-                    .padding(6)
-                    .overlay {
-                        // 跟随指示:太阳图标外的绿色圆圈
-                        Circle()
-                            .strokeBorder(Color.green, lineWidth: 2)
-                            .opacity(appModel.followSystemBrightness ? 1 : 0)
-                            .scaleEffect(appModel.followSystemBrightness ? 1 : 0.55)
-                            .shadow(color: appModel.followSystemBrightness ? .green.opacity(0.55) : .clear, radius: 3)
-                    }
+                    .padding(2)
             }
             .buttonStyle(.plain)
-            .help(appModel.followSystemBrightness ? "正在跟随 MacBook 亮度,点击改为手动" : "点击开启:亮度跟随 MacBook")
+            .help(appModel.followSystemBrightness ? "正在自适应 MacBook 亮度,点击改为手动" : "点击开启:亮度自适应 MacBook")
 
-            if !appModel.followSystemBrightness {
+            if appModel.followSystemBrightness {
+                Text("自适应")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .leading)),
+                        removal: .opacity
+                    ))
+            } else {
                 Slider(value: Binding(
                     get: { brightness },
                     set: { newValue in
@@ -121,18 +121,21 @@ struct EditorView: View {
                     if !editing { appModel.commitBrightness() }
                 }
                 .frame(width: 110)
-                // 编舞:滑杆先行快速淡出,太阳位移与胶囊收缩随后由容器弹簧接管
-                .transition(
-                    .opacity
-                    .animation(.easeOut(duration: 0.15))
-                    .combined(with: .scale(scale: 0.7, anchor: .trailing))
-                )
+                // 编舞(非对称):进跟随=滑杆向右收缩淡出(已认可);进手动=滑杆从太阳后方滑入
+                .transition(.asymmetric(
+                    insertion: .move(edge: .leading).combined(with: .opacity),
+                    removal: .opacity
+                        .animation(.easeInOut(duration: 0.3))
+                        .combined(with: .scale(scale: 0.75, anchor: .trailing))
+                ))
             }
         }
-        // 玻璃胶囊内留白:收起形态与菜单胶囊同高、圆圈不贴边
-        .padding(.vertical, 6)
-        .padding(.horizontal, 4)
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: appModel.followSystemBrightness)
+        // 内边距与状态胶囊规格对齐:图标不贴边
+        .padding(.leading, 12)
+        .padding(.trailing, 12)
+        .padding(.vertical, 5)
+        // 节奏:整段编排 ~0.6s,阻尼调高少弹跳
+        .animation(.spring(response: 0.5, dampingFraction: 0.9), value: appModel.followSystemBrightness)
         .onChange(of: appModel.config.brightness) { _, newValue in
             // 外部变化(跟随镜像/菜单栏)同步进本地;直接写 @State 不触发上面的用户路径
             if Int(brightness) != newValue {
