@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpenDeck",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     targets: [
         // 驱动库:纯逻辑 + IOKit,可单测
         .target(

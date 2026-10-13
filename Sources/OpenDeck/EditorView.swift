@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 // MARK: - 主编辑器
 
-/// 18 键网格编辑器:顶部状态区(连接状态/冲突警示/亮度)+ 键位网格 + 编辑 Sheet
+/// 主窗口:玻璃工具栏(状态/亮度/操作)+ 键盘底座上的 18 键帽网格 + 编辑 Sheet。
 struct EditorView: View {
     let appModel: AppModel
 
@@ -13,14 +13,23 @@ struct EditorView: View {
     @State private var brightness: Double = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                keyGrid
-                    .padding(16)
+        ScrollView {
+            VStack(spacing: 18) {
+                if appModel.officialAppRunning {
+                    conflictBanner
+                }
+                chassis
+                hint
             }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+            .padding(.top, 8)
         }
+        .toolbar { toolbar }
+        .containerBackground(for: .window) {
+            Color(nsColor: .windowBackgroundColor)
+        }
+        .frame(minWidth: 640, minHeight: 480)
         .task { appModel.start() }
         .onAppear {
             brightness = Double(appModel.config.config.brightness)
@@ -30,158 +39,159 @@ struct EditorView: View {
         .onChange(of: appModel.device.state) { _, state in
             if state == .running { appModel.applyPageToDevice() }
         }
-        .onChange(of: appModel.config.currentPageIndex) { _, _ in
-            appModel.applyPageToDevice()
-        }
         .sheet(item: $editingTarget) { target in
             KeyEditView(index: target.index, appModel: appModel)
         }
     }
 
-    // MARK: 顶部状态区
+    // MARK: 工具栏
 
-    private var header: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(appModel.device.state == .running ? Color.green : Color.gray)
-                    .frame(width: 10, height: 10)
-                Text(appModel.device.state == .running ? "Stream Dock 已连接" : "未连接设备")
-                    .font(.callout.weight(.medium))
-                Text(appModel.config.currentPage.name)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let log = appModel.latestLog {
-                    Text(log)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .frame(maxWidth: 320)
-                        .help(appModel.recentLogs.joined(separator: "\n"))
-                }
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) { statusPill }
+        ToolbarItemGroup(placement: .primaryAction) {
+            brightnessControl
+            Button {
+                appModel.applyPageToDevice()
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
             }
-
-            if appModel.officialAppRunning {
-                conflictBanner
-            }
-
-            HStack(spacing: 10) {
-                Image(systemName: "sun.max.fill")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                Slider(value: $brightness, in: 0...100) { editing in
-                    if !editing { appModel.commitBrightness() }
-                }
-                Text("\(Int(brightness))%")
-                    .font(.callout.monospacedDigit())
-                    .frame(width: 44, alignment: .trailing)
-            }
-            .onChange(of: brightness) { _, newValue in
-                appModel.setBrightness(Int(newValue))
-            }
-            .onChange(of: appModel.config.config.brightness) { _, newValue in
-                // 与菜单栏浮窗互相同步;同值守卫避免回写循环
-                if Int(brightness) != newValue {
-                    brightness = Double(newValue)
-                }
+            .help("把当前页重新画到设备上")
+            Menu {
+                Button("帮助") {}
+                Divider()
+                Button("退出 OpenDeck") { NSApp.terminate(nil) }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
+
+    /// 连接状态徽章:玻璃胶囊,与应用整体材质语言一致
+    private var statusPill: some View {
+        let connected = appModel.device.state == .running
+        return HStack(spacing: 7) {
+            Circle()
+                .fill(connected ? Color.green : Color.gray)
+                .frame(width: 8, height: 8)
+                .shadow(color: connected ? .green.opacity(0.6) : .clear, radius: 3)
+            Text(connected ? "Stream Dock 293S" : "未连接设备")
+                .font(.callout.weight(.semibold))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .glassEffect(in: Capsule())
+    }
+
+    /// 亮度:玻璃胶囊内的滑杆,拖动实时生效
+    private var brightnessControl: some View {
+        HStack(spacing: 8) {
+            Image(systemName: brightness < 15 ? "sun.min" : "sun.max.fill")
+                .foregroundStyle(.yellow)
+                .contentTransition(.symbolEffect(.replace))
+            Slider(value: $brightness, in: 0...100) { editing in
+                if !editing { appModel.commitBrightness() }
+            }
+            .frame(width: 120)
+            Text("\(Int(brightness))%")
+                .font(.callout.monospacedDigit())
+                .frame(width: 38, alignment: .trailing)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .glassEffect(in: Capsule())
+        .onChange(of: brightness) { _, newValue in
+            appModel.setBrightness(Int(newValue))
+        }
+        .onChange(of: appModel.config.brightness) { _, newValue in
+            // 与菜单栏面板互相同步;同值守卫避免回写循环
+            if Int(brightness) != newValue {
+                brightness = Double(newValue)
+            }
+        }
+    }
+
+    // MARK: 冲突警示
 
     private var conflictBanner: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text("官方 StreamDock 正在运行,两者会互相干扰")
-                .font(.callout)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("官方 StreamDock 正在运行")
+                    .font(.callout.weight(.semibold))
+                Text("两个管理器会争抢设备,面板图标可能来回闪烁")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
-            Button("帮我退出它") {
+            Button("退出它") {
                 appModel.quitOfficialApp()
             }
+            .buttonStyle(.bordered)
             .controlSize(.small)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glassEffect(.regular.tint(.orange.opacity(0.22)), in: .rect(cornerRadius: 16))
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    // MARK: 键位网格
+    // MARK: 键盘底座
+
+    /// 设备底座:暗色实体面板承载键帽网格,暗示「这里就是那台硬件」
+    private var chassis: some View {
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [Color(nsColor: .underPageBackgroundColor), Color(nsColor: .windowBackgroundColor)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+            .overlay {
+                keyGrid.padding(16)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.20), radius: 14, y: 5)
+    }
 
     private var keyGrid: some View {
-        LazyVGrid(columns: Self.gridColumns, spacing: 8) {
+        LazyVGrid(columns: Self.gridColumns, spacing: 12) {
             ForEach(0..<(StreamDock293S.rows * StreamDock293S.columns), id: \.self) { index in
-                KeyGridCell(key: appModel.config.keyConfig(at: index)) {
+                Button {
                     editingTarget = EditTarget(index: index)
+                } label: {
+                    KeycapView(
+                        config: appModel.config.keyConfig(at: index),
+                        isSoftKey: index % StreamDock293S.columns == 5
+                    )
                 }
+                .buttonStyle(KeycapButtonStyle())
+                .help("编辑第 \(index + 1) 键")
             }
         }
     }
 
     // 第 6 列是设备软键(80×80,主键 100×100),收窄以贴近真实键面比例
     private static let gridColumns: [GridItem] =
-        Array(repeating: GridItem(.flexible(), spacing: 8), count: StreamDock293S.columns - 1)
-        + [GridItem(.fixed(76), spacing: 8)]
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: StreamDock293S.columns - 1)
+        + [GridItem(.fixed(76), spacing: 12)]
+
+    private var hint: some View {
+        Text("单击键帽编辑,保存后立即上屏")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+    }
 }
 
 /// Sheet 的 item 包装(Int 本身不携带语义,包一层可读性更好)
-private struct EditTarget: Identifiable {
+struct EditTarget: Identifiable {
     let index: Int
     var id: Int { index }
-}
-
-// MARK: - 键位网格单元
-
-private struct KeyGridCell: View {
-    let key: KeyConfig
-    let onEdit: () -> Void
-
-    var body: some View {
-        Button(action: onEdit) {
-            preview
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var preview: some View {
-        let palette = KeyPalette(hex: key.backgroundColorHex)
-        return ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(palette.color)
-            if let path = key.iconPath, let image = NSImage(contentsOfFile: path) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .overlay(alignment: .topTrailing) {
-            if let action = key.action {
-                Image(systemName: ActionStyle.symbol(for: action))
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(palette.textColor.opacity(0.9))
-                    .padding(6)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if !key.title.isEmpty {
-                Text(key.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(palette.textColor)
-                    .lineLimit(1)
-                    .shadow(color: .black.opacity(palette.isLight ? 0 : 0.6), radius: 2, y: 1)
-                    .padding(6)
-            }
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(.primary.opacity(0.12), lineWidth: 1)
-        }
-    }
 }
 
 // MARK: - 键位编辑 Sheet
@@ -262,9 +272,33 @@ private struct KeyEditView: View {
         _mediaKeyValue = State(initialValue: mediaKey)
     }
 
+    /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
+    private var draftConfig: KeyConfig {
+        KeyConfig(
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            backgroundColorHex: normalizedColorHex,
+            iconPath: iconPath,
+            action: assembledAction
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                Section {
+                    HStack(spacing: 14) {
+                        KeycapView(config: draftConfig, interactive: false)
+                            .frame(width: 64)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("实时预览")
+                                .font(.subheadline.weight(.semibold))
+                            Text("与设备键面 1:1 渲染")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
                 Section("外观") {
                     LabeledContent("标题") {
                         TextField("按键标题(留空则只显示图标)", text: $title)
@@ -293,7 +327,7 @@ private struct KeyEditView: View {
             }
             .padding(12)
         }
-        .frame(width: 500)
+        .frame(width: 520)
     }
 
     // MARK: 外观控件
@@ -447,20 +481,14 @@ private struct KeyEditView: View {
     }
 
     private func save() {
-        let key = KeyConfig(
-            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-            backgroundColorHex: normalizedColorHex,
-            iconPath: iconPath,
-            action: assembledAction
-        )
-        appModel.config.updateKey(key, at: index)
+        appModel.config.updateKey(draftConfig, at: index)
         appModel.applyKey(at: index)
         dismiss()
     }
 }
 
 /// 编辑器里的动作类型选择;与 KeyAction 一一对应,外加"无动作"
-private enum ActionKind: Hashable, CaseIterable {
+enum ActionKind: Hashable, CaseIterable {
     case none
     case openApp
     case openURL
@@ -610,7 +638,7 @@ private struct HotkeyCaptureField: View {
 }
 
 /// keyCode/修饰键 ↔ 显示符号、配置字符串的转换(按美式 ANSI 布局)
-private enum HotkeySymbols {
+enum HotkeySymbols {
     private static let keyNames: [Int: String] = [
         // 字母区(kVK_ANSI_A…Z 扫描码不连续)
         0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V",
@@ -665,29 +693,12 @@ private enum HotkeySymbols {
     }
 }
 
-// MARK: - 动作角标
-
-/// 动作 → 网格单元格右上角的 SF Symbol 角标
-private enum ActionStyle {
-    static func symbol(for action: KeyAction) -> String {
-        switch action {
-        case .openApp: "app"
-        case .openURL: "link"
-        case .runShortcut: "wand.and.stars"
-        case .shellScript: "terminal"
-        case .appleScript: "chevron.left.forwardslash.chevron.right"
-        case .hotkey: "keyboard"
-        case .mediaKey: "play.circle"
-        }
-    }
-}
-
-// MARK: - 小工具
+// MARK: - 键面颜色(UI 侧)
 
 /// 键面 hex 颜色的 UI 侧解析。
 /// StreamDockKit 内部的 HexColor 未导出,且 UI 预览(Color)与设备渲染(CGImage)
 /// 所需的类型不同,这里独立实现并用与 IconRenderer 相同的亮度阈值保证观感一致。
-private struct KeyPalette {
+struct KeyPalette {
     let color: Color
     let isLight: Bool
 
@@ -724,7 +735,7 @@ private struct KeyPalette {
 
 /// NSOpenPanel 的最小封装;runModal 在主线程阻塞是 AppKit 模态的标准用法
 @MainActor
-private enum FilePicker {
+enum FilePicker {
     static func pick(types: [UTType], prompt: String) -> String? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = types
