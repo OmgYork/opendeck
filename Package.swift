@@ -10,6 +10,11 @@ let package = Package(
             name: "StreamDockKit",
             path: "Sources/StreamDockKit"
         ),
+        // 插件宿主协议库:Elgato SD SDK v2 编解码 + manifest 解析(纯逻辑,可单测)
+        .target(
+            name: "PluginHost",
+            path: "Sources/PluginHost"
+        ),
         // CLI 验证工具:画满键位 + 打印按键事件
         .executableTarget(
             name: "StreamDockHarness",
@@ -20,7 +25,7 @@ let package = Package(
         // 原生管理器应用(SwiftUI)
         .executableTarget(
             name: "OpenDeck",
-            dependencies: ["StreamDockKit"],
+            dependencies: ["StreamDockKit", "PluginHost"],
             path: "Sources/OpenDeck",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
@@ -28,6 +33,11 @@ let package = Package(
             name: "StreamDockKitTests",
             dependencies: ["StreamDockKit"],
             path: "Tests/StreamDockKitTests"
+        ),
+        .testTarget(
+            name: "PluginHostTests",
+            dependencies: ["PluginHost"],
+            path: "Tests/PluginHostTests"
         ),
     ]
 )
