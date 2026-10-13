@@ -11,6 +11,7 @@ struct EditorView: View {
 
     @State private var editingTarget: EditTarget?
     @State private var brightness: Double = 0
+    @State private var showLayoutTuning = false
 
     var body: some View {
         ScrollView {
@@ -43,6 +44,9 @@ struct EditorView: View {
         .sheet(item: $editingTarget) { target in
             KeyEditView(index: target.index, appModel: appModel)
         }
+        .sheet(isPresented: $showLayoutTuning) {
+            LayoutTuningSheet(appModel: appModel)
+        }
     }
 
     // MARK: 工具栏
@@ -56,6 +60,11 @@ struct EditorView: View {
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItem(placement: .primaryAction) {
             Menu {
+                Button {
+                    showLayoutTuning = true
+                } label: {
+                    Label("亮度布局调参…", systemImage: "slider.horizontal.3")
+                }
                 Button {
                     appModel.applyPageToDevice()
                 } label: {
@@ -86,23 +95,17 @@ struct EditorView: View {
         .padding(.vertical, 4)
     }
 
-    /// 亮度:太阳图标 = 跟随开关;内容槽定宽,「自适应」文案与滑杆 blurReplace 交叉溶解。
-    /// 设计原则:两种状态占同一空间,零布局动画——胶囊恒定,切换天然丝滑
+    /// 亮度:点击整个胶囊切换 自适应/手动;布局参数由「布局调参」面板实时驱动
     private var brightnessControl: some View {
-        HStack(spacing: 6) {
-            Button {
-                appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
-            } label: {
-                Image(systemName: !appModel.followSystemBrightness && brightness < 15 ? "sun.min" : "sun.max.fill")
-                    .foregroundStyle(.yellow)
-                    .contentTransition(.symbolEffect(.replace))
-                    .symbolEffect(.bounce, value: appModel.followSystemBrightness)
-                    .padding(2)
-            }
-            .buttonStyle(.plain)
-            .help(appModel.followSystemBrightness ? "正在自适应 MacBook 亮度,点击改为手动" : "点击开启:亮度自适应 MacBook")
+        let layout = appModel.config.layout
+        return HStack(spacing: layout.gap) {
+            Image(systemName: !appModel.followSystemBrightness && brightness < 15 ? "sun.min" : "sun.max.fill")
+                .foregroundStyle(.yellow)
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: appModel.followSystemBrightness)
+                .padding(2)
 
-            // 内容槽:两态同占一格,blurReplace = 旧内容模糊消散、新内容浮现
+            // 内容槽:定宽,「自适应」与滑杆 blurReplace 交叉溶解
             ZStack {
                 if appModel.followSystemBrightness {
                     Text("自适应")
@@ -119,18 +122,24 @@ struct EditorView: View {
                     ), in: 0...100) { editing in
                         if !editing { appModel.commitBrightness() }
                     }
-                    .frame(width: 124)
+                    .frame(width: layout.slot)
                     // macOS 滑杆轨道两侧自带 ~10pt 内缩,负边距抵消,让轨道视觉填满槽位
                     .padding(.horizontal, -12)
                 }
             }
-            .frame(width: 124)
+            .frame(width: layout.slot)
+            .transition(.blurReplace)
         }
-        // 内边距与状态胶囊规格对齐:图标不贴边
-        .padding(.leading, 10)
-        .padding(.trailing, 12)
+        .padding(.leading, layout.lead)
+        .padding(.trailing, layout.trail)
         .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            appModel.setFollowSystemBrightness(!appModel.followSystemBrightness)
+        }
+        .help(appModel.followSystemBrightness ? "正在自适应 MacBook 亮度,点击改为手动" : "点击切换:亮度自适应 MacBook")
         .animation(.smooth(duration: 0.35), value: appModel.followSystemBrightness)
+        .animation(.linear(duration: 0.08), value: layout)
         .onChange(of: appModel.config.brightness) { _, newValue in
             // 外部变化(跟随镜像/菜单栏)同步进本地;直接写 @State 不触发上面的用户路径
             if Int(brightness) != newValue {

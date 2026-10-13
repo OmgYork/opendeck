@@ -27,12 +27,26 @@ struct Page: Codable, Hashable {
     var keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 18)  // index = row*6+column
 }
 
+/// 亮度胶囊布局参数(pt):调参模式实时可调
+struct LayoutParams: Codable, Equatable {
+    var lead: CGFloat = 10   // 胶囊左边距
+    var gap: CGFloat = 6     // 太阳 ↔ 滑杆间距
+    var slot: CGFloat = 124  // 滑杆/自适应共用槽宽
+    var trail: CGFloat = 12  // 胶囊右边距(14 = 轨道与胶囊右端同心)
+
+    static let defaultValue = LayoutParams()
+    /// 轨道右端与胶囊右端同心所需的右边距:轨道视觉终点 = 槽位终点 + (NEG-内缩)/2,
+    /// 同心要求 = 胶囊右缘 -(胶囊半径16 - 轨道半径3)
+    static var concentricTrail: CGFloat { 14 }
+}
+
 struct AppConfig: Codable {
     var pages: [Page] = [Page()]
     var currentPageIndex: Int = 0
     var brightness: Int = 80
     /// 亮度跟随 MacBook(环境光自动调节);可选保证旧配置文件缺键可解码
     var followSystemBrightness: Bool? = false
+    var layout: LayoutParams? = nil
 }
 
 // MARK: - 配置存储
@@ -72,6 +86,15 @@ final class ConfigStore {
     }
 
     // MARK: 便捷读写
+
+    /// 亮度胶囊布局参数(缺省 = 内置默认);拖动调参后 save() 持久化
+    var layout: LayoutParams {
+        get { config.layout ?? .defaultValue }
+        set {
+            config.layout = newValue
+            save()
+        }
+    }
 
     /// 当前页。索引越界时读取返回空白页兜底;写入立即持久化,
     /// 使「整页编辑」与 updateKey 一样不丢数据。

@@ -1,0 +1,31 @@
+<mxfile host="app" modified="2026-10-13T09:45:00.000Z" agent="OpenDeck" version="21.0.0">
+  <diagram id="brightness-capsule" name="亮度胶囊调参">
+    <mxGraphModel dx="1400" dy="500" grid="1" gridSize="2" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="420" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="guide" value="① 水平拖动 ☀️ → 调胶囊左边距(默认 10pt)&#10;② 拖动蓝色轨道的左缘/右缘/整体 → 调间距(默认 6pt)与槽宽(默认 124pt)&#10;③ 拖动深灰胶囊本体或其右缘 → 调胶囊右边距(默认 12pt)&#10;④ 「自适应」文字无需摆放——自动居中于槽位。完成后 Cmd+S 保存,回对话说「画好了」" style="text;html=1;align=left;verticalAlign=top;fontSize=24;fontColor=#8E8E93;" vertex="1" parent="1">
+          <mxGeometry x="40" y="16" width="1200" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="capsule" value="" style="rounded=1;arcSize=50;fillColor=#33363C;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="348" height="128" as="geometry" />
+        </mxCell>
+        <mxCell id="track" value="" style="rounded=1;arcSize=50;fillColor=#55575C;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="116" y="176" width="248" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="fill" value="" style="rounded=1;arcSize=50;fillColor=#0A60FF;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="116" y="176" width="149" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="thumb" value="" style="ellipse;fillColor=#E9E9EB;strokeColor=none;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="221" y="140" width="88" height="88" as="geometry" />
+        </mxCell>
+        <mxCell id="sun" value="☀️" style="text;html=1;align=center;verticalAlign=middle;fontSize=40;" vertex="1" parent="1">
+          <mxGeometry x="60" y="162" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="adaptRef" value="「自适应」预览(自动居中于槽位,无需摆放)" style="text;html=1;align=center;verticalAlign=middle;fontSize=28;fontColor=#B9B9BE;fillColor=#26282D;rounded=1;arcSize=50;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="348" height="64" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
