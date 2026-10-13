@@ -23,7 +23,7 @@ struct LayoutTuningSheet: View {
                         slider(layout.lead, in: 4...40)
                     }
                     LabeledContent("太阳↔滑杆间距") {
-                        slider(layout.gap, in: 0...30)
+                        slider(layout.gap, in: -8...30)
                     }
                     LabeledContent("滑杆槽宽") {
                         slider(layout.slot, in: 80...220)

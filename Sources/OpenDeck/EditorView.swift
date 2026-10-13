@@ -103,7 +103,6 @@ struct EditorView: View {
                 .foregroundStyle(.yellow)
                 .contentTransition(.symbolEffect(.replace))
                 .symbolEffect(.bounce, value: appModel.followSystemBrightness)
-                .padding(2)
 
             // 内容槽:定宽,「自适应」与滑杆 blurReplace 交叉溶解
             ZStack {
