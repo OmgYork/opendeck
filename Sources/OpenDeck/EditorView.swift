@@ -155,6 +155,17 @@ struct EditorView: View {
                 } label: {
                     Label("自动熄屏", systemImage: "moon.zzz")
                 }
+                Toggle(isOn: Binding(
+                    get: { appModel.config.sliderZeroBlacksKeys },
+                    set: { appModel.setSliderZeroBlacksKeys($0) }
+                )) {
+                    Label("滑杆 0% 时键面涂黑", systemImage: "light.min")
+                }
+                Button {
+                    appModel.device.screenOff()
+                } label: {
+                    Label("立即熄屏", systemImage: "moon.zzz.fill")
+                }
                 Button {
                     appModel.applyPageToDevice()
                 } label: {

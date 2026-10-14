@@ -1,6 +1,8 @@
 import AppKit
+import Darwin
 import IOKit
 import Observation
+import os
 import ServiceManagement
 import StreamDockKit
 
@@ -59,6 +61,7 @@ final class AppModel {
         device.onKeyEvent = { [weak self] event in
             guard let self else { return }
             let index = event.row * StreamDock293S.columns + event.column
+            self.appendLog("按键 r\(event.row)c\(event.column) \(event.phase == .down ? "按下" : "抬起") 熄屏态=\(self.device.isScreenOff)")
             // @Observable 靠属性赋值触发观测,集合原地增删不生效,须整体重赋
             self.pressedKeyIndices = event.phase == .down
                 ? self.pressedKeyIndices.union([index])
@@ -68,6 +71,13 @@ final class AppModel {
             if self.device.isScreenOff {
                 if event.phase == .down { self.device.wakeFromScreenOff() }
                 return
+            }
+            // 键面纯黑(亮度跟随 0% 态):按下沿暂时与内屏解耦——点亮键面至最近有效亮度,
+            // 动作照常触发;内屏亮度下次变化时镜像自动重新关联(涂黑或跟随新值)
+            if event.phase == .down, self.device.keysBlacked {
+                self.device.setKeysBlacked(false)
+                self.setBrightness(self.lastNonZeroMirroredBrightness, userInitiated: false)
+                self.armPeekReDarken()
             }
             let action = self.config.keyConfig(at: index).action
             // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
@@ -292,6 +302,13 @@ final class AppModel {
         let clamped = max(0, min(100, percent))
         config.brightness = clamped
         device.setBrightness(clamped)
+        // 「滑杆 0% 时键面涂黑」(可选):手动拉到 0 视同键面熄灭;拖离 0 立即恢复
+        guard userInitiated else { return }
+        if clamped == 0, config.sliderZeroBlacksKeys, !device.isScreenOff {
+            device.setKeysBlacked(true)
+        } else if clamped > 0, device.keysBlacked, !device.isScreenOff {
+            device.setKeysBlacked(false)
+        }
     }
 
     /// 拖动结束调用:一次性落盘,避免滑杆每帧写配置文件
@@ -309,6 +326,18 @@ final class AppModel {
     func setFollowSystemBrightness(_ on: Bool) {
         config.followSystemBrightness = on
         on ? startFollowingBrightness() : stopFollowingBrightness()
+    }
+
+    /// 「滑杆 0% 时键面涂黑」开关;关闭时若正处涂黑态立即按当前真实状态恢复
+    func setSliderZeroBlacksKeys(_ on: Bool) {
+        config.sliderZeroBlacksKeys = on
+        if config.followSystemBrightness {
+            lastMirroredBrightness = -1 // 强制下个轮询重同步(内屏 0 时维持涂黑,非 0 恢复)
+            mirrorSystemBrightnessOnce()
+        } else if device.keysBlacked, !device.isScreenOff {
+            device.setKeysBlacked(false)
+            setBrightness(config.brightness, userInitiated: false)
+        }
     }
 
     // MARK: - 自动熄屏(空闲看门狗)
@@ -339,10 +368,16 @@ final class AppModel {
     private var followTask: Task<Void, Never>?
     /// 上次镜像到设备的百分比:轮询读值便宜,但 USB 写没必要重复
     private var lastMirroredBrightness = -1
+    /// 最近一次非 0 的镜像亮度:「0% 涂黑后按键点亮」的暂态亮度(与内屏暂时解耦)
+    private var lastNonZeroMirroredBrightness = 80
+    /// 内建屏亮度读取失败的去重标志(失败态每 1.5s 才轮一次,不去重会刷屏)
+    private var lastBrightnessReadFailed = false
 
     private func startFollowingBrightness() {
         followTask?.cancel()
         lastMirroredBrightness = -1 // 重新进入跟随:强制首次下发
+        lastBrightnessReadFailed = false
+        appendLog("亮度跟随:开始(1.5s 轮询)")
         followTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.mirrorSystemBrightnessOnce()
@@ -355,18 +390,87 @@ final class AppModel {
     private func stopFollowingBrightness() {
         followTask?.cancel()
         followTask = nil
+        appendLog("亮度跟随:停止")
     }
 
     private func mirrorSystemBrightnessOnce() {
-        guard config.followSystemBrightness, device.state == .running, !device.isScreenOff,
-              let percent = Self.systemBrightnessPercent() else { return }
+        guard config.followSystemBrightness, device.state == .running, !device.isScreenOff else { return }
+        guard let percent = Self.systemBrightnessPercent() else {
+            if !lastBrightnessReadFailed {
+                lastBrightnessReadFailed = true
+                appendLog("亮度跟随:内建屏亮度读取失败(持续静默重试)")
+            }
+            return
+        }
+        lastBrightnessReadFailed = false
         guard abs(percent - lastMirroredBrightness) >= 1 else { return }
         lastMirroredBrightness = percent
-        setBrightness(percent, userInitiated: false)
+        appendLog("亮度跟随:MacBook \(percent)% → 设备")
+        if percent > 0 { lastNonZeroMirroredBrightness = percent }
+        if percent == 0 {
+            // 内屏全黑 → 键面涂黑(设备背光 0 只是「最暗」档,非黑屏;黑像素 + 最暗背光才是真黑)
+            setBrightness(0, userInitiated: false)
+            device.setKeysBlacked(true)
+        } else {
+            device.setKeysBlacked(false)
+            setBrightness(percent, userInitiated: false)
+        }
     }
 
-    /// 内建屏亮度(IODisplayConnect,0.0–1.0)→ 百分比;外接屏/读取失败返回 nil
+    /// 「0% 涂黑后按键点亮」的 15s 无操作重涂黑任务:期间每次设备按键都会重新计时
+    private var peekReDarkenTask: Task<Void, Never>?
+
+    /// 按键点亮涂黑键面后武装重涂黑定时
+    private func armPeekReDarken() {
+        peekReDarkenTask?.cancel()
+        peekReDarkenTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self, !Task.isCancelled else { return }
+            self.reDarkenIfIdleInDark()
+        }
+    }
+
+    /// 点亮 15s 后复查:暗源仍为 0(内屏 0 / 滑杆 0 涂黑态)→ 重新涂黑;内屏已变亮则跟随接管,勿动
+    private func reDarkenIfIdleInDark() {
+        guard !device.isScreenOff, !device.keysBlacked else { return }
+        guard lastMirroredBrightness <= 0 else { return } // 跟随中且内屏非 0:键面应保持可见
+        let sliderDark = config.sliderZeroBlacksKeys && config.brightness == 0
+        guard lastMirroredBrightness == 0 || sliderDark else { return }
+        setBrightness(0, userInitiated: false)
+        device.setKeysBlacked(true)
+        appendLog("亮度跟随:15s 无操作,重新涂黑")
+    }
+
+    /// 内建屏亮度(0–100)。读取链:DisplayServices(私有,macOS 26 实测唯一有效,
+    /// 外接屏返回不支持——本就只镜像内屏)→ IOKit IODisplayConnect 旧路径(其他机型兜底)。
+    /// (CoreDisplay_GetUserBrightness 在 macOS 26 恒返 1.0 假值,已弃用——假值比失败更有害)
     private static func systemBrightnessPercent() -> Int? {
+        if let percent = displayServicesBrightnessPercent() { return percent }
+        return legacyDisplayBrightnessPercent()
+    }
+
+    private static let displayServicesGetBrightness: (@convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32)? = {
+        guard let ds = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_NOW),
+              let sym = dlsym(ds, "DisplayServicesGetBrightness") else { return nil }
+        return unsafeBitCast(sym, to: (@convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32).self)
+    }()
+
+    private static func displayServicesBrightnessPercent() -> Int? {
+        guard let get = displayServicesGetBrightness, let displayID = builtInDisplayID() else { return nil }
+        var level: Float = -1
+        guard get(displayID, &level) == 0, level.isFinite, level >= 0, level <= 1.001 else { return nil }
+        return max(0, min(100, Int((level * 100).rounded())))
+    }
+
+    private static func builtInDisplayID() -> UInt32? {
+        for screen in NSScreen.screens {
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 else { continue }
+            if CGDisplayIsBuiltin(id) != 0 { return id }
+        }
+        return nil
+    }
+
+    private static func legacyDisplayBrightnessPercent() -> Int? {
         var iterator = io_iterator_t()
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iterator) == KERN_SUCCESS else { return nil }
         defer { IOObjectRelease(iterator) }
@@ -440,9 +544,12 @@ final class AppModel {
 
     private func appendLog(_ line: String) {
         print("📜 \(line)") // 镜像到 stdout:swift run 直跑时可观察(swift run 以 stdout 缓冲行模式输出)
+        Self.oslog.info("\(line, privacy: .public)") // 镜像到 oslog:.app 后台运行时可用 log stream 取证
         recentLogs.append(line)
         if recentLogs.count > 12 {
             recentLogs.removeFirst(recentLogs.count - 12)
         }
     }
+
+    private static let oslog = Logger(subsystem: "opendeck", category: "device")
 }

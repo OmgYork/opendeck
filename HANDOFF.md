@@ -2,7 +2,7 @@
 
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
-> 最后更新:2026-10-13
+> 最后更新:2026-10-14
 
 ---
 
@@ -117,6 +117,8 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 6. 与官方 app 互斥;自研 app 启动时可检测并提示
 7. 键位是顺序映射(行序已按实拍修正)(见 1.2),UI 网格坐标↔键 id 必须经映射表转换
 8. 图标包制作规格是 128×128,但线上键面分辨率由型号决定(293S:100×100/80×80),由**管理器下采样**,别把 128 图直接发设备
+9. **CLE 0xff 全清会被固件静默忽略**(IOKit 写成功≠生效):视觉清屏用黑图管线,勿依赖 CLE
+10. **熄屏勿暂停心跳**:无主待机态输入上报可能死透,「按键唤醒」依赖它必然偶发失效;心跳常驻 + 键面黑图才是正解(§6.5)
 
 ---
 
@@ -159,11 +161,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - `swift run` 直跑时 stdout 是块缓冲,日志要 `setvbuf(stdout, nil, _IOLBF, 0)`(OpenDeckApp.init 已加);协议收发有 DEBUG 级 📥/📤 镜像
 - swift-testing 的 `#require` 在 async 上下文要用 `try #require`,锁用 `OSAllocatedUnfairLock`
 
-### 6.5 熄屏机制(探针实测 2026-10-13,harness `--screenoff`)
-- **机制 = 清屏 + 暂停心跳**:设备 ≤9s 自重启进入黑屏待机(无需显式 sleep 命令,companion 驱动与官方二进制均无)
-- **黑屏待机期间输入报告存活**:按键正常上报,按下沿即可唤醒(恢复心跳 + CONNECT/DIS/亮度/清屏/重画校准序列),唤醒按压本身不触发动作
-- API:`DeviceController.screenOff()/wakeFromScreenOff()/isScreenOff`;`HIDTransport.suspendHeartbeat()/resumeHeartbeat()`;键面缓存保留,唤醒自动全量重画
-- 官方 app 的「自动熄屏」设置推测同机制(空闲停心跳),M3 可加
+### 6.5 熄屏机制(重设计 2026-10-14,日志实证;初版探针方案已废弃)
+- **新机制 = 心跳常驻 + 键面黑图 + 背光归零**:`screenOff()` 全 15 键下发纯黑 JPEG(不触碰键面缓存)+ LIG 0;`wakeFromScreenOff()` 恢复亮度 + `redrawAll()`。设备保持认领、输入随时可达,熄屏/唤醒均即时,固件永不自重启
+- **旧机制「清屏 + 暂停心跳→固件自重启待机」废弃**,2026-10-14 日志实证三缺陷:①CLE 0xff 全清被固件**静默忽略**(IOKit 写成功、面板不动)——旧方案的视觉熄屏全靠自重启黑屏;②无主待机态输入上报**可能死透**(同场景第一轮存活、第二轮 4.5 分钟零事件),「按键唤醒」依赖待机输入必然偶发失效;③自重启无 USB 重枚举信号,app 全盲 → 固件出厂开机画面(蓝块彩角)永久滞留。三症状合流为「唤醒→按键→又熄屏」死循环
+- API:`DeviceController.screenOff()/wakeFromScreenOff()/isScreenOff/keysBlacked/setKeysBlacked(_:)`;`drawKey` 在 isScreenOff/keysBlacked 时只更新缓存不写设备(防插件 setImage/编辑操作盖掉黑屏);熄屏中拔插视同唤醒;`HIDTransport` 心跳暂停/恢复 API 已删除
+- 「立即熄屏」菜单项与自动熄屏看门狗共用上述实现;黑图管线有单测(IconRendererTests.blackJPEG)
 
 ### 6.6 M2.5 多页面 + 设备控制 + 场景联动(2026-10-14 落地,全部实测)
 - **多页面**:`Page.id`(normalize 补齐,旧配置无感)+ 页面 CRUD + 芯片栏(每页一枚平铺芯片:点按切换、当前页高亮、右键重命名/删除/场景联动/复制、`+` 追加,位于网格下方居中)
@@ -172,6 +174,12 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **场景联动**(官方「场景」设置移植):`Page.boundAppBundleIDs`(最多绑 3 应用)+ `AppConfig.defaultPageID`;前台应用激活 → 绑定页优先,无绑定回默认页;**生效条件与官方一致 = 编辑器窗口关闭**(`editorWindowVisible` 标志)+ 非熄屏;应用清单扫 /Applications 与 /System/Applications;已用 osascript 激活 Safari/Finder 断言 config 索引完成自动化自验
 - **自动熄屏**:`AppConfig.autoScreenOffMinutes`(0/缺省=关),AppModel 空闲看门狗 15s 周期检查(最近按键时间含唤醒按压);入口 = 编辑器 ⋯ 菜单
 - 页面切换经 applyPage→syncKey 链自动同步插件实例显隐,零额外代码
+
+### 6.7 导航矩阵 UI + 键帽定尺 + 亮度跟随(2026-10-14,M2.5 验收期迭代)
+- **导航三样式**(`NavigationStyle`,⋯菜单切换,即时落盘):经典(芯片栏+页点胶囊)/ A 矩阵·下置(芯片=列头,页点纵列)/ B 矩阵·右缘(转置:场景=行,页点横排,底座旁挂深色轨)。矩阵任一格点按 = 跨场景直达(复用 switchPage 语义);单场景自然退化
+- **键帽定尺 100pt(与设备键面 1:1,用户确认)**:LazyVGrid 弹性列在全屏/大窗把键帽摊大饼;修法 = `GridItem(.fixed(100))` + chassis `.fixedSize(horizontal: true)`(LazyVGrid 容器默认撑满提案,固定轨道只会被居中——底座会比键列宽一大截)+ 画布顶部居中留白
+- **亮度跟随修复(此前从未真正工作)**:本机(macOS 26/AS)**不存在** IODisplayConnect/AppleBacklight 服务,`CoreDisplay_Display_GetUserBrightness` 恒返 1.0 假值;有效读法 = **DisplayServicesGetBrightness**(私有框架,kr=0,仅内屏;外接屏 kr=1000 本就不镜像)。1.5s 轮询 + ≥1% 变化检测;**内屏 0% → 键面涂黑 + 背光归零**(LIG 0 只是背光最暗,非黑屏);0% 涂黑态按任意键 → 点亮至最近有效亮度(暂态解耦,动作照常),15s 无操作重涂黑,内屏变化即重新关联;「滑杆 0% 涂黑」为 ⋯菜单选项(默认关)
+- **诊断基建**:`appendLog` 镜像 oslog(subsystem `opendeck`,查询须 `--level info`)+ 心跳 tick + 按键事件日志——硬件行为问题先开日志复现再断言,勿凭代码推演定案
 
 ### 6.5 已知限制(→ M3)
 - SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;Property Inspector 未做(动作参数不可配,直播/录制等零参动作不受影响);HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装

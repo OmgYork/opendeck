@@ -218,30 +218,18 @@ final class HIDTransport: @unchecked Sendable {
         )
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            guard self.lock.withLock({ self.device }) != nil else { return }
+            guard self.lock.withLock({ self.device }) != nil else {
+                self.onLog?("心跳 tick:设备句柄为空,跳过")
+                return
+            }
             self.performWrite(StreamDock293S.commandPacket(StreamDock293S.heartbeatCommand))
+            self.onLog?("心跳 tick:CONNECT 已入队")
         }
         timer.resume()
         lock.lock()
         heartbeatTimer?.cancel()
         heartbeatTimer = timer
         lock.unlock()
-    }
-
-    /// 暂停心跳(熄屏):设备 ≤8s 收不到 CONNECT 会自重启进入黑屏待机;输入上报是否存活由探针实测
-    func suspendHeartbeat() {
-        writeQueue.async { [weak self] in
-            self?.heartbeatTimer?.cancel()
-            self?.lock.withLock { self?.heartbeatTimer = nil }
-        }
-    }
-
-    /// 恢复心跳(唤醒);重复调用无副作用
-    func resumeHeartbeat() {
-        writeQueue.async { [weak self] in
-            guard let self, self.heartbeatTimer == nil else { return }
-            self.startHeartbeat()
-        }
     }
 
     // MARK: - C 回调(IOHIDDeviceCallback / IOHIDReportCallback 均为 C 函数指针,经 context 传 box)

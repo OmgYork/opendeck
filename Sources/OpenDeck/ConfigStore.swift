@@ -85,6 +85,8 @@ struct AppConfig: Codable {
     var autoScreenOffMinutes: Int? = nil
     /// 编辑器导航样式(nil = 经典,旧配置缺键可解码)
     var navStyle: NavigationStyle? = nil
+    /// 亮度滑杆拖到 0% 时键面涂黑(而不只是背光最暗);nil/缺省 = 关
+    var sliderZeroBlacksKeys: Bool? = nil
 }
 
 // MARK: - 配置存储
@@ -397,6 +399,15 @@ final class ConfigStore {
         get { config.navStyle ?? .classic }
         set {
             config.navStyle = newValue
+            save()
+        }
+    }
+
+    /// 亮度滑杆 0% 时键面涂黑(nil = 关);菜单直选,立即落盘
+    var sliderZeroBlacksKeys: Bool {
+        get { config.sliderZeroBlacksKeys ?? false }
+        set {
+            config.sliderZeroBlacksKeys = newValue
             save()
         }
     }

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
 
 @testable import StreamDockKit
@@ -47,5 +48,37 @@ struct IconRendererTests {
         let image = IconRenderer.render(size: 80, backgroundColorHex: "#BF616A", title: "S1", rotationDegrees: 90)
         #expect(image?.width == 80)
         #expect(image?.height == 80)
+    }
+
+    @Test("纯黑键面:JPEG 在限制内且解码后全黑(熄屏黑图)")
+    func blackJPEG() throws {
+        let side = 100
+        let context = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                                             bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let black = try #require(context.makeImage())
+
+        let jpeg = try #require(IconRenderer.jpeg(from: black))
+        #expect(jpeg.count <= StreamDock293S.maxKeyJPEGBytes)
+        #expect(jpeg[jpeg.startIndex] == 0xFF)
+        #expect(jpeg[jpeg.index(after: jpeg.startIndex)] == 0xD8)
+
+        // 解码回位图逐像素验证:JPEG 有损,允许 ±2 量化噪声
+        let source = try #require(CGImageSourceCreateWithData(jpeg as CFData, nil))
+        let decoded = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let sample = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                                            bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        sample.draw(decoded, in: CGRect(x: 0, y: 0, width: side, height: side))
+        let buffer = try #require(sample.data)
+        let pixels = buffer.bindMemory(to: UInt8.self, capacity: side * side * 4)
+        var darkPixels = 0
+        for i in 0..<(side * side)
+        where pixels[i * 4] <= 2 && pixels[i * 4 + 1] <= 2 && pixels[i * 4 + 2] <= 2 {
+            darkPixels += 1
+        }
+        #expect(darkPixels == side * side)
     }
 }
