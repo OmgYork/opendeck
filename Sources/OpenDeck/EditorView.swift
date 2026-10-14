@@ -935,6 +935,9 @@ private final class SwipePageMonitor {
             flipped = false
             gestureActive = true
         }
+        if event.phase == .ended {
+            gestureActive = false // 周期结束:下一次事件(无论相位)开启新扫动
+        }
 
         // 手势周期内的所有滚动一律吞掉(网格内容固定,页面不晃)
         if abs(dx) > abs(dy) {
