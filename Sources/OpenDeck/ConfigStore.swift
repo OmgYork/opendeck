@@ -264,6 +264,14 @@ final class ConfigStore {
         return sceneName(of: config.pages[config.currentPageIndex])
     }
 
+    /// 场景内第 position 页(0-based)的 id(圆点指示器点击直达用)
+    func pageIDInScene(position: Int) -> UUID? {
+        guard let scene = currentSceneName else { return nil }
+        let indices = config.pages.indices.filter { sceneName(of: config.pages[$0]) == scene }
+        guard indices.indices.contains(position) else { return nil }
+        return config.pages[indices[position]].id
+    }
+
     /// 当前页在场景内的序号(0-based)与场景内页数(页面指示键用)
     var currentPagePositionInScene: (position: Int, count: Int)? {
         guard config.pages.indices.contains(config.currentPageIndex) else { return nil }

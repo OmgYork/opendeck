@@ -1,4 +1,5 @@
 import AppKit
+import os
 import StreamDockKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -23,32 +24,33 @@ struct EditorView: View {
     @State private var sceneText = ""
     @State private var pageBindingTargetID: UUID?
     @State private var pageBindingSheetShown = false
-    @State private var swipeMonitor = SwipePageMonitor()
+    @State private var swipeTap = SwipeGestureTap()
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                if appModel.officialAppRunning {
-                    conflictBanner
-                }
-                chassis
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear
-                                .onAppear { swipeMonitor.gridFrame = geo.frame(in: .global) }
-                                .onChange(of: geo.frame(in: .global)) { _, frame in
-                                    swipeMonitor.gridFrame = frame
-                                }
-                        }
-                    )
-                pageBar
-                hint
+        VStack(spacing: 18) {
+            if appModel.officialAppRunning {
+                conflictBanner
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 24)
-            // 滚动视图已按玻璃工具栏自动让位,这里只补一点呼吸空隙
-            .padding(.top, 8)
+            chassis
+                .overlay(alignment: .trailing) { pageDotsOverlay }
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { swipeTap.gridFrame = geo.frame(in: .global) }
+                            .onChange(of: geo.frame(in: .global)) { _, frame in
+                                swipeTap.gridFrame = frame
+                            }
+                    }
+                )
+            pageBar
+            hint
         }
+        // 内容固定 15 键,无需滚动(滚动条与滚动功能已移除);顶部对齐保持原视觉
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        // 按玻璃工具栏自动让位,这里只补一点呼吸空隙
+        .padding(.top, 8)
         .toolbar { toolbar }
         .containerBackground(for: .window) {
             Color(nsColor: .windowBackgroundColor)
@@ -59,18 +61,18 @@ struct EditorView: View {
             brightness = Double(appModel.config.config.brightness)
             // 设备未连接时 drawKey 只入缓存,连接校准时控制器会自动全量重画
             appModel.applyPageToDevice()
-            swipeMonitor.onSwipe = { isHorizontal, direction in
+            swipeTap.onSwipe = { isHorizontal, direction in
                 if isHorizontal {
                     appModel.switchScene(offset: direction)
                 } else {
                     appModel.switchPage(offset: direction, withinScene: true)
                 }
             }
-            swipeMonitor.start()
+            swipeTap.start()
             appModel.editorWindowVisible = true
         }
         .onDisappear {
-            swipeMonitor.end()
+            swipeTap.stop()
             appModel.editorWindowVisible = false
         }
         .onChange(of: appModel.device.state) { _, state in
@@ -199,6 +201,38 @@ struct EditorView: View {
             if Int(brightness) != newValue {
                 brightness = Double(newValue)
             }
+        }
+    }
+
+    // MARK: 页面圆点指示器(网格右缘,竖排)
+
+    /// 图一样式:玻璃胶囊内竖排圆点,当前页亮白;点击圆点直达;单页场景隐藏
+    @ViewBuilder
+    private var pageDotsOverlay: some View {
+        if let info = appModel.config.currentPagePositionInScene, info.count > 1 {
+            VStack(spacing: 6) {
+                ForEach(0..<info.count, id: \.self) { position in
+                    Circle()
+                        .fill(position == info.position ? Color.white : Color.white.opacity(0.32))
+                        .frame(width: position == info.position ? 8 : 6,
+                               height: position == info.position ? 8 : 6)
+                        .contentShape(Circle())
+                        .onTapGesture {
+                            if let id = appModel.config.pageIDInScene(position: position) {
+                                appModel.switchPage(to: id)
+                            }
+                        }
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 9)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+            .offset(x: 14)
+            .animation(.snappy(duration: 0.25), value: info.position)
         }
     }
 
@@ -857,86 +891,136 @@ enum ActionKind: Hashable, CaseIterable {
     }
 }
 
-// MARK: - 触控板横扫切页
+// MARK: - 触控板手势(CGEventTap 系统级拦截)
 
-/// app 本地 scrollWheel 监听:仅网格区内的水平主导滚动参与;一次手势(事件间隔 <0.25s)
-/// 最多翻 1 页,快扫的动量尾流不会连翻。自然滚动方向:双指左扫 = 下一页。
+/// 两级手势:垂直扫=场景内翻页,水平扫=切场景。
+/// 机制:CGEventTap 在 HID 源头拦截 scrollWheel——不依赖 AppKit/SwiftUI 派发路径
+/// (NSEvent 本地监听在 macOS 26 SwiftUI 下投递不可靠,已弃用)。
+/// 仅网格区内生效:翻页/切场景并吞掉该滚动;区外原样放行,不影响他处与他应用。
+/// 需要辅助功能权限(本机已授予)。
 @MainActor
-private final class SwipePageMonitor {
-    private var token: Any?
-    /// 双轴独立累积与消费标记:一次手势同一轴至多触发一次
-    private var horizontalAccumulated: CGFloat = 0
-    private var verticalAccumulated: CGFloat = 0
-    private var horizontalConsumed = false
-    private var verticalConsumed = false
-    private var lastGestureEventAt = Date.distantPast
-    /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
-    private let threshold: CGFloat = 30
-    /// 网格底座的全局窗口坐标(由 EditorView 的 GeometryReader 实时回填);nil = 未就绪不拦截
+private final class SwipeGestureTap {
+    /// C 回调 ↔ Swift 的桥接盒:回调保证在主线程触发(事件源挂主 RunLoop)
+    private final class Box: @unchecked Sendable {
+        var tapRef: Unmanaged<CFMachPort>?
+        var handleEvent: ((CGEvent) -> Unmanaged<CGEvent>?)?
+    }
+
+    private let box = Box()
+    private var tap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+
+    /// 网格底座的全局坐标(SwiftUI .global 与 CGEvent 坐标同为左上原点,直接包含判定);nil = 未就绪不拦截
     var gridFrame: CGRect?
     /// 回调:isHorizontal(水平=切场景/垂直=场景内翻页)+ 方向(+1 下一/-1 上一)
-    var onSwipe: ((_ isHorizontal: Bool, _ direction: Int) -> Void)?
+    var onSwipe: (@MainActor (_ isHorizontal: Bool, _ direction: Int) -> Void)?
+
+    private var horizontalAccumulated: Double = 0
+    private var verticalAccumulated: Double = 0
+    private var horizontalConsumed = false
+    private var verticalConsumed = false
+    private var lastGestureTimestamp: Double = -1
+    /// 阈值:线单位滚动累积(触控板一次扫动通常 10–40)
+    private let threshold: Double = 8
+    /// 手势切分:事件间隔超过该秒数视为新一次扫动
+    private let gestureGap: Double = 0.25
 
     func start() {
-        end()
-        token = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            self?.handle(event) ?? event
+        stop()
+        let box = self.box
+        let callback: CGEventTapCallBack = { _, type, event, refcon in
+            // tap 被系统超时禁用时的兜底:重新启用
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let refcon {
+                    let tapPort = Unmanaged<CFMachPort>.fromOpaque(refcon).takeUnretainedValue()
+                    CGEvent.tapEnable(tap: tapPort, enable: true)
+                }
+                return Unmanaged.passUnretained(event)
+            }
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let box = Unmanaged<Box>.fromOpaque(refcon).takeUnretainedValue()
+            return box.handleEvent?(event)
+        }
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap, // 可吞事件(listenOnly 只能旁观)
+            eventsOfInterest: CGEventMask(1 << CGEventType.scrollWheel.rawValue),
+            callback: callback,
+            userInfo: Unmanaged.passUnretained(box).toOpaque()
+        ) else {
+            Logger(subsystem: "opendeck", category: "editor")
+                .error("触控板手势 tap 创建失败(检查辅助功能权限);横扫/竖扫切页不可用")
+            return
+        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes)
+        runLoopSource = source
+        self.tap = tap
+        box.tapRef = Unmanaged.passUnretained(tap)
+        box.handleEvent = { [weak self] event in
+            guard let self else { return Unmanaged.passUnretained(event) }
+            let result = self.handle(event: event)
+            return result.map { Unmanaged.passUnretained($0) }
         }
     }
 
-    func end() {
-        if let token {
-            NSEvent.removeMonitor(token)
+    func stop() {
+        box.handleEvent = nil
+        box.tapRef = nil
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
         }
-        token = nil
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes)
+        }
+        tap = nil
+        runLoopSource = nil
         horizontalAccumulated = 0
         verticalAccumulated = 0
         horizontalConsumed = false
         verticalConsumed = false
     }
 
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        let dx = event.scrollingDeltaX
-        let dy = event.scrollingDeltaY
+    /// 返回 nil = 吞掉事件;返回 event = 原样放行
+    private func handle(event: CGEvent) -> CGEvent? {
+        guard let frame = gridFrame else { return event }
+        // CGEvent.location 与 SwiftUI .global 同为左上原点全局坐标,直接包含判定
+        guard frame.contains(event.location) else { return event }
+
+        let dx = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))
+        let dy = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
         let horizontalDominant = abs(dx) > abs(dy)
-        // 主轴判定:两轴分量都不足 1 的抖动直接放行
         guard horizontalDominant || abs(dy) >= 1 else { return event }
-        // 空间门控:光标不在网格区内,扫动不参与切页。
-        // 坐标系陷阱:NSEvent.mouseLocation 是屏幕坐标(左下原点),SwiftUI .global 是左上原点,y 须翻转
-        let screenHeight = NSScreen.screens.first?.frame.maxY ?? 0
-        let mouse = NSEvent.mouseLocation
-        guard let frame = gridFrame,
-              frame.contains(CGPoint(x: mouse.x, y: screenHeight - mouse.y))
-        else { return event }
-        // 手势切分:事件静默 >0.25s 视为新一次扫动,双轴累积与消费标记全部复位
-        let now = Date()
-        if now.timeIntervalSince(lastGestureEventAt) > 0.25 {
+
+        // 手势切分:事件间隔 >0.25s 视为新一次扫动,双轴累积与消费标记复位
+        let timestamp = Double(event.timestamp)
+        if lastGestureTimestamp < 0 || timestamp - lastGestureTimestamp > gestureGap {
             horizontalAccumulated = 0
             verticalAccumulated = 0
             horizontalConsumed = false
             verticalConsumed = false
         }
-        lastGestureEventAt = now
+        lastGestureTimestamp = timestamp
 
         if horizontalDominant {
-            guard !horizontalConsumed else { return nil }
+            guard !horizontalConsumed else { return nil } // 本手势已切场景,吞掉动量尾流
             horizontalAccumulated += dx
             guard abs(horizontalAccumulated) >= threshold else { return nil }
             horizontalConsumed = true
-            // 自然滚动:双指左扫 deltaX 为正 = 看右侧内容 = 下一场景
             let direction = horizontalAccumulated > 0 ? 1 : -1
             horizontalAccumulated = 0
-            onSwipe?(true, direction)
+            MainActor.assumeIsolated { onSwipe?(true, direction) }
             return nil
         }
         guard !verticalConsumed else { return nil }
         verticalAccumulated += dy
         guard abs(verticalAccumulated) >= threshold else { return nil }
         verticalConsumed = true
-        // 自然滚动:双指上扫 deltaY 为正 = 看下方内容 = 场景内下一页
         let direction = verticalAccumulated > 0 ? 1 : -1
         verticalAccumulated = 0
-        onSwipe?(false, direction)
+        MainActor.assumeIsolated { onSwipe?(false, direction) }
         return nil
     }
 }

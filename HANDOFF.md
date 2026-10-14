@@ -167,7 +167,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 
 ### 6.6 M2.5 多页面 + 设备控制 + 场景联动(2026-10-14 落地,全部实测)
 - **多页面**:`Page.id`(normalize 补齐,旧配置无感)+ 页面 CRUD + 芯片栏(每页一枚平铺芯片:点按切换、当前页高亮、右键重命名/删除/场景联动/复制、`+` 追加,位于网格下方居中)
-- **触控板横扫切页**:app 本地 scrollWheel 监听,双指左扫=下一页;**空间门控**(光标须在网格底座内)+ **手势切分**(水平事件静默 >0.25s 视为新扫动,一次扫动至多翻 1 页,动量尾流吞掉)——防误触与连翻双关键
+- **触控板两级手势**:垂直扫=场景内翻页,水平扫=切场景;机制为 **CGEventTap 系统级拦截**(cghidEventTap + defaultTap 可吞事件;NSEvent 本地监听在 macOS 26 SwiftUI 下投递不可靠已弃用);**空间门控**(CGEvent.location 与 SwiftUI .global 同为左上原点直接比对)+ **手势切分**(事件间隔 >0.25s 视为新扫动,一次扫动至多触发一次,动量尾流吞掉);网格内滚动一律吞掉(外层 ScrollView 已移除,内容固定无需滚动);需辅助功能权限(tap 创建失败会日志提示)
 - **设备控制动作 7 个**(KeyAction 新 case,AppModel.handleDeviceAction 本地消化,不经 ActionRunner):previousPage/nextPage(循环)、gotoPage(Page.id 稳定引用)、pageIndicator(键面动态 N/M)、brightnessUp/Down(±10,退出跟随并落盘)、screenOff;熄屏待机时任意按下沿唤醒且不触发动作,亮度跟随轮询待机期暂停
 - **场景联动**(官方「场景」设置移植):`Page.boundAppBundleIDs`(最多绑 3 应用)+ `AppConfig.defaultPageID`;前台应用激活 → 绑定页优先,无绑定回默认页;**生效条件与官方一致 = 编辑器窗口关闭**(`editorWindowVisible` 标志)+ 非熄屏;应用清单扫 /Applications 与 /System/Applications;已用 osascript 激活 Safari/Finder 断言 config 索引完成自动化自验
 - **自动熄屏**:`AppConfig.autoScreenOffMinutes`(0/缺省=关),AppModel 空闲看门狗 15s 周期检查(最近按键时间含唤醒按压);入口 = 编辑器 ⋯ 菜单
