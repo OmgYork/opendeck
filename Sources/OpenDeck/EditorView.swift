@@ -24,7 +24,7 @@ struct EditorView: View {
     @State private var sceneText = ""
     @State private var pageBindingTargetID: UUID?
     @State private var pageBindingSheetShown = false
-    @State private var swipeTap = SwipeGestureTap()
+    @State private var swipeMonitor = SwipePageMonitor()
 
     var body: some View {
         VStack(spacing: 18) {
@@ -33,15 +33,6 @@ struct EditorView: View {
             }
             chassis
                 .overlay(alignment: .trailing) { pageDotsOverlay }
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { swipeTap.gridFrame = geo.frame(in: .global) }
-                            .onChange(of: geo.frame(in: .global)) { _, frame in
-                                swipeTap.gridFrame = frame
-                            }
-                    }
-                )
             pageBar
             hint
         }
@@ -61,18 +52,18 @@ struct EditorView: View {
             brightness = Double(appModel.config.config.brightness)
             // 设备未连接时 drawKey 只入缓存,连接校准时控制器会自动全量重画
             appModel.applyPageToDevice()
-            swipeTap.onSwipe = { isHorizontal, direction in
+            swipeMonitor.onSwipe = { isHorizontal, direction in
                 if isHorizontal {
                     appModel.switchScene(offset: direction)
                 } else {
                     appModel.switchPage(offset: direction, withinScene: true)
                 }
             }
-            swipeTap.start()
+            swipeMonitor.start()
             appModel.editorWindowVisible = true
         }
         .onDisappear {
-            swipeTap.stop()
+            swipeMonitor.end()
             appModel.editorWindowVisible = false
         }
         .onChange(of: appModel.device.state) { _, state in
@@ -891,137 +882,67 @@ enum ActionKind: Hashable, CaseIterable {
     }
 }
 
-// MARK: - 触控板手势(CGEventTap 系统级拦截)
+// MARK: - 触控板手势(应用内事件监听)
 
 /// 两级手势:垂直扫=场景内翻页,水平扫=切场景。
-/// 机制:CGEventTap 在 HID 源头拦截 scrollWheel——不依赖 AppKit/SwiftUI 派发路径
-/// (NSEvent 本地监听在 macOS 26 SwiftUI 下投递不可靠,已弃用)。
-/// 仅网格区内生效:翻页/切场景并吞掉该滚动;区外原样放行,不影响他处与他应用。
-/// 需要辅助功能权限(本机已授予)。
+/// 机制:NSEvent 本地监听(AppKit 派发给本应用的滚动事件先经此处)。
+/// 这是经真实触控板验证可用的最初版本机制:无空间门控、无手势状态机,
+/// 累积 |Δ| ≥ 30 触发 + 0.35s 冷却防重;水平/垂直两轴对称独立累积。
+/// 已知限制:极快扫动的动量尾流可能跨过冷却再次触发(连翻);如需根治再议更精细方案。
 @MainActor
-private final class SwipeGestureTap {
-    /// C 回调 ↔ Swift 的桥接盒:回调保证在主线程触发(事件源挂主 RunLoop)
-    private final class Box: @unchecked Sendable {
-        var tapRef: Unmanaged<CFMachPort>?
-        var handleEvent: ((CGEvent) -> Unmanaged<CGEvent>?)?
-    }
-
-    private let box = Box()
-    private var tap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-
-    /// 网格底座的全局坐标(SwiftUI .global 与 CGEvent 坐标同为左上原点,直接包含判定);nil = 未就绪不拦截
-    var gridFrame: CGRect?
+private final class SwipePageMonitor {
+    private var token: Any?
     /// 回调:isHorizontal(水平=切场景/垂直=场景内翻页)+ 方向(+1 下一/-1 上一)
-    var onSwipe: (@MainActor (_ isHorizontal: Bool, _ direction: Int) -> Void)?
+    var onSwipe: ((_ isHorizontal: Bool, _ direction: Int) -> Void)?
 
-    private var horizontalAccumulated: Double = 0
-    private var verticalAccumulated: Double = 0
-    private var horizontalConsumed = false
-    private var verticalConsumed = false
-    private var lastGestureTimestamp: Double = -1
-    /// 阈值:线单位滚动累积(触控板一次扫动通常 10–40)
-    private let threshold: Double = 8
-    /// 手势切分:事件间隔超过该秒数视为新一次扫动
-    private let gestureGap: Double = 0.25
+    private var horizontalAccumulated: CGFloat = 0
+    private var verticalAccumulated: CGFloat = 0
+    private var cooldownUntil = Date.distantPast
+    /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
+    private let threshold: CGFloat = 30
+    /// 冷却:触发后的防重窗口
+    private let cooldown: TimeInterval = 0.35
 
     func start() {
-        stop()
-        let box = self.box
-        let callback: CGEventTapCallBack = { _, type, event, refcon in
-            // tap 被系统超时禁用时的兜底:重新启用
-            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                if let refcon {
-                    let tapPort = Unmanaged<CFMachPort>.fromOpaque(refcon).takeUnretainedValue()
-                    CGEvent.tapEnable(tap: tapPort, enable: true)
-                }
-                return Unmanaged.passUnretained(event)
-            }
-            guard let refcon else { return Unmanaged.passUnretained(event) }
-            let box = Unmanaged<Box>.fromOpaque(refcon).takeUnretainedValue()
-            return box.handleEvent?(event)
-        }
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap, // 可吞事件(listenOnly 只能旁观)
-            eventsOfInterest: CGEventMask(1 << CGEventType.scrollWheel.rawValue),
-            callback: callback,
-            userInfo: Unmanaged.passUnretained(box).toOpaque()
-        ) else {
-            Logger(subsystem: "opendeck", category: "editor")
-                .error("触控板手势 tap 创建失败(检查辅助功能权限);横扫/竖扫切页不可用")
-            return
-        }
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes)
-        runLoopSource = source
-        self.tap = tap
-        box.tapRef = Unmanaged.passUnretained(tap)
-        box.handleEvent = { [weak self] event in
-            guard let self else { return Unmanaged.passUnretained(event) }
-            let result = self.handle(event: event)
-            return result.map { Unmanaged.passUnretained($0) }
+        end()
+        token = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.handle(event) ?? event
         }
     }
 
-    func stop() {
-        box.handleEvent = nil
-        box.tapRef = nil
-        if let tap {
-            CGEvent.tapEnable(tap: tap, enable: false)
+    func end() {
+        if let token {
+            NSEvent.removeMonitor(token)
         }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes)
-        }
-        tap = nil
-        runLoopSource = nil
+        token = nil
         horizontalAccumulated = 0
         verticalAccumulated = 0
-        horizontalConsumed = false
-        verticalConsumed = false
     }
 
-    /// 返回 nil = 吞掉事件;返回 event = 原样放行
-    private func handle(event: CGEvent) -> CGEvent? {
-        guard let frame = gridFrame else { return event }
-        // CGEvent.location 与 SwiftUI .global 同为左上原点全局坐标,直接包含判定
-        guard frame.contains(event.location) else { return event }
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        let dx = event.scrollingDeltaX
+        let dy = event.scrollingDeltaY
+        guard Date() >= cooldownUntil else { return event }
 
-        let dx = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))
-        let dy = Double(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
-        let horizontalDominant = abs(dx) > abs(dy)
-        guard horizontalDominant || abs(dy) >= 1 else { return event }
-
-        // 手势切分:事件间隔 >0.25s 视为新一次扫动,双轴累积与消费标记复位
-        let timestamp = Double(event.timestamp)
-        if lastGestureTimestamp < 0 || timestamp - lastGestureTimestamp > gestureGap {
-            horizontalAccumulated = 0
-            verticalAccumulated = 0
-            horizontalConsumed = false
-            verticalConsumed = false
-        }
-        lastGestureTimestamp = timestamp
-
-        if horizontalDominant {
-            guard !horizontalConsumed else { return nil } // 本手势已切场景,吞掉动量尾流
+        if abs(dx) > abs(dy), abs(dx) >= 1 {
             horizontalAccumulated += dx
-            guard abs(horizontalAccumulated) >= threshold else { return nil }
-            horizontalConsumed = true
+            guard abs(horizontalAccumulated) >= threshold else { return event }
             let direction = horizontalAccumulated > 0 ? 1 : -1
             horizontalAccumulated = 0
-            MainActor.assumeIsolated { onSwipe?(true, direction) }
+            cooldownUntil = Date().addingTimeInterval(cooldown)
+            onSwipe?(true, direction)
             return nil
         }
-        guard !verticalConsumed else { return nil }
-        verticalAccumulated += dy
-        guard abs(verticalAccumulated) >= threshold else { return nil }
-        verticalConsumed = true
-        let direction = verticalAccumulated > 0 ? 1 : -1
-        verticalAccumulated = 0
-        MainActor.assumeIsolated { onSwipe?(false, direction) }
-        return nil
+        if abs(dy) > abs(dx), abs(dy) >= 1 {
+            verticalAccumulated += dy
+            guard abs(verticalAccumulated) >= threshold else { return event }
+            let direction = verticalAccumulated > 0 ? 1 : -1
+            verticalAccumulated = 0
+            cooldownUntil = Date().addingTimeInterval(cooldown)
+            onSwipe?(false, direction)
+            return nil
+        }
+        return event
     }
 }
 
