@@ -56,7 +56,7 @@ struct EditorView: View {
                 if isHorizontal {
                     appModel.switchScene(offset: direction)
                 } else {
-                    appModel.switchPage(offset: direction, withinScene: true)
+                    appModel.switchPage(offset: direction)
                 }
             }
             swipeMonitor.start()
@@ -208,11 +208,7 @@ struct EditorView: View {
                         .frame(width: position == info.position ? 8 : 6,
                                height: position == info.position ? 8 : 6)
                         .contentShape(Circle())
-                        .onTapGesture {
-                            if let id = appModel.config.pageIDInScene(position: position) {
-                                appModel.switchPage(to: id)
-                            }
-                        }
+                        .onTapGesture { jumpToScenePage(position) }
                 }
             }
             .padding(.vertical, 12)
@@ -227,18 +223,23 @@ struct EditorView: View {
         }
     }
 
+    private func jumpToScenePage(_ position: Int) {
+        guard let id = appModel.config.pageIDInCurrentScene(position: position) else { return }
+        appModel.switchPage(to: id)
+    }
+
     // MARK: 页面栏
 
-    private var currentPageID: UUID? { appModel.config.currentPage.id }
+    private var currentSceneID: UUID? { appModel.config.currentSceneID }
 
-    /// 多页面切换栏:每页一枚芯片平铺,点按切换;右键菜单重命名/删除;+ 追加
+    /// 场景芯片栏:每场景一枚芯片,点按切换;+ 追加场景;芯片右键管理(场景联动/复制/加页/重命名/删除)
     private var pageBar: some View {
         HStack(spacing: 8) {
-            ForEach(Array(appModel.config.config.pages.enumerated()), id: \.element.id) { offset, page in
-                pageChip(offset: offset, page: page)
+            ForEach(Array(appModel.config.config.scenes.enumerated()), id: \.element.id) { offset, scene in
+                sceneChip(offset: offset, scene: scene)
             }
             Button {
-                appModel.addPage()
+                appModel.addScene()
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 13, weight: .semibold))
@@ -251,52 +252,46 @@ struct EditorView: View {
                     }
             }
             .buttonStyle(.plain)
-            .help("添加页面")
+            .help("添加场景")
         }
         .padding(.horizontal, 4)
+        .animation(.snappy(duration: 0.25), value: appModel.config.currentSceneIndex)
         .confirmationDialog(
-            "删除页面「\(deleteTargetName)」?",
+            "删除场景「\(deleteTargetName)」?",
             isPresented: $pageDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("删除(该页按键配置一并删除)", role: .destructive) {
-                if let id = deleteTargetID { appModel.deletePage(id: id) }
+            Button("删除(该场景全部页一并删除)", role: .destructive) {
+                if let id = deleteTargetID { appModel.deleteScene(id: id) }
             }
             Button("取消", role: .cancel) { deleteTargetID = nil }
         }
-        .alert("重命名页面", isPresented: $renameAlertShown) {
-            TextField("页面名", text: $renameText)
+        .alert("重命名场景", isPresented: $renameAlertShown) {
+            TextField("场景名", text: $renameText)
             Button("好") {
-                if let id = renameTargetID { appModel.config.renamePage(id: id, to: renameText) }
+                if let id = renameTargetID { appModel.config.renameScene(id: id, to: renameText) }
             }
             Button("取消", role: .cancel) { renameTargetID = nil }
         }
-        .alert("所属场景(同场景的页归为一组,垂直扫动在其内翻页)", isPresented: $sceneAlertShown) {
-            TextField("场景名", text: $sceneText)
-            Button("好") {
-                if let id = sceneTargetID { appModel.config.setSceneName(id: id, to: sceneText) }
-            }
-            Button("取消", role: .cancel) { sceneTargetID = nil }
-        }
         .sheet(isPresented: $pageBindingSheetShown) {
             if let id = pageBindingTargetID {
-                PageAppBindingSheet(appModel: appModel, pageID: id)
+                SceneAppBindingSheet(appModel: appModel, sceneID: id)
             }
         }
     }
 
     private var deleteTargetName: String {
         guard let id = deleteTargetID,
-              let index = appModel.config.indexOfPage(id: id)
+              let index = appModel.config.indexOfScene(id: id)
         else { return "" }
-        return appModel.config.config.pages[index].name
+        return appModel.config.config.scenes[index].name
     }
 
-    /// 单枚页面芯片:点按切换;当前页高亮;右键重命名/删除
-    private func pageChip(offset: Int, page: Page) -> some View {
-        let isCurrent = page.id == currentPageID
+    /// 单枚场景芯片:点按切换;当前场景高亮;右键管理与场景联动
+    private func sceneChip(offset: Int, scene: DeckScene) -> some View {
+        let isCurrent = scene.id == currentSceneID
         return Button {
-            if let id = page.id, !isCurrent { appModel.switchPage(to: id) }
+            if let id = scene.id, !isCurrent { appModel.switchScene(to: id) }
         } label: {
             Text("\(offset + 1)")
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -312,31 +307,29 @@ struct EditorView: View {
                 }
         }
         .buttonStyle(.plain)
-        .help("\(page.name) · 场景:\(page.sceneName ?? "默认场景")")
+        .help("\(scene.name) · \(scene.pages.count) 页")
         .contextMenu {
-            Button("所属场景…") {
-                sceneTargetID = page.id
-                sceneText = page.sceneName ?? "默认场景"
-                sceneAlertShown = true
-            }
             Button("前台应用自动切换…") {
-                pageBindingTargetID = page.id
+                pageBindingTargetID = scene.id
                 pageBindingSheetShown = true
             }
-            Button("复制页面") {
-                if let id = page.id { appModel.duplicatePage(id: id) }
+            Button("复制场景") {
+                if let id = scene.id { appModel.duplicateScene(id: id) }
+            }
+            Button("添加页(圆点 +1)") {
+                if let id = scene.id { appModel.addPage(toScene: id) }
             }
             Button("重命名…") {
-                renameTargetID = page.id
-                renameText = page.name
+                renameTargetID = scene.id
+                renameText = scene.name
                 renameAlertShown = true
             }
             Button("删除…", role: .destructive) {
-                guard appModel.config.pageCount > 1 else { return }
-                deleteTargetID = page.id
+                guard appModel.config.sceneCount > 1 else { return }
+                deleteTargetID = scene.id
                 pageDeleteConfirm = true
             }
-            .disabled(appModel.config.pageCount < 2)
+            .disabled(appModel.config.sceneCount < 2)
         }
     }
 
@@ -469,7 +462,6 @@ private struct KeyEditView: View {
     @State private var mediaKeyValue: String
     @State private var pluginID: String
     @State private var pluginActionUUID: String
-    @State private var gotoPageID: UUID?
 
     init(index: Int, appModel: AppModel) {
         self.index = index
@@ -490,7 +482,6 @@ private struct KeyEditView: View {
         var mediaKey = "playPause"
         var pluginID = ""
         var pluginActionUUID = ""
-        var gotoPageID: UUID?
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url
@@ -507,7 +498,7 @@ private struct KeyEditView: View {
         case .nextPage: kind = .nextPage
         case .previousScene: kind = .previousScene
         case .nextScene: kind = .nextScene
-        case .gotoPage(let pageID): kind = .gotoPage; gotoPageID = pageID
+        case .gotoPage: break // 旧动作类型不再提供编辑,重新保存即清除
         case .pageIndicator: kind = .pageIndicator
         case .screenOff: kind = .screenOff
         case nil: break
@@ -522,7 +513,6 @@ private struct KeyEditView: View {
         _mediaKeyValue = State(initialValue: mediaKey)
         _pluginID = State(initialValue: pluginID)
         _pluginActionUUID = State(initialValue: pluginActionUUID)
-        _gotoPageID = State(initialValue: gotoPageID)
     }
 
     /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
@@ -699,19 +689,6 @@ private struct KeyEditView: View {
             LabeledContent("说明") { Text("循环切到上一场景(落到其第一页)").foregroundStyle(.secondary) }
         case .nextScene:
             LabeledContent("说明") { Text("循环切到下一场景(落到其第一页)").foregroundStyle(.secondary) }
-        case .gotoPage:
-            LabeledContent("目标页面") {
-                Picker("", selection: $gotoPageID) {
-                    Text("未选择").tag(UUID?.none)
-                    ForEach(appModel.config.config.pages, id: \.id) { page in
-                        if let id = page.id {
-                            Text(page.name).tag(UUID?.some(id))
-                        }
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 220)
-            }
         case .pageIndicator:
             LabeledContent("说明") { Text("键面实时显示当前页码(N/M),随页面切换自动刷新").foregroundStyle(.secondary) }
         case .screenOff:
@@ -812,8 +789,6 @@ private struct KeyEditView: View {
             .previousScene
         case .nextScene:
             .nextScene
-        case .gotoPage:
-            gotoPageID.map { .gotoPage(pageID: $0) }
         case .pageIndicator:
             .pageIndicator
         case .screenOff:
@@ -855,7 +830,6 @@ enum ActionKind: Hashable, CaseIterable {
     case nextPage
     case previousScene
     case nextScene
-    case gotoPage
     case pageIndicator
     case screenOff
     case plugin
@@ -874,7 +848,6 @@ enum ActionKind: Hashable, CaseIterable {
         case .nextPage: "下一页"
         case .previousScene: "上一场景"
         case .nextScene: "下一场景"
-        case .gotoPage: "前往页面"
         case .pageIndicator: "页面指示"
         case .screenOff: "熄屏"
         case .plugin: "插件动作"
@@ -1186,9 +1159,9 @@ enum FilePicker {
 // MARK: - 页面场景联动设置
 
 /// 前台应用自动切换:每页最多绑 3 个应用;可设为默认页
-private struct PageAppBindingSheet: View {
+private struct SceneAppBindingSheet: View {
     let appModel: AppModel
-    let pageID: UUID
+    let sceneID: UUID
 
     @Environment(\.dismiss) private var dismiss
     private static let apps = AppModel.installedApps()
@@ -1197,7 +1170,7 @@ private struct PageAppBindingSheet: View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    Text("当 OpenDeck 编辑器窗口关闭且下列应用程序位于前台时,自动切换到本页。")
+                    Text("当 OpenDeck 编辑器窗口关闭且下列应用程序位于前台时,自动切换到本场景。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -1216,7 +1189,7 @@ private struct PageAppBindingSheet: View {
                     }
                 }
                 Section {
-                    Toggle("设为默认页面(前台应用无绑定时显示本页)", isOn: defaultBinding)
+                    Toggle("设为默认场景(前台应用无绑定时显示本场景)", isOn: defaultBinding)
                 }
             }
             .formStyle(.grouped)
@@ -1232,15 +1205,15 @@ private struct PageAppBindingSheet: View {
 
     private func binding(for slot: Int) -> Binding<String?> {
         Binding(
-            get: { appModel.config.pageAppBinding(id: pageID, slot: slot) },
-            set: { appModel.config.setPageAppBinding(id: pageID, slot: slot, bundleID: $0) }
+            get: { appModel.config.sceneAppBinding(id: sceneID, slot: slot) },
+            set: { appModel.config.setSceneAppBinding(id: sceneID, slot: slot, bundleID: $0) }
         )
     }
 
     private var defaultBinding: Binding<Bool> {
         Binding(
-            get: { appModel.config.config.defaultPageID == pageID },
-            set: { appModel.config.setDefaultPage(id: $0 ? pageID : nil) }
+            get: { appModel.config.config.defaultSceneID == sceneID },
+            set: { appModel.config.setDefaultScene(id: $0 ? sceneID : nil) }
         )
     }
 }

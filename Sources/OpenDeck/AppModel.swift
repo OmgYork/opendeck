@@ -98,58 +98,98 @@ final class AppModel {
         device.shutdown()
     }
 
-    // MARK: - 页面
+    // MARK: - 场景与页面(两级)
 
-    /// 切换到指定页(按 id);同页重复切换无副作用
-    func switchPage(to id: UUID) {
-        guard let index = config.indexOfPage(id: id), index != config.config.currentPageIndex else { return }
-        config.setCurrentPageIndex(index)
+    /// 切换到指定场景;同场景重复切换无副作用
+    func switchScene(to id: UUID) {
+        guard let index = config.indexOfScene(id: id), index != config.config.currentSceneIndex else { return }
+        config.setCurrentSceneIndex(index)
         applyPageToDevice()
     }
 
-    /// 循环切换页:withinScene=true 时在当前场景内翻页(两级手势的「垂直」方向)
-    func switchPage(offset: Int, withinScene: Bool = true) {
-        guard let target = config.targetPageIndex(offset: offset, withinScene: withinScene),
-              target != config.config.currentPageIndex
-        else { return }
-        config.setCurrentPageIndex(target)
-        applyPageToDevice()
-    }
-
-    /// 循环切换场景(两级手势的「水平」方向),落到目标场景的第一页
+    /// 循环切换场景(上一场景/下一场景;落到目标场景第一页)
     func switchScene(offset: Int) {
-        switchPage(offset: offset, withinScene: false)
+        guard let target = config.targetSceneIndex(offset: offset) else { return }
+        config.setCurrentSceneIndex(target)
+        applyPageToDevice()
     }
 
-    func addPage() {
-        let id = config.addPage()
-        switchPage(to: id)
+    /// 切换到指定页(跨场景按 Page.id 定位;圆点点击直达用)
+    func switchPage(to id: UUID) {
+        guard let location = config.pageLocation(id: id) else { return }
+        guard location.sceneIndex != config.config.currentSceneIndex
+                || location.pageIndex != config.config.currentPageIndex else { return }
+        config.setCurrentSceneIndex(location.sceneIndex)
+        config.currentPageIndex = location.pageIndex
+        applyPageToDevice()
     }
 
-    func duplicatePage(id: UUID) {
-        _ = config.duplicatePage(id: id)
+    /// 场景内循环翻页(上一页/下一页)
+    func switchPage(offset: Int) {
+        guard let target = config.targetPageIndex(offset: offset) else { return }
+        config.currentPageIndex = target
+        applyPageToDevice()
     }
 
-    // MARK: - 场景联动(前台应用自动切换页面)
+    func addScene() {
+        let id = config.addScene()
+        switchScene(to: id)
+    }
+
+    func duplicateScene(id: UUID) {
+        _ = config.duplicateScene(id: id)
+    }
+
+    /// 删除场景;若删的是当前场景(索引被回退),设备需重画新当前场景
+    func deleteScene(id: UUID) {
+        config.deleteScene(id: id)
+        applyPageToDevice()
+    }
+
+    /// 当前场景加一页(圆点 +1)并切到新页
+    func addPageToCurrentScene() {
+        let sceneIndex = config.config.currentSceneIndex
+        guard config.addPage(toSceneIndex: sceneIndex) != nil else { return }
+        config.currentPageIndex = config.currentScene.pages.count - 1
+        applyPageToDevice()
+    }
+
+    /// 给指定场景加一页(圆点 +1)并切到该场景新页
+    func addPage(toScene id: UUID) {
+        guard let sceneIndex = config.indexOfScene(id: id),
+              config.addPage(toSceneIndex: sceneIndex) != nil
+        else { return }
+        switchScene(to: id)
+        config.currentPageIndex = config.currentScene.pages.count - 1
+        applyPageToDevice()
+    }
+
+    /// 删除当前场景内的一页(每场景至少保留 1 页)
+    func deletePageInCurrentScene(at pageIndex: Int) {
+        config.deletePage(sceneIndex: config.config.currentSceneIndex, pageIndex: pageIndex)
+        applyPageToDevice()
+    }
+
+    // MARK: - 场景联动(前台应用自动切换场景)
 
     /// 编辑器窗口是否可见:官方语义为「应用窗口关闭时」才做前台切换,配置期间不打扰
     var editorWindowVisible = true
 
-    /// 前台应用变化:优先切到绑定了该应用的页;无绑定且设了默认页则回默认页
+    /// 前台应用变化:优先切到绑定了该应用的场景;无绑定且设了默认场景则回默认场景
     func autoSwitchPageForFrontmostApp() {
         guard !editorWindowVisible, !device.isScreenOff else { return }
         guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
-        let currentPageID = config.currentPage.id
-        if let bound = config.pageBoundToApp(bundleID) {
-            if bound.id != currentPageID, let id = bound.id {
-                switchPage(to: id)
+        let currentSceneID = config.currentSceneID
+        if let bound = config.sceneBoundToApp(bundleID) {
+            if bound.id != currentSceneID, let id = bound.id {
+                switchScene(to: id)
             }
             return
         }
-        if let defaultID = config.config.defaultPageID,
-           defaultID != currentPageID,
-           config.indexOfPage(id: defaultID) != nil {
-            switchPage(to: defaultID)
+        if let defaultID = config.config.defaultSceneID,
+           defaultID != currentSceneID,
+           config.indexOfScene(id: defaultID) != nil {
+            switchScene(to: defaultID)
         }
     }
 
@@ -177,22 +217,22 @@ final class AppModel {
         return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    /// 删除页;若删的是当前页(索引被回退),设备需重画新当前页
-    func deletePage(id: UUID) {
-        config.deletePage(id: id)
-        applyPageToDevice()
-    }
-
     // MARK: - 设备控制动作
 
     /// 页面/亮度/熄屏类动作:纯本地状态操作。返回 true 表示已消化
     private func handleDeviceAction(_ action: KeyAction) -> Bool {
         switch action {
-        case .previousPage: switchPage(offset: -1, withinScene: true)
-        case .nextPage: switchPage(offset: 1, withinScene: true)
+        case .previousPage: switchPage(offset: -1)
+        case .nextPage: switchPage(offset: 1)
         case .previousScene: switchScene(offset: -1)
         case .nextScene: switchScene(offset: 1)
-        case .gotoPage(let pageID): switchPage(to: pageID)
+        case .gotoPage(let pageID):
+            // 兼容旧配置的动作:跨场景按 Page.id 定位
+            if let location = config.pageLocation(id: pageID) {
+                config.setCurrentSceneIndex(location.sceneIndex)
+                config.currentPageIndex = location.pageIndex
+                applyPageToDevice()
+            }
         case .screenOff: device.screenOff()
         case .pageIndicator: break // 纯显示键,按下无操作
         default: return false
