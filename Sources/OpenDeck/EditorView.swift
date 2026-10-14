@@ -97,6 +97,14 @@ struct EditorView: View {
         .onDisappear {
             swipeMonitor.end()
             appModel.editorWindowVisible = false
+            // 关窗即评估联动;关窗瞬间 frontmostApplication 可能仍是自己且无系统事件兜底,
+            // 故三连采样(+0.3s/+1s/+2s)覆盖结算竞态;评估幂等(目标即当前场景则 no-op)
+            Task { @MainActor in
+                for delay in [0.3, 1.0, 2.0] {
+                    try? await Task.sleep(for: .seconds(delay))
+                    appModel.autoSwitchPageForFrontmostApp()
+                }
+            }
         }
         .onChange(of: appModel.device.state) { _, state in
             if state == .running { appModel.applyPageToDevice() }
@@ -367,18 +375,15 @@ struct EditorView: View {
                 pageBindingTargetID = scene.id
                 pageBindingSheetShown = true
             }
-            Button("复制场景") {
-                if let id = scene.id { appModel.duplicateScene(id: id) }
-            }
-            Button("添加页(圆点 +1)") {
+            Button("添加页") {
                 if let id = scene.id { appModel.addPage(toScene: id) }
             }
-            Button("重命名…") {
+            Button("重命名") {
                 renameTargetID = scene.id
                 renameText = scene.name
                 renameAlertShown = true
             }
-            Button("删除…", role: .destructive) {
+            Button("删除", role: .destructive) {
                 guard appModel.config.sceneCount > 1 else { return }
                 deleteTargetID = scene.id
                 pageDeleteConfirm = true
@@ -967,6 +972,7 @@ private final class SwipePageMonitor {
             if abs(dx) > abs(dy), abs(dx) >= 1 {
                 horizontalAccumulated += dx
                 guard abs(horizontalAccumulated) >= threshold else { return event }
+                // 滚轮前滚 = 内容上移 = 上一页(滚动语义)
                 let direction = horizontalAccumulated > 0 ? 1 : -1
                 horizontalAccumulated = 0
                 wheelCooldownUntil = Date().addingTimeInterval(0.35)
@@ -976,7 +982,8 @@ private final class SwipePageMonitor {
             if abs(dy) > abs(dx), abs(dy) >= 1 {
                 verticalAccumulated += dy
                 guard abs(verticalAccumulated) >= threshold else { return event }
-                let direction = verticalAccumulated > 0 ? 1 : -1
+                // 滚轮下滚 = 内容下移 = 下一页(AppKit 符号:deltaY 正 = 向上滚)
+                let direction = verticalAccumulated > 0 ? -1 : 1
                 verticalAccumulated = 0
                 wheelCooldownUntil = Date().addingTimeInterval(0.35)
                 onSwipe?(false, direction)
@@ -1011,8 +1018,9 @@ private final class SwipePageMonitor {
             verticalAccumulated += dy
             guard !flipped, abs(verticalAccumulated) >= threshold else { return nil }
             flipped = true
-            // 自然滚动:双指上扫 deltaY 为正 = 看下方内容 = 场景内下一页
-            let direction = verticalAccumulated > 0 ? 1 : -1
+            // 自然滚动:双指上扫 deltaY 为负 = 看下方内容 = 下一页。
+            // deltaY 与 deltaX 符号约定相反(水平左扫为正),以真机实证为准,勿按直觉假设
+            let direction = verticalAccumulated > 0 ? -1 : 1
             verticalAccumulated = 0
             onSwipe?(false, direction)
             return nil

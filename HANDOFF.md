@@ -2,7 +2,8 @@
 
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
-> 最后更新:2026-10-14
+> 最后更新:2026-10-15
+> **M2.5 已全部验收通过(2026-10-15,含竖扫方向修复与场景联动补强)**;下一步 M3:Property Inspector > HTML 家族插件 > 自研 ZCode 状态灯
 
 ---
 
@@ -180,6 +181,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **键帽定尺 100pt(与设备键面 1:1,用户确认)**:LazyVGrid 弹性列在全屏/大窗把键帽摊大饼;修法 = `GridItem(.fixed(100))` + chassis `.fixedSize(horizontal: true)`(LazyVGrid 容器默认撑满提案,固定轨道只会被居中——底座会比键列宽一大截)+ 画布顶部居中留白
 - **亮度跟随修复(此前从未真正工作)**:本机(macOS 26/AS)**不存在** IODisplayConnect/AppleBacklight 服务,`CoreDisplay_Display_GetUserBrightness` 恒返 1.0 假值;有效读法 = **DisplayServicesGetBrightness**(私有框架,kr=0,仅内屏;外接屏 kr=1000 本就不镜像)。1.5s 轮询 + ≥1% 变化检测;**内屏 0% → 键面涂黑 + 背光归零**(LIG 0 只是背光最暗,非黑屏);0% 涂黑态按任意键 → 点亮至最近有效亮度(暂态解耦,动作照常),15s 无操作重涂黑,内屏变化即重新关联;「滑杆 0% 涂黑」为 ⋯菜单选项(默认关)
 - **诊断基建**:`appendLog` 镜像 oslog(subsystem `opendeck`,查询须 `--level info`)+ 心跳 tick + 按键事件日志——硬件行为问题先开日志复现再断言,勿凭代码推演定案
+- **场景联动补强(验收实测)**:关窗即评估(三连采样 +0.3s/+1s/+2s 覆盖「关窗瞬间 frontmost 仍是自己」的结算竞态,评估幂等);联动决策与前台探针日志(前台探针走 oslog debug 防刷屏)。**竖扫方向教训:AppKit 的 scrollingDeltaY 与 deltaX 符号约定相反**(自然滚动下左扫 deltaX 为正、上扫 deltaY 为负),勿按直觉假设,以真机实证为准
 
 ### 6.5 已知限制(→ M3)
 - SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;Property Inspector 未做(动作参数不可配,直播/录制等零参动作不受影响);HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装

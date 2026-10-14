@@ -189,9 +189,11 @@ final class AppModel {
     func autoSwitchPageForFrontmostApp() {
         guard !editorWindowVisible, !device.isScreenOff else { return }
         guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        Self.oslog.debug("联动评估:前台=\(bundleID, privacy: .public)")
         let currentSceneID = config.currentSceneID
         if let bound = config.sceneBoundToApp(bundleID) {
             if bound.id != currentSceneID, let id = bound.id {
+                appendLog("场景联动:「\(bundleID)」→ 场景「\(bound.name)」")
                 switchScene(to: id)
             }
             return
@@ -199,6 +201,7 @@ final class AppModel {
         if let defaultID = config.config.defaultSceneID,
            defaultID != currentSceneID,
            config.indexOfScene(id: defaultID) != nil {
+            appendLog("场景联动:「\(bundleID)」无绑定 → 默认场景")
             switchScene(to: defaultID)
         }
     }
