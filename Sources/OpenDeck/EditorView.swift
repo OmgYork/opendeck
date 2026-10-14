@@ -859,9 +859,9 @@ enum ActionKind: Hashable, CaseIterable {
 
 /// 两级手势:垂直扫=场景内翻页,水平扫=切场景。
 /// 机制:NSEvent 本地监听(AppKit 派发给本应用的滚动事件先经此处)。
-/// 这是经真实触控板验证可用的最初版本机制:无空间门控、无手势状态机,
-/// 累积 |Δ| ≥ 30 触发 + 0.35s 冷却防重;水平/垂直两轴对称独立累积。
-/// 已知限制:极快扫动的动量尾流可能跨过冷却再次触发(连翻);如需根治再议更精细方案。
+/// 步进保证:触控板精确手势以「手指接触周期」(phase began→changed→ended)为单位,
+/// 周期内至多步进 1,手指离开后的惯性滚动(momentumPhase)全部吞掉——
+/// 不论速度多快、行程多长,一次扫动恰好步进 1。传统滚轮(无相位)退回冷却机制。
 @MainActor
 private final class SwipePageMonitor {
     private var token: Any?
@@ -870,11 +870,13 @@ private final class SwipePageMonitor {
 
     private var horizontalAccumulated: CGFloat = 0
     private var verticalAccumulated: CGFloat = 0
-    private var cooldownUntil = Date.distantPast
+    /// 一次手指接触周期内至多步进 1
+    private var flipped = false
+    private var gestureActive = false
     /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
     private let threshold: CGFloat = 30
-    /// 冷却:触发后的防重窗口
-    private let cooldown: TimeInterval = 0.35
+    /// 传统滚轮(无精确增量、无相位)的触发冷却
+    private var wheelCooldownUntil = Date.distantPast
 
     func start() {
         end()
@@ -890,32 +892,72 @@ private final class SwipePageMonitor {
         token = nil
         horizontalAccumulated = 0
         verticalAccumulated = 0
+        gestureActive = false
+        flipped = false
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
         let dx = event.scrollingDeltaX
         let dy = event.scrollingDeltaY
-        guard Date() >= cooldownUntil else { return event }
 
-        if abs(dx) > abs(dy), abs(dx) >= 1 {
+        // 惯性尾流(手指离开后的动量滚动):一律吞掉——"快扫连翻"的根源。
+        // 动量结束、下一次 phase .began 到来才开启新的一次扫动。
+        if event.momentumPhase != [] { return nil }
+
+        // 传统滚轮(无精确增量、无相位):退回冷却机制,行为与硬件滚轮一致
+        guard event.hasPreciseScrollingDeltas else {
+            guard Date() >= wheelCooldownUntil else { return event }
+            if abs(dx) > abs(dy), abs(dx) >= 1 {
+                horizontalAccumulated += dx
+                guard abs(horizontalAccumulated) >= threshold else { return event }
+                let direction = horizontalAccumulated > 0 ? 1 : -1
+                horizontalAccumulated = 0
+                wheelCooldownUntil = Date().addingTimeInterval(0.35)
+                onSwipe?(true, direction)
+                return nil
+            }
+            if abs(dy) > abs(dx), abs(dy) >= 1 {
+                verticalAccumulated += dy
+                guard abs(verticalAccumulated) >= threshold else { return event }
+                let direction = verticalAccumulated > 0 ? 1 : -1
+                verticalAccumulated = 0
+                wheelCooldownUntil = Date().addingTimeInterval(0.35)
+                onSwipe?(false, direction)
+                return nil
+            }
+            return event
+        }
+
+        // 触控板精确手势:一次接触周期(phase began→changed→ended)至多步进 1
+        if event.phase == .began || !gestureActive {
+            horizontalAccumulated = 0
+            verticalAccumulated = 0
+            flipped = false
+            gestureActive = true
+        }
+
+        // 手势周期内的所有滚动一律吞掉(网格内容固定,页面不晃)
+        if abs(dx) > abs(dy) {
             horizontalAccumulated += dx
-            guard abs(horizontalAccumulated) >= threshold else { return event }
+            guard !flipped, abs(horizontalAccumulated) >= threshold else { return nil }
+            flipped = true
+            // 自然滚动:双指左扫 deltaX 为正 = 看右侧内容 = 下一场景
             let direction = horizontalAccumulated > 0 ? 1 : -1
             horizontalAccumulated = 0
-            cooldownUntil = Date().addingTimeInterval(cooldown)
             onSwipe?(true, direction)
             return nil
         }
-        if abs(dy) > abs(dx), abs(dy) >= 1 {
+        if abs(dy) >= abs(dx) {
             verticalAccumulated += dy
-            guard abs(verticalAccumulated) >= threshold else { return event }
+            guard !flipped, abs(verticalAccumulated) >= threshold else { return nil }
+            flipped = true
+            // 自然滚动:双指上扫 deltaY 为正 = 看下方内容 = 场景内下一页
             let direction = verticalAccumulated > 0 ? 1 : -1
             verticalAccumulated = 0
-            cooldownUntil = Date().addingTimeInterval(cooldown)
             onSwipe?(false, direction)
             return nil
         }
-        return event
+        return nil
     }
 }
 
