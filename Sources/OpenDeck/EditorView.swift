@@ -31,17 +31,49 @@ struct EditorView: View {
             if appModel.officialAppRunning {
                 conflictBanner
             }
-            chassis
-                .overlay(alignment: .trailing) { pageDotsOverlay }
-            pageBar
+            HStack(alignment: .center, spacing: 12) {
+                chassis
+                    .overlay(alignment: .trailing) { navTrailingOverlay }
+                if appModel.config.navStyle == .matrixRail {
+                    railMatrixNav
+                }
+            }
+            // 以理想高度(=底座高度)布局本行:右缘轨的 maxHeight:.infinity 只在底座高度内
+            // 展开、与底座等高——否则会被 VStack 的整窗高度提案拉成通天空轨
+            .fixedSize(horizontal: false, vertical: true)
+            sceneNavBottom
             hint
         }
-        // 内容固定 15 键,无需滚动(滚动条与滚动功能已移除);顶部对齐保持原视觉
+        // 内容固定 15 键,无需滚动(滚动条与滚动功能已移除);顶部对齐保持原视觉——
+        // 键帽定尺后,全屏/大窗下键列同样不摊开,只是画布留白增多(官方 Stream Deck app 同款做法)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 24)
         .padding(.bottom, 24)
         // 按玻璃工具栏自动让位,这里只补一点呼吸空隙
         .padding(.top, 8)
+        // 场景管理对话框挂整窗层:三种导航样式(经典/矩阵)共用同一套状态
+        .confirmationDialog(
+            "删除场景「\(deleteTargetName)」?",
+            isPresented: $pageDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("删除(该场景全部页一并删除)", role: .destructive) {
+                if let id = deleteTargetID { appModel.deleteScene(id: id) }
+            }
+            Button("取消", role: .cancel) { deleteTargetID = nil }
+        }
+        .alert("重命名场景", isPresented: $renameAlertShown) {
+            TextField("场景名", text: $renameText)
+            Button("好") {
+                if let id = renameTargetID { appModel.config.renameScene(id: id, to: renameText) }
+            }
+            Button("取消", role: .cancel) { renameTargetID = nil }
+        }
+        .sheet(isPresented: $pageBindingSheetShown) {
+            if let id = pageBindingTargetID {
+                SceneAppBindingSheet(appModel: appModel, sceneID: id)
+            }
+        }
         .toolbar { toolbar }
         .containerBackground(for: .window) {
             Color(nsColor: .windowBackgroundColor)
@@ -100,6 +132,16 @@ struct EditorView: View {
                     showPluginManager = true
                 } label: {
                     Label("插件管理…", systemImage: "puzzlepiece.extension")
+                }
+                Picker(selection: Binding(
+                    get: { appModel.config.navStyle },
+                    set: { appModel.config.navStyle = $0 }
+                )) {
+                    Text("导航样式:经典(芯片 + 页点)").tag(NavigationStyle.classic)
+                    Text("导航样式:矩阵 · 下置").tag(NavigationStyle.matrixBelow)
+                    Text("导航样式:矩阵 · 右缘").tag(NavigationStyle.matrixRail)
+                } label: {
+                    Label("导航样式", systemImage: "square.grid.3x3")
                 }
                 Picker(selection: Binding(
                     get: { appModel.config.autoScreenOffMinutes },
@@ -195,11 +237,29 @@ struct EditorView: View {
         }
     }
 
-    // MARK: 页面圆点指示器(网格右缘,竖排)
+    // MARK: 导航样式开关(经典 / 矩阵·下置 / 矩阵·右缘)
 
-    /// 图一样式:玻璃胶囊内竖排圆点,当前页亮白;点击圆点直达;单页场景隐藏
+    /// 底座右缘悬浮层:仅经典样式挂页点胶囊(下置矩阵无右缘元素;右缘轨在 body 旁挂)
     @ViewBuilder
-    private var pageDotsOverlay: some View {
+    private var navTrailingOverlay: some View {
+        if appModel.config.navStyle == .classic {
+            classicDotsOverlay
+        }
+    }
+
+    /// 下方导航槽:经典 = 场景芯片栏;矩阵·下置 = A 矩阵;矩阵·右缘 = 无(导航在右缘轨)
+    @ViewBuilder
+    private var sceneNavBottom: some View {
+        switch appModel.config.navStyle {
+        case .classic: pageBar
+        case .matrixBelow: matrixBelowNav
+        case .matrixRail: EmptyView()
+        }
+    }
+
+    /// 经典样式:玻璃胶囊内竖排圆点,当前页亮白;点击圆点直达;单页场景隐藏
+    @ViewBuilder
+    private var classicDotsOverlay: some View {
         if let info = appModel.config.currentPagePositionInScene, info.count > 1 {
             VStack(spacing: 6) {
                 ForEach(0..<info.count, id: \.self) { position in
@@ -232,52 +292,35 @@ struct EditorView: View {
 
     private var currentSceneID: UUID? { appModel.config.currentSceneID }
 
-    /// 场景芯片栏:每场景一枚芯片,点按切换;+ 追加场景;芯片右键管理(场景联动/复制/加页/重命名/删除)
+    /// 「+ 添加场景」虚位芯片(经典芯片栏与两种矩阵共用)
+    var addSceneChip: some View {
+        Button {
+            appModel.addScene()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 30)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(.quaternary, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .help("添加场景")
+    }
+
+    /// 场景芯片栏(经典样式):每场景一枚芯片,点按切换;+ 追加场景;芯片右键管理(场景联动/复制/加页/重命名/删除)
     private var pageBar: some View {
         HStack(spacing: 8) {
             ForEach(Array(appModel.config.config.scenes.enumerated()), id: \.element.id) { offset, scene in
                 sceneChip(offset: offset, scene: scene)
             }
-            Button {
-                appModel.addScene()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 30)
-                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(.quaternary, lineWidth: 1)
-                    }
-            }
-            .buttonStyle(.plain)
-            .help("添加场景")
+            addSceneChip
         }
         .padding(.horizontal, 4)
         .animation(.snappy(duration: 0.25), value: appModel.config.currentSceneIndex)
-        .confirmationDialog(
-            "删除场景「\(deleteTargetName)」?",
-            isPresented: $pageDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("删除(该场景全部页一并删除)", role: .destructive) {
-                if let id = deleteTargetID { appModel.deleteScene(id: id) }
-            }
-            Button("取消", role: .cancel) { deleteTargetID = nil }
-        }
-        .alert("重命名场景", isPresented: $renameAlertShown) {
-            TextField("场景名", text: $renameText)
-            Button("好") {
-                if let id = renameTargetID { appModel.config.renameScene(id: id, to: renameText) }
-            }
-            Button("取消", role: .cancel) { renameTargetID = nil }
-        }
-        .sheet(isPresented: $pageBindingSheetShown) {
-            if let id = pageBindingTargetID {
-                SceneAppBindingSheet(appModel: appModel, sceneID: id)
-            }
-        }
     }
 
     private var deleteTargetName: String {
@@ -287,8 +330,8 @@ struct EditorView: View {
         return appModel.config.config.scenes[index].name
     }
 
-    /// 单枚场景芯片:点按切换;当前场景高亮;右键管理与场景联动
-    private func sceneChip(offset: Int, scene: DeckScene) -> some View {
+    /// 单枚场景芯片:点按切换;当前场景高亮;右键管理与场景联动(经典栏与两种矩阵共用)
+    func sceneChip(offset: Int, scene: DeckScene) -> some View {
         let isCurrent = scene.id == currentSceneID
         return Button {
             if let id = scene.id, !isCurrent { appModel.switchScene(to: id) }
@@ -366,6 +409,9 @@ struct EditorView: View {
     /// 用 background(而非 Shape.overlay)承载体积——后者在 ScrollView 里拿不到高度会塌陷
     private var chassis: some View {
         keyGrid
+            // 底座贴合键列:LazyVGrid 容器默认撑满提案宽度(固定轨道居中其中),
+            // 会让暗色底座在宽窗下比键列宽出一大截;定尺后按理想宽度收缩
+            .fixedSize(horizontal: true, vertical: false)
             .padding(18)
             .background {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -400,9 +446,9 @@ struct EditorView: View {
         }
     }
 
-    // 5×3 全主键
+    // 5×3 全主键;键帽定尺 100pt(与设备键面 1:1),窗口缩放不改变键帽大小
     private static let gridColumns: [GridItem] =
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: StreamDock293S.columns)
+        Array(repeating: GridItem(.fixed(100), spacing: 12), count: StreamDock293S.columns)
 
     private var hint: some View {
         Text("单击键帽编辑,保存后立即上屏")

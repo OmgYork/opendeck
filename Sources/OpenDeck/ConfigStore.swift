@@ -64,6 +64,13 @@ struct LayoutParams: Codable, Equatable {
     static var concentricTrail: CGFloat { 14 }
 }
 
+/// 编辑器导航区样式(classic = 现行「场景芯片栏 + 页点胶囊」)
+enum NavigationStyle: String, Codable, CaseIterable {
+    case classic        // 场景芯片栏(下方)+ 页点胶囊(右缘悬浮)
+    case matrixBelow    // 矩阵·下置:芯片=列头,页点纵排成列(全景地图,任一格直达)
+    case matrixRail     // 矩阵·右缘:底座旁挂轨(转置:场景=行,页点横排)
+}
+
 struct AppConfig: Codable {
     var scenes: [DeckScene] = [DeckScene()]
     var currentSceneIndex: Int = 0
@@ -76,6 +83,8 @@ struct AppConfig: Codable {
     var defaultSceneID: UUID? = nil
     /// 自动熄屏:设备空闲(无按键)达到该分钟数后自动熄屏;0/缺省 = 关
     var autoScreenOffMinutes: Int? = nil
+    /// 编辑器导航样式(nil = 经典,旧配置缺键可解码)
+    var navStyle: NavigationStyle? = nil
 }
 
 // MARK: - 配置存储
@@ -326,6 +335,13 @@ final class ConfigStore {
         return scene.pages[position].id
     }
 
+    /// 任意场景内第 position 页(0-based)的 id(矩阵点按跨场景直达用)
+    func pageIDInScene(_ sceneIndex: Int, position: Int) -> UUID? {
+        guard config.scenes.indices.contains(sceneIndex),
+              config.scenes[sceneIndex].pages.indices.contains(position) else { return nil }
+        return config.scenes[sceneIndex].pages[position].id
+    }
+
     /// 「前往页」按 Page.id 跨场景定位(兼容旧配置的动作;找不到 = 无操作)
     func pageLocation(id: UUID) -> (sceneIndex: Int, pageIndex: Int)? {
         for sceneIndex in config.scenes.indices {
@@ -372,6 +388,15 @@ final class ConfigStore {
         get { config.autoScreenOffMinutes ?? 0 }
         set {
             config.autoScreenOffMinutes = max(0, newValue)
+            save()
+        }
+    }
+
+    /// 编辑器导航样式(nil = 经典);菜单直选,立即落盘
+    var navStyle: NavigationStyle {
+        get { config.navStyle ?? .classic }
+        set {
+            config.navStyle = newValue
             save()
         }
     }

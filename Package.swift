@@ -39,5 +39,10 @@ let package = Package(
             dependencies: ["PluginHost"],
             path: "Tests/PluginHostTests"
         ),
+        .testTarget(
+            name: "OpenDeckTests",
+            dependencies: ["OpenDeck"],
+            path: "Tests/OpenDeckTests"
+        ),
     ]
 )
