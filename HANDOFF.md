@@ -212,3 +212,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **v1 边界(记录)**:MiraBox 扩展事件(setBackground/stopBackground/setAcImgTop/exitFullScreen/triggerKey/getUserInfo/registrationScreenSaverEvent)忽略+日志;window.open 弹窗不支(memo 便签);localStorage 不跨重启(nonPersistent);App Nap 节流观察项;个别插件自带 bug(tactics 的 `window.argv[5]` 恒 undefined,memo willAppear 清 localStorage)不属宿主责任
 - **验证**:48 测全绿零警告(新增 webview 集成测试:沙盒真 HTML → 真 WKWebView 加载 → 引导注入 → 注册 → willAppear → setImage → draw 钩子全链 0.5s);**真机收官**:拷贝安装官方 time 插件 → 分配键位 → webview 注册 ✓ → willAppear/setSettings 流 ✓ → settings 落盘 ✓,设备键面出时钟待用户目视
 - **已知边界**:同页双模式插件(CodePath==PropertyInspectorPath)的 PI 复用同一 HTML,第 5 参区分——PI 路径本就支持,未额外处理;HTML 插件页加载失败(didFailProvisionalNavigation)按 onGone 进 respawn×3 后放弃
+
+### 6.12 M3-3 自研 ZCode 状态灯插件(2026-10-16,HTML 家族实战首跑)
+- **形态**:自研 HTML 家族插件 `com.zcode.status.sdPlugin`(源码 `Scripts/com.zcode.status.sdPlugin/`,拷贝安装),键面实时反映 ZCode 工作状态
+- **状态机**(4 色+空闲):working 蓝▶(UserPromptSubmit/PostToolUse)、permission 黄?(PermissionRequest)、error 红!(PostToolUseFailure)、done 绿✓(Stop/SessionStart)、idle 灰●(插件端判:state.json 缺失或 updatedAt 超 30 分钟)
+- **管线**:ZCode hook(6 事件)→ `hook.py` 读 stdin `hook_event_name` → 原子写插件根 `state.json`(tmp+rename;亚 100ms、exit 0、无输出,绝不反噬 ZCode 主流程)→ 插件 webview 每 1s `fetch('state.json?t=<ms>')` 轮询(cache-busting)→ 状态变化才 canvas 重绘 + setImage(防 HID 刷屏);willAppear 新键上屏、deviceDidConnect 全量重画
+- **hooks 配置**(用户级 `~/.zcode/cli/config.json` 顶层 hooks,备份 `config.json.pre-zcode-light.bak`):6 事件 × `python3 <插件根>/hook.py`,timeoutMs 2000,enabled true。**hooks 在会话启动时加载——写入后需新 ZCode 会话才生效**(运行中的会话不受影响);hook.py 常驻插件根 = webview fetch 读取域内(file:// 读取域即插件根)
+- **验证**:webview 注册 ✓;hook 单测 working→permission 写入 ✓;插件 1s 轮询刷键 ✓(键面黄色 ?);写盘日志 `写盘[setSettings·PI]` 同款插桩可观测。ZCode 事件全环形验证待日常使用中自然覆盖(新会话即生效)
+- **v1 边界**:hooks 用户级全局,多会话并发后写覆盖;无「等待用户输入」专用事件(Stop≈,注意 Stop 可能触发 ≤3 次自动续跑造成短暂回蓝);安装脚本与 hooks 配置属用户目录变更不入库(源码已入库)
