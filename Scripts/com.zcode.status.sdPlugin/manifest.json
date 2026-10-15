@@ -1,0 +1,17 @@
+{
+  "Name": "ZCode 状态灯",
+  "Version": "1.0.0",
+  "SDKVersion": 1,
+  "CodePath": "index.html",
+  "OS": [
+    { "Platform": "mac", "MinimumVersion": "10.11" }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.zcode.status.light",
+      "Name": "状态灯",
+      "Controllers": ["Keypad"],
+      "States": [{}]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>ZCode 状态灯</title>
+</head>
+
+<body>
+    <canvas id="pad" width="100" height="100"></canvas>
+    <script>
+    'use strict';
+
+    // 状态定义:颜色 + 居中符号
+    var STATES = {
+        idle:       { color: '#6e7681', glyph: '\u25CF' }, // ● 空闲
+        ready:      { color: '#3fb950', glyph: '\u2713' }, // ✓ 会话就绪
+        done:       { color: '#3fb950', glyph: '\u2713' }, // ✓ 回合完成待输入
+        working:    { color: '#2f81f7', glyph: '\u25B6' }, // ▶ 工作中
+        permission: { color: '#d29922', glyph: '\u003F' }, // ? 等待授权
+        error:      { color: '#f85149', glyph: '\u0021' }  // ! 出错
+    };
+    var IDLE_TIMEOUT_MS = 30 * 60 * 1000; // state.json 超 30 分钟未更新 = 空闲
+    var POLL_MS = 1000;
+
+    var canvas = document.getElementById('pad');
+    var ctx = canvas.getContext('2d');
+    var websocket;
+    var contexts = {};        // context 集合(本插件全部键位同色)
+    var currentState = 'idle';
+
+    function roundRect(c, x, y, w, h, r) {
+        c.beginPath();
+        c.moveTo(x + r, y);
+        c.arcTo(x + w, y, x + w, y + h, r);
+        c.arcTo(x + w, y + h, x, y + h, r);
+        c.arcTo(x, y + h, x, y, r);
+        c.arcTo(x, y, x + w, y, r);
+        c.closePath();
+    }
+
+    function render(state) {
+        var def = STATES[state] || STATES.idle;
+        ctx.clearRect(0, 0, 100, 100);
+        ctx.fillStyle = def.color;
+        roundRect(ctx, 4, 4, 92, 92, 16);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.font = '56px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(def.glyph, 50, 55);
+    }
+
+    function sendImage(context) {
+        websocket.send(JSON.stringify({
+            event: 'setImage', context: context,
+            payload: { image: canvas.toDataURL('image/png'), target: 0 }
+        }));
+    }
+
+    function pushToAll() {
+        Object.keys(contexts).forEach(function (context) { sendImage(context); });
+    }
+
+    // 每 1s 轮询 state.json(cache-busting);仅在状态变化时重新上屏,避免刷 HID
+    function tick() {
+        fetch('state.json?t=' + Date.now())
+            .then(function (res) { return res.ok ? res.text() : null; })
+            .then(function (text) {
+                if (text) {
+                    try {
+                        var data = JSON.parse(text);
+                        if (data && STATES[data.state]) stateData = data;
+                    } catch (err) { /* 半截 JSON:保持上一状态 */ }
+                }
+            })
+            .catch(function () { /* 文件尚未生成:保持 idle */ })
+            .then(function () {
+                var state = 'idle';
+                if (stateData && Date.now() - stateData.updatedAt < IDLE_TIMEOUT_MS) {
+                    state = stateData.state;
+                }
+                if (state !== currentState) {
+                    currentState = state;
+                    render(state);
+                    pushToAll();
+                }
+                setTimeout(tick, POLL_MS);
+            });
+    }
+
+    var stateData = null;
+    window.connectElgatoStreamDeckSocket = function (port, uuid, registerEvent, info) {
+        JSON.parse(info);
+        websocket = new WebSocket('ws://127.0.0.1:' + port);
+        websocket.onopen = function () {
+            websocket.send(JSON.stringify({ event: registerEvent, uuid: uuid }));
+        };
+        websocket.onmessage = function (e) {
+            var data = JSON.parse(e.data);
+            if (data.event === 'willAppear') {
+                contexts[data.context] = true;
+                render(currentState);
+                sendImage(data.context); // 新键上屏(含首键)
+            } else if (data.event === 'willDisappear') {
+                delete contexts[data.context];
+            } else if (data.event === 'deviceDidConnect') {
+                pushToAll(); // 设备重连后全量重画
+            }
+        };
+        render(currentState);
+        tick();
+    };
+    </script>
+</body>
+
+</html>
