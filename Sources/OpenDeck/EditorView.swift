@@ -929,17 +929,10 @@ private struct KeyEditView: View {
         return .plugin(pluginID: pluginID, actionUUID: pluginActionUUID, contextID: draftContextID)
     }
 
-    /// 取消编辑:草稿新增的 context 若已被 PI 写入 settings,清理孤儿记录(原动作的记录不动)
+    /// 取消编辑:仅撤销草稿与 PI 预登记。不做任何 settings 清理——孤儿记录无害
+    /// (无实例引用、字节级,卸载插件时 removeDocument 兜底);曾实证清理逻辑
+    /// 会误删活的 context 记录(18:27 插桩),故永久移除
     private func cancelEdit() {
-        let isOriginalPluginAction: Bool
-        if case .plugin(let oldPlugin, let oldAction, _) = originalAction {
-            isOriginalPluginAction = oldPlugin == pluginID && oldAction == pluginActionUUID
-        } else {
-            isOriginalPluginAction = false
-        }
-        if !isOriginalPluginAction, kind == .plugin, !draftContextID.isEmpty {
-            appModel.pluginHost.removeContextRecord(pluginID: pluginID, contextID: draftContextID)
-        }
         appModel.pluginHost.clearPendingPI(contextID: draftContextID)
         dismiss()
     }

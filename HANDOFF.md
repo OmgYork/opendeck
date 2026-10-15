@@ -2,8 +2,8 @@
 
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
-> 最后更新:2026-10-15(M3-1 PI 代码落地 + 集成测试全绿,待真机验收)
-> **M2.5 已全部验收通过(2026-10-15)**;M3 进行中:Property Inspector(✅ 代码落地见 §6.9,待验收)> HTML 家族插件 > 自研 ZCode 状态灯
+> 最后更新:2026-10-15(PI 落地 + settings 持久化重构 B「内存即真相」,47 测全绿,dist 与最新提交一致)
+> **M2.5 已全部验收通过(2026-10-15)**;M3 进行中:Property Inspector(✅ 代码落地见 §6.9,持久化健壮化见 §6.10,真机验收基本完成)> HTML 家族插件 > 自研 ZCode 状态灯
 
 ---
 
@@ -196,3 +196,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **settings 流语义**:PI setSettings → 落盘 + 插件实时收 didReceiveSettings + 在开 PI 回显;插件 setSettings → 落盘 + 在开 PI 同步(UI 不脱节)
 - **已知边界(记录不处理)**:PI 页面 `<input type="file">` 无面板可弹(WKUIDelegate 可选方法与 MainActor 默认隔离相抵,已知在装插件未用文件输入);同 context 多 PI 并存的相互同步靠回显兜底
 - **验证**:PIFlowTests 集成测试(假插件+假 PI 双真 socket 连接)8 断言全过;43 单测零警告;fake 插件(Scripts/opendeck.fake.sdPlugin)带 PI 回显页(输入 titleText → setSettings → 插件收 didReceiveSettings 刷键面标题,设备上肉眼可验全链路);OBS 插件 18 动作全带 PI 页为真实验收靶
+
+### 6.10 settings 持久化重构 B:内存即真相(2026-10-15,排障驱动的架构定案)
+- **事故**:16:20 经 PI 写入的参数在 17:41:11 被抹(用户同期按物理键)。插桩定位:写盘记录形态 = 「缺 3A4D 记录的整文档 + setState 新建默认格」——即某次写持有了旧缓存副本;且 cancelEdit 的孤儿清理 `removeContextRecord` 被插桩二次实锤会误删**活**记录(18:27:11.867,触发状态不可完整重构)
+- **根因 = 「文件即真相 + 内存缓存副本」双真相架构**:缓存副本参与定夺磁盘内容,旧副本覆盖新数据的失败类无法靠守卫根除
+- **行业对照(实测+查证)**:Elgato(Stream Deck)参数内嵌 profile JSON 每动作实例、单一宿主进程独占写入、内存即真相;MiraBox 官方(本机 `~/Library/Application Support/HotSpot/StreamDock/profiles/<序列号>.sdProfile/manifest.json`)参数按 `行,列` 内嵌 + **A/B 双副本轮换备份**;Companion 同族(内存真相 + SQLite)。无一例外「唯一写入者 + 内存即真相」
+- **新架构(B,用户拍板)**:`PluginHostModel.settingsDocs` = 唯一权威副本(每插件一份文档,懒加载一次、进程内永不重载、卸载时摘除);一切变更经 `mutateSettingsDoc`(原地改 + diff 守卫吸收 OBS 式高频写 + 立即原子落盘,零丢失窗口)+ caller 插桩日志;`PluginSettingsStore` 降级为哑持久化汇(`load`/`persist`/`removeDocument`,不持内存、不做合并);shutdown 增落盘兜底(防御性);**cancelEdit 孤儿清理永久移除**(孤儿记录无害,误删活记录不可接受)
+- **验证**:47 测全绿零警告(新增 PluginSettingsStoreTests 4 测 + PIFlowTests 17:41 回归闸门:PI setSettings → setState → settings 必须原样存活;注意 **setSettings 是整对象替换语义**,非逐字段合并——与 OBS action.js 一致);真机复验:重启恢复回显 ✓、PI 改参写穿落盘 ✓、翻页实例生灭 ✓
+- **已知边界(记录)**:①Sheet 开着会阻止 osascript 优雅退出(-128,标准模态行为);②插件实例随当前页生灭,插件页非当前时 PI 注册被「未知 context」拒(设计语义,勿误判服务端坏);③未来做 profile 导入/导出时,参数应随动作实例内嵌(Elgato 形态),届时数据模型已就位

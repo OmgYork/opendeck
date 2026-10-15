@@ -77,8 +77,10 @@ final class PluginHostModel {
     private var instances: [String: Instance] = [:]
     private var pluginByConnection: [UUID: String] = [:]
     private var serverStarted = false
-    /// settings 文档缓存:OBS 等插件高频 setGlobalSettings,无变化不落盘
-    private var settingsCache: [String: PluginSettingsDocument] = [:]
+    /// settings 内存真相:每插件一份文档,懒加载一次后进程内永不重载(唯一权威副本;
+    /// 磁盘只是持久化汇)。一切变更经 mutateSettingsDoc 原地改 + 立即落盘——
+    /// 禁止在别处持有副本写回(17:41 事故类:旧副本整份写回覆盖新数据)。
+    private var settingsDocs: [String: PluginSettingsDocument] = [:]
 
     /// 在开的 Property Inspector 连接归属(WKWebView 直连同一 WS 端口,注册包首条消息定归属)
     private final class PIRegistration {
@@ -161,6 +163,10 @@ final class PluginHostModel {
             runtime.connection = nil
             runtime.registered = false
         }
+        // 内存即真相,落盘防御性兜底(写穿模式下正常无脏数据)
+        for (pluginUUID, document) in settingsDocs {
+            settingsStore.persist(document, pluginUUID: pluginUUID)
+        }
         piByConnection.removeAll()
         pendingPI.removeAll()
         server.stop()
@@ -200,7 +206,7 @@ final class PluginHostModel {
             hooks.log("插件未安装,动作暂不生效:\(pluginID)")
             return
         }
-        let record = document(pluginUUID: pluginID).contexts[contextID] ?? PluginContextRecord()
+        let record = settingsDoc(pluginID).contexts[contextID] ?? PluginContextRecord()
         instances[contextID] = Instance(
             contextID: contextID,
             pluginUUID: pluginID,
@@ -305,7 +311,7 @@ final class PluginHostModel {
 
         case .setSettings(let context, let settings):
             guard let instance = self.instance(context: context) else { return }
-            persistContextSettings(pluginUUID: instance.pluginUUID, contextID: instance.contextID, settings: settings)
+            persistContextSettings(pluginUUID: instance.pluginUUID, contextID: instance.contextID, settings: settings, caller: "setSettings·插件")
             // 在开 PI 同步(编辑器开着时插件改 settings,PI 界面不脱节)
             pushSettingsToPI(
                 pluginUUID: instance.pluginUUID, actionUUID: instance.actionUUID,
@@ -322,15 +328,17 @@ final class PluginHostModel {
             ), runtime: runtime)
 
         case .setGlobalSettings(_, let settings):
-            var document = document(pluginUUID: pluginUUID)
-            document.globalSettings = settings
-            saveDocument(document, pluginUUID: pluginUUID)
+            mutateSettingsDoc(pluginUUID, caller: "global·插件") { document in
+                let unchanged = document.globalSettings == settings
+                document.globalSettings = settings
+                return !unchanged
+            }
 
         case .getGlobalSettings:
             // OBS 插件硬需求:必答,否则其全局设置为空
             send(SDProtocol.didReceiveGlobalSettings(
                 pluginUUID: pluginUUID,
-                settings: document(pluginUUID: pluginUUID).globalSettings
+                settings: settingsDoc(pluginUUID).globalSettings
             ), runtime: runtime)
 
         case .showOk:
@@ -385,10 +393,12 @@ final class PluginHostModel {
         setState(instance, state)
     }
 
-    private func persistContextSettings(pluginUUID: String, contextID: String, settings: JSONValue) {
-        var document = document(pluginUUID: pluginUUID)
-        document.contexts[contextID, default: PluginContextRecord()].settings = settings
-        saveDocument(document, pluginUUID: pluginUUID)
+    private func persistContextSettings(pluginUUID: String, contextID: String, settings: JSONValue, caller: String) {
+        mutateSettingsDoc(pluginUUID, caller: caller) { document in
+            let unchanged = document.contexts[contextID]?.settings == settings
+            document.contexts[contextID, default: PluginContextRecord()].settings = settings
+            return !unchanged
+        }
     }
 
     /// settings 变更推给该 context 所有在开 PI(编辑器可同时开多个同 context 的 PI 吗?不能,但
@@ -457,7 +467,7 @@ final class PluginHostModel {
             ), to: connection)
 
         case .setSettings(let context, let settings):
-            persistContextSettings(pluginUUID: registration.pluginUUID, contextID: context, settings: settings)
+            persistContextSettings(pluginUUID: registration.pluginUUID, contextID: context, settings: settings, caller: "setSettings·PI")
             // 实时生效:插件收 didReceiveSettings;在开 PI 同步(草稿/实例并存期不脱节)
             if let instance = instance(context: context) {
                 pushSettingsToPlugin(instance, settings: settings)
@@ -471,13 +481,15 @@ final class PluginHostModel {
             // PI 侧 context 字段填 contextID(action.js 实证),归属以注册反查结果为准
             send(SDProtocol.didReceiveGlobalSettings(
                 pluginUUID: registration.pluginUUID,
-                settings: document(pluginUUID: registration.pluginUUID).globalSettings
+                settings: settingsDoc(registration.pluginUUID).globalSettings
             ), to: connection)
 
         case .setGlobalSettings(_, let settings):
-            var doc = document(pluginUUID: registration.pluginUUID)
-            doc.globalSettings = settings
-            saveDocument(doc, pluginUUID: registration.pluginUUID)
+            mutateSettingsDoc(registration.pluginUUID, caller: "global·PI") { document in
+                let unchanged = document.globalSettings == settings
+                document.globalSettings = settings
+                return !unchanged
+            }
             if let runtime = runtimes[registration.pluginUUID], runtime.registered {
                 send(SDProtocol.didReceiveGlobalSettings(
                     pluginUUID: registration.pluginUUID, settings: settings
@@ -557,7 +569,7 @@ final class PluginHostModel {
 
     /// context 的当前 settings(草稿态无实例也查得到;PI 引导 info 用)
     func piSettings(pluginUUID: String, contextID: String) -> JSONValue {
-        document(pluginUUID: pluginUUID).contexts[contextID]?.settings ?? .object([:])
+        settingsDoc(pluginUUID).contexts[contextID]?.settings ?? .object([:])
     }
 
     /// PI 页面文件 URL(插件根 + manifest 相对路径);该动作无 PI 页返回 nil
@@ -597,13 +609,6 @@ final class PluginHostModel {
             ]),
         ])
         return String(data: SDProtocol.encode(info), encoding: .utf8) ?? "{}"
-    }
-
-    /// 删除 context 的持久化记录(草稿取消时清理 PI 已写入的孤儿数据)
-    func removeContextRecord(pluginID: String, contextID: String) {
-        var document = document(pluginUUID: pluginID)
-        guard document.contexts.removeValue(forKey: contextID) != nil else { return }
-        saveDocument(document, pluginUUID: pluginID)
     }
 
     private func handleDisconnect(_ connection: PluginServer.Connection) {
@@ -661,27 +666,45 @@ final class PluginHostModel {
 
     private func setState(_ instance: Instance, _ state: Int) {
         instance.state = state
-        var document = document(pluginUUID: instance.pluginUUID)
-        document.contexts[instance.contextID, default: PluginContextRecord()].state = state
-        saveDocument(document, pluginUUID: instance.pluginUUID)
+        mutateSettingsDoc(instance.pluginUUID, caller: "setState") { document in
+            let unchanged = document.contexts[instance.contextID]?.state == state
+            document.contexts[instance.contextID, default: PluginContextRecord()].state = state
+            return !unchanged
+        }
         redraw(instance)
     }
 
-    private func document(pluginUUID: String) -> PluginSettingsDocument {
-        if let cached = settingsCache[pluginUUID] { return cached }
-        let document = settingsStore.document(pluginUUID: pluginUUID)
-        settingsCache[pluginUUID] = document
+    /// 唯一写入口:原地改内存真相 → diff 守卫(无变化零 I/O,吸收 OBS 式高频写)→ 立即原子落盘。
+    /// mutate 返回是否有实际变化。
+    private func mutateSettingsDoc(_ pluginUUID: String, caller: String,
+                                   mutate: (inout PluginSettingsDocument) -> Bool) {
+        var document = settingsDoc(pluginUUID)
+        guard mutate(&document) else { return }
+        settingsDocs[pluginUUID] = document
+        let summary = document.contexts
+            .sorted(by: { $0.key < $1.key })
+            .map { "\($0.key.prefix(8)):k\(settingsKeyCount($0.value.settings))/st\($0.value.state)" }
+            .joined(separator: ",")
+        hooks.log("settings 写盘[\(caller)][\(pluginUUID)] ctx=\(summary)")
+        settingsStore.persist(document, pluginUUID: pluginUUID)
+    }
+
+    /// 内存真相访问:懒加载一次,此后进程内永不重载
+    private func settingsDoc(_ pluginUUID: String) -> PluginSettingsDocument {
+        if let document = settingsDocs[pluginUUID] { return document }
+        let document = settingsStore.load(pluginUUID: pluginUUID)
+        settingsDocs[pluginUUID] = document
+        hooks.log("settings 从盘加载[\(pluginUUID)] ctx=\(document.contexts.count)")
         return document
     }
 
-    private func saveDocument(_ document: PluginSettingsDocument, pluginUUID: String) {
-        guard settingsCache[pluginUUID] != document else { return }
-        settingsCache[pluginUUID] = document
-        settingsStore.save(document, pluginUUID: pluginUUID)
+    private func settingsKeyCount(_ value: JSONValue) -> Int {
+        if case .object(let object) = value { return object.count }
+        return 0
     }
 
     private func currentSettings(_ instance: Instance) -> JSONValue {
-        document(pluginUUID: instance.pluginUUID).contexts[instance.contextID]?.settings ?? .object([:])
+        settingsDoc(instance.pluginUUID).contexts[instance.contextID]?.settings ?? .object([:])
     }
 
     // MARK: - 进程管理
@@ -767,7 +790,7 @@ final class PluginHostModel {
     // MARK: - 发送辅助
 
     private func sendWillAppear(_ instance: Instance, runtime: Runtime) {
-        let record = document(pluginUUID: instance.pluginUUID).contexts[instance.contextID] ?? PluginContextRecord()
+        let record = settingsDoc(instance.pluginUUID).contexts[instance.contextID] ?? PluginContextRecord()
         send(SDProtocol.willAppear(
             action: instance.actionUUID,
             context: instance.contextID,
@@ -842,7 +865,7 @@ final class PluginHostModel {
             runtime.registered = false
             runtimes.removeValue(forKey: id)
         }
-        settingsCache.removeValue(forKey: id)
+        settingsDocs.removeValue(forKey: id)
         reloadInstalledPlugins()
     }
 

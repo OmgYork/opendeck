@@ -1,5 +1,9 @@
 import CryptoKit
 import Foundation
+import os
+
+/// 临时诊断插桩(M3-1 排障:新连接握手后消息不再处理;随根因修复一并移除)
+private let serverLog = Logger(subsystem: "opendeck", category: "server")
 
 /// 插件侧 WebSocket 服务端:BSD socket 手写 RFC6455(仅回环,临时端口)。
 /// 不用 NWListener:macOS 15+ 本地网络隐私对无 Info.plist 的裸进程直接 EINVAL(实测 2026-10-13),
@@ -157,6 +161,7 @@ public final class PluginServer: @unchecked Sendable {
 
             let connection = Connection(id: UUID(), fileDescriptor: descriptor)
             connections[connection.id] = connection
+            serverLog.info("server: accept fd=\(descriptor) 连接数=\(self.connections.count)")
             let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
             source.setEventHandler { [weak self] in
                 self?.readAvailable(connection)
@@ -174,6 +179,7 @@ public final class PluginServer: @unchecked Sendable {
     private func readAvailable(_ connection: Connection) {
         var buffer = [UInt8](repeating: 0, count: 65536)
         let count = read(connection.fileDescriptor, &buffer, buffer.count)
+        serverLog.info("server: read fd=\(connection.fileDescriptor) n=\(count)")
         if count <= 0 {
             // 0 = 对端关闭,-1 = EAGAIN/ECONNRESET 等
             finish(connection)
@@ -187,9 +193,11 @@ public final class PluginServer: @unchecked Sendable {
         if !connection.isHandshaken {
             completeHandshakeIfNeeded(connection)
             if !connection.isHandshaken { return } // 升级请求未收全
+            serverLog.info("server: 握手完成 fd=\(connection.fileDescriptor)")
         }
         while true {
             guard let frame = parseFrame(connection) else { break }
+            serverLog.info("server: 帧 fd=\(connection.fileDescriptor) op=\(frame.opcode) len=\(frame.payload.count) final=\(frame.isFinal)")
             switch frame.opcode {
             case 0x1, 0x2: // text / binary
                 if frame.isFinal {
@@ -329,6 +337,7 @@ public final class PluginServer: @unchecked Sendable {
 
     private func finish(_ connection: Connection) {
         guard !connection.isClosed else { return }
+        serverLog.info("server: finish fd=\(connection.fileDescriptor)")
         shutdown(connection)
         connections.removeValue(forKey: connection.id)
         onClose?(connection)

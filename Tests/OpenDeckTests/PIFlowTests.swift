@@ -53,7 +53,7 @@ struct PIFlowTests {
         try pi.send(#"{"event":"setSettings","context":"ctx-1","payload":{"k":"v"}}"#)
         let push = try await plugin.readUntil(contains: "didReceiveSettings")
         #expect(push.contains { $0.contains("\"k\"") }, "插件未实时收到 settings 变更,实收 \(push)")
-        let persisted = PluginSettingsStore(baseURL: sandbox.settings).document(pluginUUID: Self.pluginUUID)
+        let persisted = PluginSettingsStore(baseURL: sandbox.settings).load(pluginUUID: Self.pluginUUID)
         #expect(persisted.contexts[Self.contextID]?.settings == .object(["k": .string("v")]),
                 "PI 的 setSettings 未落盘:\(persisted.contexts)")
 
@@ -67,6 +67,14 @@ struct PIFlowTests {
         let toPI = try await pi.readUntil(contains: "sendToPropertyInspector")
         #expect(toPI.contains { $0.contains("sendToPropertyInspector") }, "实收 \(toPI)")
 
+        // ⑨ 17:41 失败类回归闸门:状态写不得殃及同 context 的 settings。
+        // setSettings 是整对象替换语义(与 OBS action.js 一致),故载荷带全量字段;
+        // 再模拟按键的状态切换(PI 发 setState,宿主内部应用、无插件回显),settings 必须原样存活
+        try pi.send(#"{"event":"setSettings","context":"ctx-1","payload":{"k":"v","gate":"keep-me"}}"#)
+        _ = try await pi.readUntil(contains: "didReceiveSettings") // 宿主对在开 PI 的回显
+        try pi.send(#"{"event":"setState","context":"ctx-1","payload":{"state":1}}"#)
+        try await Task.sleep(for: .milliseconds(300)) // 等状态写盘
+
         // ⑧ PI 断开 → 插件收 propertyInspectorDidDisappear
         pi.close()
         let disappear = try await plugin.readUntil(contains: "propertyInspectorDidDisappear")
@@ -74,6 +82,14 @@ struct PIFlowTests {
 
         plugin.close()
         model.shutdown()
+
+        // 闸门本体:经历 setSettings → setState 之后,settings 必须原样落盘(17:41 被抹的正是这一步)
+        let final = PluginSettingsStore(baseURL: sandbox.settings).load(pluginUUID: Self.pluginUUID)
+        #expect(final.contexts[Self.contextID]?.settings == .object([
+            "k": .string("v"),
+            "gate": .string("keep-me"),
+        ]), "状态写后 settings 被殃及:\(final.contexts[Self.contextID] as Any)")
+        #expect(final.contexts[Self.contextID]?.state == 1)
     }
 
     /// 草稿态预登记:instances 无此 context 时靠 pendingPI 定归属
