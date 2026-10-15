@@ -84,8 +84,8 @@ struct PluginManagerSheet: View {
                     Text("v\(plugin.manifest.version)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if !plugin.manifest.family.isNode {
-                        Text("HTML·暂不支持")
+                    if plugin.manifest.family == .unsupported {
+                        Text("不支持")
                             .font(.caption2)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
@@ -99,7 +99,7 @@ struct PluginManagerSheet: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            if plugin.manifest.family.isNode {
+            if plugin.manifest.family.isHostable {
                 Button(role: .destructive) {
                     uninstallTarget = plugin
                 } label: {

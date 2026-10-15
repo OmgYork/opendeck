@@ -15,6 +15,28 @@ struct PIFlowTests {
     private static let actionUUID = "com.test.fake.action"
     private static let contextID = "ctx-1"
     private static let manifestJSON = #"{"Name":"fake","Version":"1.0","Actions":[{"UUID":"com.test.fake.action","Name":"A1","PropertyInspectorPath":"pi/index.html"}]}"#
+    private static let webviewManifestJSON = #"{"Name":"fakeweb","Version":"1.0","CodePath":"index.html","Actions":[{"UUID":"com.test.fake.action","Name":"A1"}]}"#
+    /// 1×1 PNG(红)。页面收到 willAppear 后以此回 setImage,供 draw 钩子断言
+    private static let webviewHTML = """
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head><body><script>
+    window.connectElgatoStreamDeckSocket = function (port, uuid, registerEvent, info) {
+      JSON.parse(info);
+      var ws = new WebSocket('ws://127.0.0.1:' + port);
+      ws.onopen = function () {
+        ws.send(JSON.stringify({ event: registerEvent, uuid: uuid }));
+      };
+      ws.onmessage = function (e) {
+        var data = JSON.parse(e.data);
+        if (data.event === 'willAppear') {
+          ws.send(JSON.stringify({
+            event: 'setImage', context: data.context,
+            payload: { image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', target: 0 }
+          }));
+        }
+      };
+    };
+    </script></body></html>
+    """
 
     @Test("PI 全链路:注册推送、应答寻址、settings 双向、sendTo 透传、断开通知")
     func piFlow() async throws {
@@ -94,7 +116,6 @@ struct PIFlowTests {
 
     /// 草稿态预登记:instances 无此 context 时靠 pendingPI 定归属
     @Test("草稿态 PI 注册:pendingPI 兜底归属")
-    @MainActor
     func pendingPIRegistration() async throws {
         let sandbox = try makeSandbox()
         let model = PluginHostModel(pluginsRoot: sandbox.plugins, settingsRoot: sandbox.settings)
@@ -121,6 +142,38 @@ struct PIFlowTests {
         model.shutdown()
     }
 
+    /// HTML 家族全链:syncKey → spawn 建 webview → 真 WKWebView 加载页面 → 引导注入 →
+    /// WS 注册 → 宿主下发 willAppear → 页面回 setImage → 渲染钩子。
+    /// 钉死 webview 运行时与既有注册/路由管线的贯通(协议契约:官方 HTML 插件同款)。
+    @Test("HTML 家族 webview 运行时:加载→注册→willAppear→setImage 全链")
+    @MainActor
+    func htmlWebviewRuntime() async throws {
+        let sandbox = try makeWebviewSandbox()
+        let model = PluginHostModel(pluginsRoot: sandbox.plugins, settingsRoot: sandbox.settings)
+        var logs: [String] = []
+        model.hooks.log = { logs.append($0) }
+        var drawnIndexes: [Int] = []
+        model.hooks.draw = { index, _ in drawnIndexes.append(index) }
+        model.start()
+        try await waitUntil { model.port != 0 }
+
+        // 分配插件键 → ensureRuntime → spawn 家族分支建 webview
+        model.syncKey(at: 0, action: .plugin(
+            pluginID: Self.pluginUUID, actionUUID: Self.actionUUID, contextID: Self.contextID
+        ))
+        try await waitUntil({ logs.contains { $0.contains("已拉起 HTML 插件页") } }, timeout: 8)
+
+        // 页面加载 → 引导注入 → WS 注册 → willAppear 重放 → 页面回 setImage → 渲染
+        try await waitUntil({ logs.contains { $0.contains("插件已注册") } }, timeout: 8)
+        try await waitUntil({ !drawnIndexes.isEmpty }, timeout: 8)
+
+        // webview 存活判定(管理器状态点同款语义)
+        #expect(model.isRunning(pluginUUID: Self.pluginUUID))
+
+        model.shutdown()
+        #expect(!model.isRunning(pluginUUID: Self.pluginUUID))
+    }
+
     // MARK: - 沙盒与等待
 
     private struct Sandbox {
@@ -137,6 +190,19 @@ struct PIFlowTests {
         let pluginDir = plugins.appendingPathComponent("\(Self.pluginUUID).sdPlugin")
         try FileManager.default.createDirectory(at: pluginDir, withIntermediateDirectories: true)
         try Data(Self.manifestJSON.utf8).write(to: pluginDir.appendingPathComponent("manifest.json"))
+        return Sandbox(root: root, plugins: plugins, settings: settings)
+    }
+
+    /// HTML 家族沙盒:manifest 带 CodePath(.html 家族)+ 真入口页
+    private func makeWebviewSandbox() throws -> Sandbox {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-web-\(UUID().uuidString)")
+        let plugins = root.appendingPathComponent("plugins")
+        let settings = root.appendingPathComponent("pluginSettings")
+        let pluginDir = plugins.appendingPathComponent("\(Self.pluginUUID).sdPlugin")
+        try FileManager.default.createDirectory(at: pluginDir, withIntermediateDirectories: true)
+        try Data(Self.webviewManifestJSON.utf8).write(to: pluginDir.appendingPathComponent("manifest.json"))
+        try Data(Self.webviewHTML.utf8).write(to: pluginDir.appendingPathComponent("index.html"))
         return Sandbox(root: root, plugins: plugins, settings: settings)
     }
 

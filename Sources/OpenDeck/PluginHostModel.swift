@@ -59,6 +59,8 @@ final class PluginHostModel {
         let manifest: SDManifest
         let directoryURL: URL
         var process: PluginProcess?
+        /// HTML 家族运行时(与 process 互斥;webview 关闭 = 连接断开)
+        var webview: PluginWebviewRuntime?
         var connection: PluginServer.Connection?
         var registered = false
         var respawnAttempts = 0
@@ -69,6 +71,7 @@ final class PluginHostModel {
             self.directoryURL = directoryURL
         }
 
+        var isAlive: Bool { process != nil || webview != nil }
         var actionFor: [SDManifest.Action] { manifest.keypadActions }
         func action(uuid: String) -> SDManifest.Action? { manifest.keypadActions.first { $0.uuid == uuid } }
     }
@@ -160,6 +163,8 @@ final class PluginHostModel {
         for runtime in runtimes.values {
             runtime.process?.terminate()
             runtime.process = nil
+            runtime.webview?.close()
+            runtime.webview = nil
             runtime.connection = nil
             runtime.registered = false
         }
@@ -726,25 +731,52 @@ final class PluginHostModel {
     }
 
     private func spawn(_ runtime: Runtime) {
-        guard port != 0, runtime.process == nil,
+        guard port != 0, !runtime.isAlive,
               let entry = runtime.manifest.entryPathMac
         else { return }
-        guard let nodeURL = NodeLocator.locate() else {
-            hooks.log("未找到 node(装官方 StreamDock.app 或系统 node 后重试):\(runtime.manifest.pluginUUID)")
-            return
-        }
         let info = SDProtocol.registrationInfo(
             pluginUUID: runtime.manifest.pluginUUID,
             pluginVersion: runtime.manifest.version,
             device: .streamDock293V3
         )
+        let infoJSON = String(data: SDProtocol.encode(info), encoding: .utf8) ?? "{}"
+
+        // HTML 家族:隐藏 WKWebView 承载插件页,页面自行回连 WS 注册(不走 node)
+        if case .html = runtime.manifest.family {
+            let webview = PluginWebviewRuntime(
+                pluginUUID: runtime.manifest.pluginUUID,
+                directoryURL: runtime.directoryURL,
+                entryURL: runtime.directoryURL.appendingPathComponent(entry),
+                port: port,
+                infoJSON: infoJSON,
+                log: { [weak self] in self?.hooks.log($0) }
+            )
+            webview.onGone = { [weak self, weak runtime, weak webview] in
+                Task { @MainActor in
+                    guard let self, let runtime, let webview,
+                          runtime.webview === webview
+                    else { return } // 已被收割/替换
+                    runtime.webview = nil
+                    self.handleDisconnectAttempt(runtime)
+                }
+            }
+            runtime.wantsSpawn = false
+            runtime.webview = webview
+            hooks.log("已拉起 HTML 插件页:\(runtime.manifest.pluginUUID) @:\(port)")
+            return
+        }
+
+        guard let nodeURL = NodeLocator.locate() else {
+            hooks.log("未找到 node(装官方 StreamDock.app 或系统 node 后重试):\(runtime.manifest.pluginUUID)")
+            return
+        }
         let process = PluginProcess(
             pluginUUID: runtime.manifest.pluginUUID,
             nodeURL: nodeURL,
             entryURL: runtime.directoryURL.appendingPathComponent(entry),
             workingDirectory: runtime.directoryURL,
             port: port,
-            infoJSON: String(data: SDProtocol.encode(info), encoding: .utf8) ?? "{}"
+            infoJSON: infoJSON
         )
         process.onExit = { [weak self] _, code, tail in
             Task { @MainActor in
@@ -777,7 +809,7 @@ final class PluginHostModel {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self, let runtime = self.runtimes[runtime.manifest.pluginUUID],
-                  runtime.process == nil, self.serverStarted
+                  !runtime.isAlive, self.serverStarted
             else { return }
             self.spawn(runtime)
         }
@@ -861,6 +893,8 @@ final class PluginHostModel {
         if let runtime = runtimes[id] {
             runtime.process?.terminate()
             runtime.process = nil
+            runtime.webview?.close()
+            runtime.webview = nil
             runtime.connection = nil
             runtime.registered = false
             runtimes.removeValue(forKey: id)
@@ -869,8 +903,8 @@ final class PluginHostModel {
         reloadInstalledPlugins()
     }
 
-    /// 插件是否有存活进程(管理器状态点)
+    /// 插件是否有存活运行时(进程或 webview;管理器状态点)
     func isRunning(pluginUUID: String) -> Bool {
-        runtimes[pluginUUID]?.process != nil
+        runtimes[pluginUUID]?.isAlive == true
     }
 }

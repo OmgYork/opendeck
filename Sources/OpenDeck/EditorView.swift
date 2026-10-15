@@ -814,10 +814,10 @@ private struct KeyEditView: View {
 
     /// 插件动作:已装 Node 插件 → 其 Keypad 型动作 两级选择
     private var pluginActionForm: some View {
-        let nodePlugins = appModel.pluginHost.installedPlugins.filter { $0.manifest.family.isNode }
-        let selected = nodePlugins.first { $0.manifest.pluginUUID == pluginID }
+        let hostablePlugins = appModel.pluginHost.installedPlugins.filter { $0.manifest.family.isHostable }
+        let selected = hostablePlugins.first { $0.manifest.pluginUUID == pluginID }
         return Group {
-            if nodePlugins.isEmpty {
+            if hostablePlugins.isEmpty {
                 LabeledContent("说明") {
                     Text("尚未安装插件。请从菜单栏「⋯ → 插件管理…」安装 .sdPlugin 或导入官方插件")
                         .foregroundStyle(.secondary)
@@ -826,7 +826,7 @@ private struct KeyEditView: View {
                 LabeledContent("插件") {
                     Picker("", selection: $pluginID) {
                         Text("未选择").tag("")
-                        ForEach(nodePlugins, id: \.manifest.pluginUUID) { plugin in
+                        ForEach(hostablePlugins, id: \.manifest.pluginUUID) { plugin in
                             Text(plugin.manifest.name).tag(plugin.manifest.pluginUUID)
                         }
                     }

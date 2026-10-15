@@ -7,7 +7,7 @@ public struct SDManifest: Sendable, Equatable {
     public enum Family: Sendable, Equatable {
         /// Node 插件,可由宿主拉起;关联值 = manifest 要求的 node 大版本("20" 等,可能缺)
         case node(String?)
-        /// HTML 插件,需 WebView 宿主,M2 不支持
+        /// HTML 插件,宿主以隐藏 WKWebView 承载(M3-2 起支持)
         case html
         /// CodePath 缺失/无法识别
         case unsupported
@@ -15,6 +15,14 @@ public struct SDManifest: Sendable, Equatable {
         public var isNode: Bool {
             if case .node = self { return true }
             return false
+        }
+
+        /// 可被宿主承载:Node(子进程)或 HTML(WebView)
+        public var isHostable: Bool {
+            switch self {
+            case .node, .html: return true
+            case .unsupported: return false
+            }
         }
     }
 

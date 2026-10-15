@@ -96,8 +96,8 @@ public final class PluginRegistry: @unchecked Sendable {
         for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard entry.lastPathComponent.hasSuffix(".sdPlugin"),
                   let manifest = try? SDManifest.load(fromDirectory: entry),
-                  manifest.family.isNode
-            else { continue } // HTML 家族 M2 不支持,不导入
+                  manifest.family.isHostable
+            else { continue } // 无法识别家族不导入(node/html 均可承载)
             do {
                 try installDirectory(at: entry)
                 results.append((entry.lastPathComponent, nil))
