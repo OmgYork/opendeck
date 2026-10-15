@@ -153,7 +153,7 @@ struct EditorView: View {
                 }
                 Picker(selection: Binding(
                     get: { appModel.config.autoScreenOffMinutes },
-                    set: { appModel.config.autoScreenOffMinutes = $0 }
+                    set: { appModel.setAutoScreenOffMinutes($0) }
                 )) {
                     Text("自动熄屏:关").tag(0)
                     Text("自动熄屏:5 分钟").tag(5)

@@ -99,6 +99,11 @@ final class AppModel {
         if config.followSystemBrightness {
             startFollowingBrightness()
         }
+        // 亮度跟随与自动熄屏互斥(2026-10-15):旧配置两者同开时,启动即归一化关闭自动熄屏
+        if config.followSystemBrightness, config.autoScreenOffMinutes > 0 {
+            config.autoScreenOffMinutes = 0
+            appendLog("亮度跟随开启中,自动熄屏已关闭(两者互斥)")
+        }
         startScreenOffWatchdog()
     }
 
@@ -325,10 +330,24 @@ final class AppModel {
         config.followSystemBrightness
     }
 
-    /// 开关「亮度跟随 MacBook」:开启后每 1.5s 镜像内建屏亮度(环境光自动调节即随之生效)
+    /// 开关「亮度跟随 MacBook」:开启后每 1.5s 镜像内建屏亮度(环境光自动调节即随之生效)。
+    /// 与自动熄屏互斥:开启跟随即关闭自动熄屏(夜间变暗由跟随的 0% 涂黑承担)
     func setFollowSystemBrightness(_ on: Bool) {
         config.followSystemBrightness = on
+        if on, config.autoScreenOffMinutes > 0 {
+            config.autoScreenOffMinutes = 0
+            appendLog("亮度跟随已开启,自动熄屏已关闭(两者互斥)")
+        }
         on ? startFollowingBrightness() : stopFollowingBrightness()
+    }
+
+    /// ⋯菜单「自动熄屏」:与亮度跟随互斥——开启自动熄屏将关闭亮度跟随
+    func setAutoScreenOffMinutes(_ minutes: Int) {
+        config.autoScreenOffMinutes = minutes
+        if minutes > 0, config.followSystemBrightness {
+            appendLog("自动熄屏已开启,亮度跟随已关闭(两者互斥)")
+            setFollowSystemBrightness(false)
+        }
     }
 
     /// 「滑杆 0% 时键面涂黑」开关;关闭时若正处涂黑态立即按当前真实状态恢复
