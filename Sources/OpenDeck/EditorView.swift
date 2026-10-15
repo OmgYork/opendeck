@@ -109,6 +109,13 @@ struct EditorView: View {
         .onChange(of: appModel.device.state) { _, state in
             if state == .running { appModel.applyPageToDevice() }
         }
+        .modifier(ModalSwipeSuppression(
+            monitor: swipeMonitor,
+            editing: editingTarget != nil,
+            layout: showLayoutTuning,
+            manager: showPluginManager,
+            binding: pageBindingSheetShown
+        ))
         .sheet(item: $editingTarget) { target in
             KeyEditView(index: target.index, appModel: appModel)
         }
@@ -995,6 +1002,8 @@ private final class SwipePageMonitor {
     private var token: Any?
     /// 回调:isHorizontal(水平=切场景/垂直=场景内翻页)+ 方向(+1 下一/-1 上一)
     var onSwipe: ((_ isHorizontal: Bool, _ direction: Int) -> Void)?
+    /// 模态抑制:Sheet(键编辑/调参/插件管理/场景联动)打开时手势让路,滚动交还给面板
+    var isSuppressed = false
 
     private var horizontalAccumulated: CGFloat = 0
     private var verticalAccumulated: CGFloat = 0
@@ -1025,6 +1034,9 @@ private final class SwipePageMonitor {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
+        // 模态上下文(Sheet 打开):手势让路,滚动交还给面板;抑制期动量也放行
+        if isSuppressed { return event }
+
         let dx = event.scrollingDeltaX
         let dy = event.scrollingDeltaY
 
@@ -1092,6 +1104,34 @@ private final class SwipePageMonitor {
             return nil
         }
         return nil
+    }
+}
+
+// MARK: - 模态滑动抑制
+
+/// 任一 Sheet 打开 → 滑动手势让路,滚动交还给面板(键编辑 PI/调参/插件管理/场景联动)。
+/// 用 ViewModifier 而非实例方法:链式调用查的是 View 值的类型,查不到 EditorView 的私有方法
+private struct ModalSwipeSuppression: ViewModifier {
+    let monitor: SwipePageMonitor
+    let editing: Bool
+    let layout: Bool
+    let manager: Bool
+    let binding: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: editing) { _, value in
+                monitor.isSuppressed = value
+            }
+            .onChange(of: layout) { _, value in
+                monitor.isSuppressed = value
+            }
+            .onChange(of: manager) { _, value in
+                monitor.isSuppressed = value
+            }
+            .onChange(of: binding) { _, value in
+                monitor.isSuppressed = value
+            }
     }
 }
 
