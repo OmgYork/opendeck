@@ -171,7 +171,17 @@ function handle(msg) {
       log('全局设置应答收到 ✓(宿主必答验证通过)');
       break;
     case 'didReceiveSettings':
-      log('settings 应答收到 ✓');
+      log('settings 应答收到 ✓', JSON.stringify((msg.payload || {}).settings || {}));
+      // PI 全链路回显:PI 改的 titleText 直接刷到键面(设备上肉眼可验 PI→宿主→插件闭环)
+      {
+        const text = (msg.payload || {}).settings && msg.payload.settings.titleText;
+        if (text !== undefined) {
+          sendText(JSON.stringify({
+            event: 'setTitle', context: msg.context,
+            payload: { title: text || '待命', target: 0 },
+          }));
+        }
+      }
       break;
   }
 }

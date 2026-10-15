@@ -2,8 +2,8 @@
 
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
-> 最后更新:2026-10-15
-> **M2.5 已全部验收通过(2026-10-15,含竖扫方向修复与场景联动补强)**;下一步 M3:Property Inspector > HTML 家族插件 > 自研 ZCode 状态灯
+> 最后更新:2026-10-15(M3-1 PI 代码落地 + 集成测试全绿,待真机验收)
+> **M2.5 已全部验收通过(2026-10-15)**;M3 进行中:Property Inspector(✅ 代码落地见 §6.9,待验收)> HTML 家族插件 > 自研 ZCode 状态灯
 
 ---
 
@@ -184,6 +184,15 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **亮度跟随 × 自动熄屏互斥(2026-10-15 验收反馈)**:两者同开会叠出「内屏 0% 涂黑后看门狗再叠熄屏,晨起调亮被熄屏守卫挡住、永不恢复」的卡死(日志实证)。语义:开启跟随自动归零自动熄屏;开启自动熄屏自动关跟随;启动时归一化遗留同开配置。手动「立即熄屏」不受影响,仍为仅按键唤醒(显式指令显式唤醒)。夜间变暗需求由跟随的 0% 涂黑承担
 - **场景联动补强(验收实测)**:关窗即评估(三连采样 +0.3s/+1s/+2s 覆盖「关窗瞬间 frontmost 仍是自己」的结算竞态,评估幂等);联动决策与前台探针日志(前台探针走 oslog debug 防刷屏)。**竖扫方向教训:AppKit 的 scrollingDeltaY 与 deltaX 符号约定相反**(自然滚动下左扫 deltaX 为正、上扫 deltaY 为负),勿按直觉假设,以真机实证为准
 
-### 6.5 已知限制(→ M3)
-- SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;Property Inspector 未做(动作参数不可配,直播/录制等零参动作不受影响);HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装
-- M3 优先级建议:PI(WKWebView)> 多页面 > HTML 家族 > 自研插件实战(如 ZCode 状态灯:hook 写状态文件/打本地端口 → 插件推色)
+### 6.8 已知限制(→ M3 后续)
+- SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装
+- M3 优先级建议:PI(WKWebView,✅ 已落地见 §6.9)> 多页面(✅ M2.5)> HTML 家族 > 自研插件实战(如 ZCode 状态灯:hook 写状态文件/打本地端口 → 插件推色)
+
+### 6.9 M3-1 Property Inspector(2026-10-15 落地)
+- **协议契约(实测钉死,来源 = OBS 插件 `propertyInspector/utils/action.js`,勿凭文档想象)**:
+  宿主向 PI 页面注入调用 `connectElgatoStreamDeckSocket(port, contextID, "registerPropertyInspector", app, info)`——第 2 参是 **action 实例 contextID**(PI 的 setSettings/getSettings/sendToPlugin 的 context 都填它),`info` 含 `{action, context, payload.settings}`,`app` 为 registrationInfo 全量 JSON(PI 取 `.application.language` XHR 插件根的 `<lang>.json`);PI 注册包 `{event, uuid}` **无 action 字段**,宿主按 contextID 反查归属(instances 表,草稿态用 pendingPI 预登记兜底);**时序硬约束:PI 等首条下行消息才发 getGlobalSettings、等 didReceiveSettings 才显示主界面 → 注册后宿主必须主动推 didReceiveSettings,否则页面永久空白**;PI 侧 get/setGlobalSettings 的 context 字段填 contextID(≠插件侧的 pluginUUID);PI 可直接发 setTitle/setState/setImage 操纵键面;sendToPlugin/sendToPropertyInspector 双向原帧透传
+- **实现布局**:`SDProtocol` 增 3 解析 + 2 编码;`SDManifest` 补顶层 `PropertyInspector` 兜底字段 + `piPagePath`(action 级优先);`PluginHostModel` 增 `piByConnection` 归属表 + **PI 专属 switch(应答按请求连接寻址,与插件路径的 runtime 寻址不同)** + `prepareForPI/registerPendingPI/piSettings/piPageURL/piRegistrationInfoJSON/piActionInfoJSON/removeContextRecord` 公共 API + init 根目录注入接缝(单测隔离);UI 侧 `PropertyInspectorView.swift`(WKWebView,文件域限定插件根,documentEnd 用户脚本轮询注入引导,10s 上限)挂 `KeyEditView`「动作参数」Section(`.id(action/context)` 换动作即重建);连接随 webview 释放断开 → 宿主发 propertyInspectorDidDisappear
+- **草稿实例身份**:KeyEditView 原以计算属性现算 contextID(每次求值新 UUID),PI 需稳定 id → `@State draftContextID`(原动作复用持久化 context,换动作 onChange 一次生成);取消编辑时清理草稿 context 的孤儿 settings 记录(`removeContextRecord`)
+- **settings 流语义**:PI setSettings → 落盘 + 插件实时收 didReceiveSettings + 在开 PI 回显;插件 setSettings → 落盘 + 在开 PI 同步(UI 不脱节)
+- **已知边界(记录不处理)**:PI 页面 `<input type="file">` 无面板可弹(WKUIDelegate 可选方法与 MainActor 默认隔离相抵,已知在装插件未用文件输入);同 context 多 PI 并存的相互同步靠回显兜底
+- **验证**:PIFlowTests 集成测试(假插件+假 PI 双真 socket 连接)8 断言全过;43 单测零警告;fake 插件(Scripts/opendeck.fake.sdPlugin)带 PI 回显页(输入 titleText → setSettings → 插件收 didReceiveSettings 刷键面标题,设备上肉眼可验全链路);OBS 插件 18 动作全带 PI 页为真实验收靶

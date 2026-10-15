@@ -573,6 +573,39 @@ final class PluginHostModel {
         installedPlugins.first(where: { $0.manifest.pluginUUID == pluginID })?.directoryURL
     }
 
+    /// PI 引导第 4 参:app JSON(registrationInfo 全量;PI 取 .application.language 加载语言包)
+    func piRegistrationInfoJSON(pluginID: String) -> String? {
+        guard let installed = installedPlugins.first(where: { $0.manifest.pluginUUID == pluginID }) else {
+            return nil
+        }
+        let info = SDProtocol.registrationInfo(
+            pluginUUID: installed.manifest.pluginUUID,
+            pluginVersion: installed.manifest.version,
+            device: .streamDock293V3
+        )
+        return String(data: SDProtocol.encode(info), encoding: .utf8)
+    }
+
+    /// PI 引导第 5 参:actionInfo JSON({action, context, payload.settings})
+    func piActionInfoJSON(pluginID: String, actionUUID: String, contextID: String) -> String {
+        let info = JSONValue.object([
+            "action": .string(actionUUID),
+            "context": .string(contextID),
+            "payload": .object([
+                "settings": piSettings(pluginUUID: pluginID, contextID: contextID),
+                "coordinates": .object(["column": .int(0), "row": .int(0)]),
+            ]),
+        ])
+        return String(data: SDProtocol.encode(info), encoding: .utf8) ?? "{}"
+    }
+
+    /// 删除 context 的持久化记录(草稿取消时清理 PI 已写入的孤儿数据)
+    func removeContextRecord(pluginID: String, contextID: String) {
+        var document = document(pluginUUID: pluginID)
+        guard document.contexts.removeValue(forKey: contextID) != nil else { return }
+        saveDocument(document, pluginUUID: pluginID)
+    }
+
     private func handleDisconnect(_ connection: PluginServer.Connection) {
         // PI 连接:通知插件 PI 已消失并摘表;与插件进程断开语义无关
         if let pi = piByConnection.removeValue(forKey: connection.id) {

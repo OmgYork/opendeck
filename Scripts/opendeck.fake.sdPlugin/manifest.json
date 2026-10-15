@@ -11,6 +11,7 @@
     {
       "UUID": "opendeck.fake.toggle",
       "Name": "红绿切换",
+      "PropertyInspectorPath": "propertyInspector/index.html",
       "States": [
         { "Image": "images/off" },
         { "Image": "images/on" }

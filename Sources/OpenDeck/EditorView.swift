@@ -524,6 +524,9 @@ private struct KeyEditView: View {
     @State private var mediaKeyValue: String
     @State private var pluginID: String
     @State private var pluginActionUUID: String
+    /// 草稿实例身份:PI(webview 生命周期)与保存组装共用,必须跨渲染稳定。
+    /// 原动作未变 = 复用持久化 contextID;换了动作 = onChange 时一次性生成新 UUID。
+    @State private var draftContextID: String
 
     init(index: Int, appModel: AppModel) {
         self.index = index
@@ -544,6 +547,7 @@ private struct KeyEditView: View {
         var mediaKey = "playPause"
         var pluginID = ""
         var pluginActionUUID = ""
+        var draftContextID = ""
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url
@@ -552,10 +556,11 @@ private struct KeyEditView: View {
         case .appleScript(let script): kind = .appleScript; scriptText = script
         case .hotkey(let code, let mods): kind = .hotkey; keyCode = code; modifiers = mods
         case .mediaKey(let name): kind = .mediaKey; mediaKey = name
-        case .plugin(let id, let actionUUID, _):
+        case .plugin(let id, let actionUUID, let contextID):
             kind = .plugin
             pluginID = id
             pluginActionUUID = actionUUID
+            draftContextID = contextID
         case .previousPage: kind = .previousPage
         case .nextPage: kind = .nextPage
         case .previousScene: kind = .previousScene
@@ -575,6 +580,7 @@ private struct KeyEditView: View {
         _mediaKeyValue = State(initialValue: mediaKey)
         _pluginID = State(initialValue: pluginID)
         _pluginActionUUID = State(initialValue: pluginActionUUID)
+        _draftContextID = State(initialValue: draftContextID)
     }
 
     /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
@@ -619,13 +625,16 @@ private struct KeyEditView: View {
                     }
                     actionForm
                 }
+                if kind == .plugin {
+                    piSection
+                }
             }
             .formStyle(.grouped)
 
             Divider()
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }
+                Button("取消") { cancelEdit() }
                 Button("保存") { save() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
@@ -633,6 +642,51 @@ private struct KeyEditView: View {
             .padding(12)
         }
         .frame(width: 520)
+    }
+
+    /// 动作参数(Property Inspector):插件动作带 PI 页时内嵌 webview,即改即存
+    @ViewBuilder
+    private var piSection: some View {
+        if case .plugin(let pluginID, let actionUUID, let contextID) = assembledPluginAction {
+            if appModel.pluginHost.port != 0,
+               let piURL = appModel.pluginHost.piPageURL(pluginID: pluginID, actionUUID: actionUUID),
+               let pluginRoot = appModel.pluginHost.pluginRootURL(pluginID: pluginID),
+               let appJSON = appModel.pluginHost.piRegistrationInfoJSON(pluginID: pluginID) {
+                Section("动作参数(Property Inspector)") {
+                    PropertyInspectorView(
+                        pageURL: piURL,
+                        readAccessRoot: pluginRoot,
+                        port: appModel.pluginHost.port,
+                        contextID: contextID,
+                        appJSON: appJSON,
+                        actionInfoJSON: appModel.pluginHost.piActionInfoJSON(
+                            pluginID: pluginID, actionUUID: actionUUID, contextID: contextID
+                        )
+                    )
+                    .frame(height: 340)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .id("\(pluginID)/\(actionUUID)/\(contextID)") // 换动作/换实例即重建 webview
+                    .onAppear {
+                        appModel.pluginHost.prepareForPI(pluginUUID: pluginID)
+                        appModel.pluginHost.registerPendingPI(
+                            pluginUUID: pluginID, actionUUID: actionUUID, contextID: contextID
+                        )
+                    }
+                    .onDisappear {
+                        appModel.pluginHost.clearPendingPI(contextID: contextID)
+                    }
+                }
+            } else {
+                Section {
+                    LabeledContent("参数") {
+                        Text(appModel.pluginHost.port != 0
+                            ? "该动作无可配置参数"
+                            : "插件宿主未就绪,重开编辑器即可加载参数面板")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: 外观控件
@@ -778,7 +832,10 @@ private struct KeyEditView: View {
                     }
                     .labelsHidden()
                     .frame(width: 220)
-                    .onChange(of: pluginID) { _, _ in pluginActionUUID = "" }
+                    .onChange(of: pluginID) { _, _ in
+                        pluginActionUUID = ""
+                        refreshDraftContext()
+                    }
                 }
                 LabeledContent("动作") {
                     if let selected {
@@ -790,16 +847,24 @@ private struct KeyEditView: View {
                         }
                         .labelsHidden()
                         .frame(width: 220)
+                        .onChange(of: pluginActionUUID) { _, _ in refreshDraftContext() }
                     } else {
                         Text("—").foregroundStyle(.secondary)
                     }
                 }
-                LabeledContent("说明") {
-                    Text("动作参数面板(Property Inspector)将在 M3 提供;直播/录制等动作开箱即用")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
+        }
+    }
+
+    /// 草稿实例身份维护:原插件动作未变复用原 contextID(实例跨保存稳定);新动作一次性生成新身份
+    private func refreshDraftContext() {
+        if case .plugin(let oldPlugin, let oldAction, let oldContext) = originalAction,
+           oldPlugin == pluginID, oldAction == pluginActionUUID {
+            draftContextID = oldContext
+        } else if !pluginID.isEmpty, !pluginActionUUID.isEmpty {
+            draftContextID = UUID().uuidString
+        } else {
+            draftContextID = ""
         }
     }
 
@@ -858,17 +923,25 @@ private struct KeyEditView: View {
         }
     }
 
-    /// 插件动作组装:同键保存同一动作 → 复用原 contextID;换动作 → 生成新实例
+    /// 插件动作组装:contextID 来自草稿状态(原动作复用持久化身份;换动作在 onChange 时已定)
     private var assembledPluginAction: KeyAction? {
-        guard !pluginID.isEmpty, !pluginActionUUID.isEmpty else { return nil }
-        let contextID: String
-        if case .plugin(let oldPlugin, let oldAction, let oldContext) = originalAction,
-           oldPlugin == pluginID, oldAction == pluginActionUUID {
-            contextID = oldContext
+        guard !pluginID.isEmpty, !pluginActionUUID.isEmpty, !draftContextID.isEmpty else { return nil }
+        return .plugin(pluginID: pluginID, actionUUID: pluginActionUUID, contextID: draftContextID)
+    }
+
+    /// 取消编辑:草稿新增的 context 若已被 PI 写入 settings,清理孤儿记录(原动作的记录不动)
+    private func cancelEdit() {
+        let isOriginalPluginAction: Bool
+        if case .plugin(let oldPlugin, let oldAction, _) = originalAction {
+            isOriginalPluginAction = oldPlugin == pluginID && oldAction == pluginActionUUID
         } else {
-            contextID = UUID().uuidString
+            isOriginalPluginAction = false
         }
-        return .plugin(pluginID: pluginID, actionUUID: pluginActionUUID, contextID: contextID)
+        if !isOriginalPluginAction, kind == .plugin, !draftContextID.isEmpty {
+            appModel.pluginHost.removeContextRecord(pluginID: pluginID, contextID: draftContextID)
+        }
+        appModel.pluginHost.clearPendingPI(contextID: draftContextID)
+        dismiss()
     }
 
     private func save() {
