@@ -218,6 +218,7 @@ final class PluginSmokeRig {
     private func messageSummary(_ message: PluginInbound) -> String {
         switch message {
         case .registered(let uuid): return "registered \(uuid)"
+        case .registeredPI(let uuid): return "registeredPI ctx=\(uuid.prefix(12))"
         case .setImage(let context, let image, let state, let target):
             let preview = image.map { $0.isEmpty ? "<空串=恢复默认>" : "<\($0.prefix(28))…>" } ?? "<缺失>"
             return "setImage ctx=\(context.prefix(12)) image=\(preview) state=\(state.map(String.init) ?? "-") target=\(target)"
@@ -227,6 +228,8 @@ final class PluginSmokeRig {
         case .getSettings(let context): return "getSettings ctx=\(context.prefix(12))"
         case .setGlobalSettings(let uuid, _): return "setGlobalSettings \(uuid.prefix(16))"
         case .getGlobalSettings(let uuid): return "getGlobalSettings \(uuid.prefix(16))"
+        case .sendToPlugin(let action, let context, _): return "sendToPlugin action=\(action ?? "-") ctx=\(context?.prefix(12) ?? "-")"
+        case .sendToPropertyInspector(let context, _): return "sendToPropertyInspector ctx=\(context?.prefix(12) ?? "-")"
         case .showOk: return "showOk"
         case .showAlert: return "showAlert"
         case .openURL(let url): return "openUrl \(url)"

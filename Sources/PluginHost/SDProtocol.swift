@@ -3,6 +3,9 @@ import Foundation
 /// Elgato Stream Deck SDK v2 插件协议,宿主侧编解码。
 /// 事实来源:developer.elgato.com 经典 v2 文档 + MiraBox 官方 OBS 插件源码归纳(2026-10-13 侦察,
 /// 见 HANDOFF.md §1.4)。关键差异点:插件按 argv 位置取参、注册后必答 didReceiveGlobalSettings。
+/// PI 侧事实(M3,2026-10-15):注册包 = {event:"registerPropertyInspector", uuid:<contextID>},
+/// PI 的 get/setGlobalSettings 的 context 字段填 contextID(非 pluginUUID);宿主注册后必须主动推
+/// didReceiveSettings,否则 OBS PI 等到首条下行才初始化、主界面永不显示(action.js 实测)。
 public enum SDProtocol {
     /// 提供给插件的设备描述;type 0 = Stream Deck(15 键 5×3),与 293V3 一致
     public struct Device: Sendable, Equatable {
@@ -141,10 +144,19 @@ public enum SDProtocol {
         makeEvent("systemDidWakeUp")
     }
 
+    /// PI 注册成功后通知插件,插件可借此向 PI 推送当前状态(sendToPropertyInspector)
+    public static func propertyInspectorDidAppear(action: String, context: String, device: Device) -> JSONValue {
+        makeEvent("propertyInspectorDidAppear", action: action, context: context, device: device.id)
+    }
+
+    /// PI 断开后通知插件
+    public static func propertyInspectorDidDisappear(action: String, context: String, device: Device) -> JSONValue {
+        makeEvent("propertyInspectorDidDisappear", action: action, context: context, device: device.id)
+    }
+
     // MARK: - plugin → host 解析
 
     /// 宽容解析:未知字段忽略、未知事件归入 .unhandled(吞掉不崩),非法 JSON 返回 nil。
-    /// M2 明确不执行的事件(PI 相关/titleParametersDidChange/switchToProfile 等)同样落 .unhandled。
     public static func parse(_ data: Data) -> PluginInbound? {
         guard let any = try? JSONSerialization.jsonObject(with: data),
               let object = any as? [String: Any],
@@ -156,6 +168,19 @@ public enum SDProtocol {
         switch event {
         case "registerPlugin":
             return .registered(pluginUUID: json["uuid"]?.stringValue ?? context ?? "")
+        case "registerPropertyInspector":
+            // PI 注册包只有 uuid(= action 实例 contextID),无 action 字段(OBS 插件 action.js 实证);
+            // 归属由上层按 contextID 反查 instances 表
+            guard let uuid = json["uuid"]?.stringValue ?? context, !uuid.isEmpty else {
+                return .unhandled(event: event)
+            }
+            return .registeredPI(uuid: uuid)
+        case "sendToPlugin":
+            // PI → 插件的消息,宿主按原帧透传;解析只为路由与日志
+            return .sendToPlugin(action: json["action"]?.stringValue, context: context, payload: payload)
+        case "sendToPropertyInspector":
+            // 插件 → PI 的消息,宿主按 context 找到在开 PI 连接后同样原帧透传
+            return .sendToPropertyInspector(context: context, payload: payload)
         case "setImage":
             guard let context else { return .unhandled(event: event) }
             return .setImage(
@@ -242,6 +267,8 @@ public enum SDProtocol {
 /// 插件发来的已解析消息
 public enum PluginInbound: Sendable, Equatable {
     case registered(pluginUUID: String)
+    /// PI 注册;uuid = action 实例 contextID
+    case registeredPI(uuid: String)
     case setImage(context: String, image: String?, state: Int?, target: Int)
     case setTitle(context: String, title: String?, state: Int?, target: Int)
     case setState(context: String, state: Int)
@@ -249,10 +276,14 @@ public enum PluginInbound: Sendable, Equatable {
     case getSettings(context: String)
     case setGlobalSettings(pluginUUID: String, settings: JSONValue)
     case getGlobalSettings(pluginUUID: String)
+    /// PI 发往插件的消息(宿主原帧透传)
+    case sendToPlugin(action: String?, context: String?, payload: JSONValue)
+    /// 插件发往 PI 的消息(宿主按 context 路由后原帧透传)
+    case sendToPropertyInspector(context: String?, payload: JSONValue)
     case showOk(context: String?)
     case showAlert(context: String?)
     case openURL(String)
     case logMessage(String)
-    /// M2 不执行(PI 相关等)或未知的事件;宿主按日志处理,绝不能因此崩
+    /// 未识别或宿主不执行的事件;宿主按日志处理,绝不能因此崩
     case unhandled(event: String)
 }

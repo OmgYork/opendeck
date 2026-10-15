@@ -42,9 +42,18 @@ public struct SDManifest: Sendable, Equatable {
     public let entryPathMac: String?
     public let actions: [Action]
     public let family: Family
+    /// 旧风格顶层 PI 路径(v1 manifest 把 PI 页写在顶层;v2 挪进了各 action)
+    public let propertyInspectorPath: String?
 
     /// 仅保留 Keypad 型 action(Knob/Card 等在 15 键板上无意义)
     public var keypadActions: [Action] { actions.filter(\.isKeypadAction) }
+
+    /// 指定 action 的 PI 页面相对路径:action 级优先,顶层兜底;两处皆无返回 nil
+    public func piPagePath(actionUUID: String) -> String? {
+        let actionPath = actions.first { $0.uuid == actionUUID }?.propertyInspectorPath
+        let candidates = [actionPath, propertyInspectorPath].compactMap { $0 }
+        return candidates.first { !$0.isEmpty }
+    }
 
     // MARK: - 解析
 
@@ -88,7 +97,8 @@ public struct SDManifest: Sendable, Equatable {
             version: mirror.Version ?? "0.0.0",
             entryPathMac: entryPath,
             actions: actions,
-            family: family
+            family: family,
+            propertyInspectorPath: mirror.PropertyInspector
         )
     }
 
@@ -137,4 +147,5 @@ private struct ManifestMirror: Decodable {
     var CodePathWin: String?
     var Nodejs: [String: String]?
     var Actions: [ActionMirror]?
+    var PropertyInspector: String?
 }

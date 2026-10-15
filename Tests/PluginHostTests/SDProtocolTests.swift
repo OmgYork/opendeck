@@ -53,6 +53,27 @@ struct SDProtocolTests {
         #expect(SDProtocol.parse(Data(#"[1,2,3]"#.utf8)) == nil)
     }
 
+    // MARK: PI(Property Inspector)
+
+    @Test("PI 注册包:uuid 即 contextID,无 action 字段(OBS action.js 实测)")
+    func parseRegisterPI() {
+        #expect(SDProtocol.parse(Data(#"{"event":"registerPropertyInspector","uuid":"ctx-1"}"#.utf8))
+            == .registeredPI(uuid: "ctx-1"))
+        // uuid 缺失时不落 .registeredPI(否则无法定归属)
+        #expect(SDProtocol.parse(Data(#"{"event":"registerPropertyInspector"}"#.utf8))
+            == .unhandled(event: "registerPropertyInspector"))
+    }
+
+    @Test("sendToPlugin / sendToPropertyInspector 解析(宿主两侧原帧透传)")
+    func parseSendToRelay() {
+        #expect(SDProtocol.parse(Data(#"{"event":"sendToPlugin","action":"a","context":"c","payload":{"k":1}}"#.utf8))
+            == .sendToPlugin(action: "a", context: "c", payload: .object(["k": .int(1)])))
+        #expect(SDProtocol.parse(Data(#"{"event":"sendToPropertyInspector","context":"c","payload":{"x":"y"}}"#.utf8))
+            == .sendToPropertyInspector(context: "c", payload: .object(["x": .string("y")])))
+        #expect(SDProtocol.parse(Data(#"{"event":"sendToPlugin","payload":{}}"#.utf8))
+            == .sendToPlugin(action: nil, context: nil, payload: .object([:])))
+    }
+
     // MARK: host → plugin
 
     @Test("willAppear 黄金结构:含 settings/coordinates/state/isInMultiAction")
@@ -102,6 +123,21 @@ struct SDProtocolTests {
         #expect(event["device"] == .string("OpenDeck-293V3"))
         #expect(event["deviceInfo"]?["type"] == .int(0))
         #expect(event["deviceInfo"]?["size"] == .object(["columns": .int(5), "rows": .int(3)]))
+    }
+
+    @Test("propertyInspectorDidAppear/DidDisappear 黄金结构")
+    func encodePIVisibility() {
+        let appear = SDProtocol.propertyInspectorDidAppear(action: "a", context: "c", device: device)
+        #expect(appear == .object([
+            "event": .string("propertyInspectorDidAppear"),
+            "action": .string("a"),
+            "context": .string("c"),
+            "device": .string("OpenDeck-293V3"),
+        ]))
+        let disappear = SDProtocol.propertyInspectorDidDisappear(action: "a", context: "c", device: device)
+        #expect(disappear["event"] == .string("propertyInspectorDidDisappear"))
+        #expect(SDProtocol.parse(SDProtocol.encode(appear)) != nil)
+        #expect(SDProtocol.parse(SDProtocol.encode(disappear)) != nil)
     }
 
     @Test("registrationInfo:application.language 等硬字段齐备")

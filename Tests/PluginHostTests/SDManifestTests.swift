@@ -108,6 +108,30 @@ struct SDManifestTests {
         #expect(broken.family == .unsupported)
     }
 
+    @Test("PI 页面路径:action 级优先,顶层 PropertyInspector 兜底,空串视为未配置")
+    func piPagePath() throws {
+        let manifest = try SDManifest.parse(Data(#"""
+        {
+          "CodePath": "plugin/index.js",
+          "PropertyInspector": "pi/top.html",
+          "Actions": [
+            { "UUID": "a1", "Name": "A1", "PropertyInspectorPath": "pi/action.html" },
+            { "UUID": "a2", "Name": "A2", "PropertyInspectorPath": "" },
+            { "UUID": "a3", "Name": "A3" }
+          ]
+        }
+        """#.utf8), directoryName: "com.x.pi.sdPlugin")
+        #expect(manifest.piPagePath(actionUUID: "a1") == "pi/action.html")
+        #expect(manifest.piPagePath(actionUUID: "a2") == "pi/top.html")
+        #expect(manifest.piPagePath(actionUUID: "a3") == "pi/top.html")
+        #expect(manifest.piPagePath(actionUUID: "missing") == "pi/top.html")
+
+        let topOnly = try SDManifest.parse(
+            Data(#"{"CodePath":"plugin/index.js","Actions":[{"UUID":"a","Name":"A"}]}"#.utf8),
+            directoryName: "com.x.t.sdPlugin")
+        #expect(topOnly.piPagePath(actionUUID: "a") == nil)
+    }
+
     @Test("图片扩展名探测:manifest 无扩展名 → 实际 .png")
     func resolveImageExtension() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
