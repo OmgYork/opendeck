@@ -574,6 +574,15 @@ final class AppModel {
                 }
             })
         }
+        // Mac 睡眠唤醒:睡眠期间心跳中断,设备多半已自重启进待机;若 USB 未重枚举,
+        // attach 校准不会触发,须主动重校准恢复键面(设备若真重枚举了,守卫让位给 attach 路径)
+        workspaceObservers.append(center.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.device.recalibrateAfterSystemWake()
+            }
+        })
     }
 
     private func appendLog(_ line: String) {

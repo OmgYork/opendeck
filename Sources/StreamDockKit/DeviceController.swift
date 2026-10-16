@@ -98,6 +98,18 @@ public final class DeviceController {
         onLog?("已从熄屏唤醒,键面已恢复")
     }
 
+    /// Mac 系统睡眠唤醒后的主动恢复:睡眠期间心跳中断,设备多半已自重启进待机,
+    /// 且 USB 未必重新枚举(不枚举则 attach 校准路径不会触发)。握手先行 + 按缓存
+    /// 全量重画,状态标志复位(与 handleAttached 同语义,但不重开传输);
+    /// 若设备确实重枚举了,本方法在 .running 守卫下让位给 attach 路径
+    public func recalibrateAfterSystemWake() {
+        guard state == .running else { return }
+        isScreenOff = false
+        keysBlacked = false
+        onLog?("系统唤醒:重新校准(握手→亮度→清屏→按缓存全量重画)")
+        calibrate()
+    }
+
     /// 键面纯黑覆盖/恢复:熄屏与「亮度跟随 0%」共用。只涂黑可见内容,
     /// 不触碰状态机与 keyImageCache;恢复 = 按缓存全量重画
     public func setKeysBlacked(_ black: Bool) {
