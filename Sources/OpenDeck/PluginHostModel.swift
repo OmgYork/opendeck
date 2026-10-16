@@ -219,9 +219,43 @@ final class PluginHostModel {
             keyIndex: index,
             state: record.state
         )
+        redrawInstanceIfPresent(at: index) // 多状态动作上屏即显当前态 manifest 默认图(插件 setImage 者随后照常覆盖)
         if runtime.registered {
             sendWillAppear(instances[contextID]!, runtime: runtime)
         }
+    }
+
+    /// 实例已存在时按当前状态重渲该键(AppModel.applyKey 在瓷贴绘制后调用,盖过静态瓷砖)
+    func redrawInstanceIfPresent(at index: Int) {
+        guard let instance = instances.values.first(where: { $0.keyIndex == index }) else { return }
+        redraw(instance)
+    }
+
+    // MARK: - 多状态(编辑器展示与手动切换)
+
+    /// 动作的态数(草稿未落盘时回退查已安装 manifest);单态/未知返回 nil
+    func stateCount(pluginID: String, actionUUID: String) -> Int? {
+        if let runtime = runtimes[pluginID], let action = runtime.action(uuid: actionUUID), action.stateCount > 1 {
+            return action.stateCount
+        }
+        let count = installedPlugins.first { $0.manifest.pluginUUID == pluginID }?
+            .manifest.keypadActions.first { $0.uuid == actionUUID }?.stateCount
+        return (count ?? 0) > 1 ? count : nil
+    }
+
+    /// 实例当前态(草稿未保存时无实例 → nil,UI 显示默认第 1 态)
+    func currentState(pluginID: String, contextID: String) -> Int? {
+        instances[contextID]?.state ?? settingsDocs[pluginID]?.contexts[contextID]?.state
+    }
+
+    /// 手动轮换到下一态(编辑器「切换预览」;与 keyUp 自动轮换同一出口,落盘 + 重渲)
+    func cycleState(pluginID: String, contextID: String) {
+        guard let instance = instances.values.first(where: { $0.pluginUUID == pluginID && $0.contextID == contextID }),
+              let runtime = runtimes[pluginID],
+              let manifestAction = runtime.action(uuid: instance.actionUUID),
+              manifestAction.stateCount > 1
+        else { return }
+        setState(instance, (instance.state + 1) % manifestAction.stateCount)
     }
 
     // MARK: - 按键事件(AppModel.onKeyEvent 分流;按下抬起两沿都要)

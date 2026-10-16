@@ -237,3 +237,12 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **time 死因定案(非宿主,不再追)**:Vue 应用挂载正常(argv 就位/Pinia store 收到 willAppear 完整报文/插件自行重写了 settings 默认值),**但视图层永远渲染 7 字节空注释 `<!---->`**,全程零异常、零 console 错误——消息链全通而视图不渲染,系 481KB 压缩 bundle 内部视图逻辑问题(其自带默认值 `"title":"UTCundefined"` 佐证带病);字体加载/Worker/UUID 匹配/报文形状(payload.settings 等)逐一实证排除。官方插件兼容性甄别归 M3「逐插件适配」
 - **对照实验牵出真 bug**:装 centeredclock 于槽4 对照,其**活着且每秒推 SVG 表盘**,但 `setImage 解码失败(SVG 或坏数据)` 全拒——即 §6.8 已知限制命中。**PluginImageDecoder 补 SVG 支路**:percent-encoded(charset=utf8,`%3Csvg…` 实测形态)与 base64 双载体 → NSImage(CoreSVG)栅格化到按键面尺寸;无尺寸病态输入由 NSImage 容忍(透明图叠瓷贴无害,不另设契约);契约测试同步翻新(双载体尺寸断言)。**顺手销掉 §6.8 两条已知限制:SVG 数据 URL ✅ 已支持、HTML 家族 ✅ 已宿主**
 - **处置(用户拍板「两个都清除」)**:time 与 centeredclock 插件目录及孤儿 settings 移废纸篓;槽3/4 摘除绑定、编号瓷贴保留;仅存 zcode.status。注意 shutdown 落盘兜底会把内存 settingsDocs 写回盘——**摘 settings 文件必须先退 app 再动盘**
+
+### 6.15 M3-4 多状态图标(2026-10-16,协议闭环 + 测试加固 + 编辑器可视化;UI 镜像首版翻车回滚)
+- **现状盘点**:多状态协议脚手架 M2 起即大体完备(SDManifest 解析 States/stateCount/DisableAutomaticStates;Instance 按 state 选图 stateImages[state]??allStateImage??manifestDefaultImage[state];keyUp 自动轮换含 OBS 豁免;setState 三入口统一落盘+重渲;state 跨重启持久化并随 willAppear 回放)——缺的是测试、可见性与真机验收
+- **夹具语义厘清**:fake.toggle 加 `DisableAutomaticStates`(插件自管:插件不会在 keyDown 翻转+宿主 keyUp 再轮换=净变化为零的旧 quirks);新增 `opendeck.fake.autotoggle`(两态红绿,宿主 keyUp 自动轮换演示载体);index.js 按 `msg.action` 分流(toggle 自管图像/状态,autotoggle 全靠宿主)
+- **宿主增量**:①实例创建即 `redrawInstanceIfPresent`——多状态动作上屏即显当前态 manifest 默认图(此前纯 manifest 插件首屏永远是瓷贴);②编辑器三访问器 `stateCount/currentState/cycleState`(cycleState 与 keyUp 轮换同出口)
+- **测试**:MultiStateTests(真 socket,PIFlowTests 模式)5 用例——keyUp 轮换 0→1→回绕、DisableAutomaticStates 豁免(无状态写)、单态不轮换、按态选图(syncKey 上屏初始默认图+轮换产物差异)、持久化回放(重启后注册重放带上次态);66 测全绿
+- **编辑器可视化**:KeyEditView 插件动作 stateCount>1 时显示「N 态 · 按键自动轮换 · 当前第 X 态」+「切换预览」按钮;注意 setState 原地改实例 @Observable 观测不可见,用本地 stateCycleCount 计数强制 body 重跑
+- **真机验收**:autotoggle 绑槽4,按压红绿轮换 ✓,重启保持 ✓
+- **UI 实时镜像(首版翻车,已回滚,挂账重做)**:需求真实存在(界面槽2 橙瓷贴 vs 硬件状态灯),但首版(每次推图 keyImages 全字典变更→网格全量重渲+iconPath 逐键磁盘 IO+180° rotationEffect 补偿)引发触控板滚动异常(回滚即愈,因果实锤)与渲染比例不符(硬件合成帧不满铺,镜像整面铺满)。**重做铁律**:①更新只落受影响单键(NSImage 缓存+懒更新,不碰网格渲染路径);②设备帧原样显示(仅 180° 转正,零额外变换);③交付前界面/硬件并排截图比对。另注意:摘插件后其余页的死绑定会让对应键空置(报「插件未安装,动作暂不生效」,属预期)

@@ -3,9 +3,14 @@
   "Version": "1.0.0",
   "SDKVersion": 1,
   "CodePath": "plugin/index.js",
-  "Nodejs": { "Version": "20" },
+  "Nodejs": {
+    "Version": "20"
+  },
   "OS": [
-    { "Platform": "mac", "MinimumVersion": "10.11" }
+    {
+      "Platform": "mac",
+      "MinimumVersion": "10.11"
+    }
   ],
   "Actions": [
     {
@@ -13,8 +18,26 @@
       "Name": "红绿切换",
       "PropertyInspectorPath": "propertyInspector/index.html",
       "States": [
-        { "Image": "images/off" },
-        { "Image": "images/on" }
+        {
+          "Image": "images/off"
+        },
+        {
+          "Image": "images/on"
+        }
+      ],
+      "DisableAutomaticStates": true
+    },
+    {
+      "UUID": "opendeck.fake.autotoggle",
+      "Name": "红绿轮换(宿主自动)",
+      "PropertyInspectorPath": "propertyInspector/index.html",
+      "States": [
+        {
+          "Image": "images/off"
+        },
+        {
+          "Image": "images/on"
+        }
       ]
     }
   ]

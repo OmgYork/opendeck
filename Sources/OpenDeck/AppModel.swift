@@ -306,6 +306,10 @@ final class AppModel {
             return
         }
         device.drawKey(row: row, column: column, image: image)
+        // 插件实例在则按当前态重渲(多状态动作上屏即显 manifest 默认图,盖过上方瓷砖)
+        if case .plugin = key.action {
+            pluginHost.redrawInstanceIfPresent(at: index)
+        }
     }
 
     // MARK: - 亮度

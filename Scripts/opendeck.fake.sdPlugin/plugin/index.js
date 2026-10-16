@@ -6,7 +6,8 @@
 //   3. 宿主注册后下发 willAppear/deviceDidConnect
 //   4. setImage(自定义 data URL)→ 宿主解码/旋转/上屏
 //   5. getGlobalSettings → 宿主必答 didReceiveGlobalSettings(OBS 插件硬需求)
-//   6. keyDown → 插件 setState 切换 manifest 两态 → 宿主渲染对应默认图
+//   6. toggle 动作:keyDown 插件自己 setState 切换两态(DisableAutomaticStates,宿主不轮换)
+//   7. autotoggle 动作:插件不干预,宿主在 keyUp 自动轮换两态并渲染对应 manifest 默认图
 //
 // 与官方 app 宿主的差异容忍:本夹具不依赖 npm 包;官方 OBS 插件自带 webpack 打包的 ws,行为等价。
 
@@ -145,6 +146,8 @@ function handle(msg) {
   log('<<', JSON.stringify(msg).slice(0, 180));
   switch (msg.event) {
     case 'willAppear':
+      // 仅 toggle 自管图像(allStateImage);autotoggle 依赖宿主按 state 渲染 manifest 默认图
+      if (msg.action !== 'opendeck.fake.toggle') break;
       // 自定义图路径:宿主解码 data URL → 预旋转 → 上屏
       sendText(JSON.stringify({
         event: 'setImage', context: msg.context,
@@ -156,6 +159,8 @@ function handle(msg) {
       }));
       break;
     case 'keyDown':
+      // 仅 toggle 自管状态翻转;autotoggle 的轮换归宿主(keyUp 自动 +1)
+      if (msg.action !== 'opendeck.fake.toggle') break;
       state = 1 - state;
       // manifest 默认图路径:宿主按 state 渲染 States[state].Image
       sendText(JSON.stringify({

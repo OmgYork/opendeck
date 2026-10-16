@@ -534,6 +534,8 @@ private struct KeyEditView: View {
     /// 草稿实例身份:PI(webview 生命周期)与保存组装共用,必须跨渲染稳定。
     /// 原动作未变 = 复用持久化 contextID;换了动作 = onChange 时一次性生成新 UUID。
     @State private var draftContextID: String
+    /// 多状态动作手动轮换的本地重渲信号(见 pluginActionForm 内注释)
+    @State private var stateCycleCount = 0
 
     init(index: Int, appModel: AppModel) {
         self.index = index
@@ -857,6 +859,25 @@ private struct KeyEditView: View {
                         .onChange(of: pluginActionUUID) { _, _ in refreshDraftContext() }
                     } else {
                         Text("—").foregroundStyle(.secondary)
+                    }
+                }
+                if let stateCount = appModel.pluginHost.stateCount(pluginID: pluginID, actionUUID: pluginActionUUID) {
+                    // stateCycleCount:手动轮换的重渲信号——setState 原地改实例,@Observable 观测不到,
+                    // 读一次强制 body 重跑以刷新「当前第 X 态」
+                    let _ = stateCycleCount
+                    LabeledContent("状态") {
+                        HStack(spacing: 8) {
+                            let current = appModel.pluginHost.currentState(pluginID: pluginID, contextID: draftContextID) ?? 0
+                            Text("\(stateCount) 态 · 按键自动轮换 · 当前第 \(current + 1) 态")
+                                .foregroundStyle(.secondary)
+                            if appModel.pluginHost.currentState(pluginID: pluginID, contextID: draftContextID) != nil {
+                                Button("切换预览") {
+                                    appModel.pluginHost.cycleState(pluginID: pluginID, contextID: draftContextID)
+                                    stateCycleCount += 1
+                                }
+                                .help("手动切到下一态,设备键面即时预览(保存后按键也可自动轮换)")
+                            }
+                        }
                     }
                 }
             }
