@@ -252,3 +252,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **Mac 睡眠唤醒恢复(新补)**:缺口 = Mac 睡眠期间 app 挂起、心跳中断,设备 ~9s 自重启进待机;Mac 唤醒后若 USB **未重新枚举**,attach 校准路径不触发,设备停在待机直到重插。修复:`DeviceController.recalibrateAfterSystemWake()`(state==.running 守卫——设备真重枚举时让位给 attach 路径;复位 isScreenOff/keysBlacked → calibrate():握手先行→亮度→清屏→按缓存全量重画)+ AppModel 监听 `NSWorkspace.didWakeNotification` 调用
 - **真机验证**:两轮真实睡眠循环均命中「系统唤醒:重新校准」,日志无 attach 重枚举(证实缺口真实存在,不补则只能重插);唤醒后亮度跟随恢复、按键事件正常、全日志零错误
 - **M3 清单至此**:✅ PI ✅ 多页面 ✅ HTML 家族 ✅ 状态灯 ✅ 多状态图标 ✅ 登录自启 ✅ 屏幕休眠唤醒。**剩余挂账两项:UI 镜像重做(铁律见 §6.15)、逐插件适配(含官方 time 插件视图不渲染问题)**
+
+### 6.17 状态灯按键置前宿主 app(2026-10-17,manifest 声明式通用机制)
+- **需求**:按下 ZCode 状态灯键 → 电脑上 ZCode 窗口置前。方案定为**通用 manifest 扩展字段**而非宿主特判:action 声明 `ActivateAppBundleID` 即可获得「按键抬起激活该 app」,插件侧零改动;后续其他 agent 状态灯(接入指南 `Scripts/状态灯接入指南.md`)在各自 manifest 声明自家 bundle ID 即得同款行为
+- **实现链**:SDManifest.Action 增 `activateAppBundleID: String?`(镜像键 `ActivateAppBundleID`,宽容解析缺省 nil,官方插件零影响)→ `PluginHostModel.Hooks.activateApp` 新钩子(默认 no-op,模型不 import AppKit,测试注入 spy)→ `handleKey` **抬起沿**触发(与 keyUp 自动轮换同沿,Elgato 惯例;keyDown 仍纯转发插件)→ AppModel 注线 `NSWorkspace.urlForApplication(withBundleIdentifier:)` + `openApplication(at:)`(等价 `open -a`:运行中=置前,未运行=启动;规避 `NSRunningApplication.activate` 的 macOS 14+ 弃用警告;目标未安装记 oslog 不弹窗,失败记 completion error)
+- **权限**:走 LaunchServices 激活,**无需 Accessibility/辅助功能授权**(与模拟键鼠路径的本质区别)
+- **manifest**:com.zcode.status 加 `"ActivateAppBundleID": "dev.zcode.app"`(bundle id 实测取自 /Applications/ZCode.app/Contents/Info.plist;仓库源码与部署目录已同步,重启 OpenDeck 生效)
+- **测试**:69 全绿零警告(+3):SDManifest 解析(声明可解析/缺省 nil);真 socket 两用例(spy hook:抬起沿触发且参数正确、按下沿与未声明 action 不触发);KeyAction/ConfigStore 零改动,无配置兼容问题
+- **边界**:ZCode 未运行时按键=启动并置前(预期行为);激活失败静默落日志;同一插件多键声明同 app 重复激活无副作用(LS 幂等)。待真机验收:按灯 ZCode 置前、未运行时启动置前、其他键零影响

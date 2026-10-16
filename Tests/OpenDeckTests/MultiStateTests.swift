@@ -161,6 +161,53 @@ struct MultiStateTests {
         revived.shutdown()
     }
 
+    @Test("manifest 声明 ActivateAppBundleID:抬起沿触发激活钩子,按下沿不触发")
+    func pressActivatesDeclaredApp() async throws {
+        let sandbox = try makeSandbox(disableAutomaticStates: false, singleState: true,
+                                      activateBundleID: "dev.zcode.app")
+        let model = PluginHostModel(pluginsRoot: sandbox.plugins, settingsRoot: sandbox.settings)
+        var activated: [String] = []
+        model.hooks.activateApp = { activated.append($0) }
+        model.start()
+        try await waitUntil { model.port != 0 }
+        model.syncKey(at: 0, action: .plugin(
+            pluginID: Self.pluginUUID, actionUUID: Self.actionUUID, contextID: Self.contextID
+        ))
+        let plugin = try await FakeClient.connect(port: model.port)
+        try plugin.send(#"{"uuid":"com.test.multistate","event":"registerPlugin"}"#)
+        _ = await plugin.readUntil(contains: "willAppear")
+
+        model.handleKey(index: 0, phase: .down)
+        #expect(activated.isEmpty, "按下沿只转发插件,不应触发激活")
+        model.handleKey(index: 0, phase: .up)
+        #expect(activated == ["dev.zcode.app"], "抬起沿应按 manifest 声明激活,实收 \(activated)")
+
+        plugin.close()
+        model.shutdown()
+    }
+
+    @Test("未声明 ActivateAppBundleID:keyUp 不触发激活钩子")
+    func pressWithoutDeclarationNoActivate() async throws {
+        let sandbox = try makeSandbox(disableAutomaticStates: false, singleState: true)
+        let model = PluginHostModel(pluginsRoot: sandbox.plugins, settingsRoot: sandbox.settings)
+        var activated: [String] = []
+        model.hooks.activateApp = { activated.append($0) }
+        model.start()
+        try await waitUntil { model.port != 0 }
+        model.syncKey(at: 0, action: .plugin(
+            pluginID: Self.pluginUUID, actionUUID: Self.actionUUID, contextID: Self.contextID
+        ))
+        let plugin = try await FakeClient.connect(port: model.port)
+        try plugin.send(#"{"uuid":"com.test.multistate","event":"registerPlugin"}"#)
+        _ = await plugin.readUntil(contains: "willAppear")
+
+        model.handleKey(index: 0, phase: .up)
+        #expect(activated.isEmpty, "未声明的 action 不应触发激活")
+
+        plugin.close()
+        model.shutdown()
+    }
+
     // MARK: - 沙盒与辅助
 
     private struct Sandbox {
@@ -170,7 +217,8 @@ struct MultiStateTests {
     }
 
     /// 两态红绿 PNG(off/on)写入 images/,distinct 保证按态选图可断言
-    private func makeSandbox(disableAutomaticStates: Bool, singleState: Bool = false) throws -> Sandbox {
+    private func makeSandbox(disableAutomaticStates: Bool, singleState: Bool = false,
+                             activateBundleID: String? = nil) throws -> Sandbox {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("opendeck-ms-\(UUID().uuidString)")
         let plugins = root.appendingPathComponent("plugins")
@@ -180,7 +228,8 @@ struct MultiStateTests {
         try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
         let states = singleState ? [] : [#"{"Image":"images/off"}"#, #"{"Image":"images/on"}"#]
         let statesField = states.isEmpty ? "" : #","States":["# + states.joined(separator: ",") + #"]"#
-        let manifest = #"{"Name":"ms","Version":"1.0","Actions":[{"UUID":"\#(Self.actionUUID)","Name":"A"\#(statesField)\#(disableAutomaticStates ? #","DisableAutomaticStates":true"# : "")}]}"#
+        let activateField = activateBundleID.map { #","ActivateAppBundleID":"\#($0)""# } ?? ""
+        let manifest = #"{"Name":"ms","Version":"1.0","Actions":[{"UUID":"\#(Self.actionUUID)","Name":"A"\#(statesField)\#(activateField)\#(disableAutomaticStates ? #","DisableAutomaticStates":true"# : "")}]}"#
         try Data(manifest.utf8).write(to: pluginDir.appendingPathComponent("manifest.json"))
         try PNGEncoder.solid(width: 16, height: 16, red: 0xDE, green: 0x3B, blue: 0x3B)
             .write(to: images.appendingPathComponent("off.png"))

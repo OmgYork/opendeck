@@ -132,6 +132,21 @@ struct SDManifestTests {
         #expect(topOnly.piPagePath(actionUUID: "a") == nil)
     }
 
+    @Test("OpenDeck 扩展字段 ActivateAppBundleID:声明可解析,缺省为 nil")
+    func parseActivateAppBundleID() throws {
+        let declared = try SDManifest.parse(
+            Data(#"{"CodePath":"index.html","Actions":[{"UUID":"a","Name":"A","ActivateAppBundleID":"dev.zcode.app"}]}"#.utf8),
+            directoryName: "com.x.light.sdPlugin"
+        )
+        #expect(declared.actions.first?.activateAppBundleID == "dev.zcode.app")
+
+        let absent = try SDManifest.parse(
+            Data(#"{"CodePath":"index.html","Actions":[{"UUID":"a","Name":"A"}]}"#.utf8),
+            directoryName: "com.x.light.sdPlugin"
+        )
+        #expect(absent.actions.first?.activateAppBundleID == nil)
+    }
+
     @Test("图片扩展名探测:manifest 无扩展名 → 实际 .png")
     func resolveImageExtension() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

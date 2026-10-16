@@ -16,6 +16,8 @@ final class PluginHostModel {
         var draw: (Int, CGImage) -> Void = { _, _ in }
         var backgroundColor: (Int) -> String = { _ in "#3B4252" }
         var open: (URL) -> Void = { _ in }
+        /// 按 bundleID 激活外部 app(manifest ActivateAppBundleID 声明;状态灯按键置前宿主)
+        var activateApp: (String) -> Void = { _ in }
         var log: (String) -> Void = { _ in }
     }
 
@@ -279,11 +281,16 @@ final class PluginHostModel {
             send(SDProtocol.keyUp(action: instance.actionUUID, context: instance.contextID,
                                   device: device, settings: settings, row: row, column: column,
                                   state: instance.state), runtime: runtime)
-            // 未禁用自动状态的 action:宿主代为轮换(Elgato 行为;OBS 全系已禁用,不受影响)
-            if let manifestAction = runtime.action(uuid: instance.actionUUID),
-               !manifestAction.disableAutomaticStates, manifestAction.stateCount > 1 {
-                let next = (instance.state + 1) % manifestAction.stateCount
-                setState(instance, next)
+            if let manifestAction = runtime.action(uuid: instance.actionUUID) {
+                // manifest 声明了目标 app:抬起即激活(状态灯按键=聚焦宿主 agent 窗口)
+                if let bundleID = manifestAction.activateAppBundleID {
+                    hooks.activateApp(bundleID)
+                }
+                // 未禁用自动状态的 action:宿主代为轮换(Elgato 行为;OBS 全系已禁用,不受影响)
+                if !manifestAction.disableAutomaticStates, manifestAction.stateCount > 1 {
+                    let next = (instance.state + 1) % manifestAction.stateCount
+                    setState(instance, next)
+                }
             }
         }
     }

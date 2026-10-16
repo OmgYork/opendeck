@@ -33,6 +33,9 @@ public struct SDManifest: Sendable, Equatable {
         public let stateImages: [String?]
         public let disableAutomaticStates: Bool
         public let propertyInspectorPath: String?
+        /// OpenDeck 扩展字段:声明后按键抬起宿主激活该 app(运行中置前/未运行启动;
+        /// 状态灯按键聚焦宿主 agent 窗口等场景),LaunchServices 路径无需任何权限
+        public let activateAppBundleID: String?
         /// Controllers 缺省或空数组 = 不限制(官方 OBS 插件即空数组);仅当显式列出且不含
         /// "Keypad"(如 ["Knob"]/["Card"])才不能放到 15 键板上
         public let isKeypadAction: Bool
@@ -82,6 +85,7 @@ public struct SDManifest: Sendable, Equatable {
                 stateImages: stateImages,
                 disableAutomaticStates: mirrorAction.DisableAutomaticStates ?? false,
                 propertyInspectorPath: mirrorAction.PropertyInspectorPath,
+                activateAppBundleID: mirrorAction.ActivateAppBundleID,
                 isKeypadAction: mirrorAction.Controllers.map { $0.isEmpty || $0.contains("Keypad") } ?? true
             )
         }
@@ -146,6 +150,7 @@ private struct ManifestMirror: Decodable {
         var Controllers: [String]?
         var DisableAutomaticStates: Bool?
         var PropertyInspectorPath: String?
+        var ActivateAppBundleID: String?
     }
 
     var Name: String?

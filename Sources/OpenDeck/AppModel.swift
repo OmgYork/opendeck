@@ -58,6 +58,17 @@ final class AppModel {
             self?.config.keyConfig(at: index).backgroundColorHex ?? "#3B4252"
         }
         pluginHost.hooks.open = { url in NSWorkspace.shared.open(url) }
+        pluginHost.hooks.activateApp = { [weak self] bundleID in
+            // openApplication(等价 open -a):运行中=激活置前,未运行=启动;失败记日志不弹窗
+            let workspace = NSWorkspace.shared
+            guard let url = workspace.urlForApplication(withBundleIdentifier: bundleID) else {
+                self?.appendLog("状态灯激活目标未安装:\(bundleID)")
+                return
+            }
+            workspace.openApplication(at: url, configuration: .init()) { _, error in
+                if let error { Self.oslog.error("激活 \(bundleID, privacy: .public) 失败:\(error.localizedDescription, privacy: .public)") }
+            }
+        }
         pluginHost.hooks.log = { [weak self] line in
             self?.appendLog(line)
         }

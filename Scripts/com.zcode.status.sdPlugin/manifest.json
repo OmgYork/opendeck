@@ -11,7 +11,8 @@
       "UUID": "com.zcode.status.light",
       "Name": "状态灯",
       "Controllers": ["Keypad"],
-      "States": [{}]
+      "States": [{}],
+      "ActivateAppBundleID": "dev.zcode.app"
     }
   ]
 }
