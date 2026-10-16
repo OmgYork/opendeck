@@ -185,7 +185,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **场景联动补强(验收实测)**:关窗即评估(三连采样 +0.3s/+1s/+2s 覆盖「关窗瞬间 frontmost 仍是自己」的结算竞态,评估幂等);联动决策与前台探针日志(前台探针走 oslog debug 防刷屏)。**竖扫方向教训:AppKit 的 scrollingDeltaY 与 deltaX 符号约定相反**(自然滚动下左扫 deltaX 为正、上扫 deltaY 为负),勿按直觉假设,以真机实证为准
 
 ### 6.8 已知限制(→ M3 后续)
-- SVG 数据 URL 不支持(回退默认图);多行标题折叠单行;HTML 家族(13 个 WebView 插件)不宿主;插件更新需手动重装
+- ~~SVG 数据 URL 不支持(回退默认图)~~(✅ 2026-10-16 已支持,见 §6.14);多行标题折叠单行;HTML 家族(13 个 WebView 插件)~~不宿主~~(✅ 已宿主,见 §6.11);插件更新需手动重装
 - M3 优先级建议:PI(WKWebView,✅ 已落地见 §6.9)> 多页面(✅ M2.5)> HTML 家族 > 自研插件实战(如 ZCode 状态灯:hook 写状态文件/打本地端口 → 插件推色)
 
 ### 6.9 M3-1 Property Inspector(2026-10-15 落地)
@@ -231,3 +231,9 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **诊断方法论沉淀**:release 构建的 print/📤 插桩不落 oslog;serverLog.info 级 oslog 需 `log stream --level info`(`log show` 不含 info 历史区);宿主 logMessage 通道(`📜 插件日志:`)是免重编译的插件页观测面,排障首选
 - **补遗(同日第二层根因,用户目视「工作态仍绿✓」触发)**:桥修好后键面仅活了 ~2 分钟——遥测实测页面自链 setTimeout 节拍 +0~89s 每 30s 窗 28-29 跳(1s 正常)、+90s 起衰减、**+108s 归零永不恢复**(隐藏页面 WebKit 定时器治理;节流加深/单环异常断链,链式结构一断即永久死亡;且链内任一回调抛异常也会静默断链)。**定案:轮询节拍所有权归宿主,页面自持定时器一律不可靠**。重构:`PluginWebviewRuntime` 增宿主推拍——documentEnd 用户脚本检测页面定义了 `__opendeckPulse` 即经 opendeckFile 通道回报,宿主起 Foundation 1s Timer(`evaluateJavaScript("window.__opendeckPulse&&__opendeckPulse()")`,不经 DOM 定时器队列、不受隐藏页节流,单拍异常下拍自愈;close() 注销);官方插件未定义回调零成本。插件页:tick 改纯函数由推拍驱动(去自链)、`sendImage` 加 readyState 守卫、新增 **60s 一条的 alive 存活日志**(本次排查缺它多绕一小时,长期观测面)。复验:推拍存活 8 分钟+、test 消息 UserPromptSubmit→working 1s 内检出推送、alive 序列 working→done→working 与回合边界完全吻合
 - **状态机扩展:asking 黄?闪烁(2026-10-16,用户需求「向我提问时可见」)**:新状态 `asking`(亮黄↔暗黄 #5c4712 交替)。触发链:hooks 配置新增 **PreToolUse** 事件(条目形状照抄 UserPromptSubmit;备份 config.json.pre-asking.bak)→ `hook.py` 特判 `PreToolUse + tool_name=="AskUserQuestion"` → asking(其余工具调用不写,working 仍归 PostToolUse);用户作答即 PostToolUse → working 自动恢复。**闪烁的快节拍走自适应推拍契约**:页面 `__opendeckPulse()` 返回期望的下一拍间隔 ms(asking 350 / 其余 1000,宿主钳制 200…5000),`PluginWebviewRuntime` 单发 Timer 链按返回值重排——快节拍依然宿主驱动,不受页面定时器冻结影响;节拍自适应有一拍滞后,视觉无感。已知边界:纯文本问句无 hook 事件可挂,不触发 asking(记录不处理);hooks 会话启动时加载,新配置需新 ZCode 会话生效。验证:hook.py 单测(假 PreToolUse stdin → state=asking)✓、直写 state.json 用户目视黄?闪烁 ✓、回复后回蓝 ✓
+
+### 6.14 M3 挂账清理:官方 HTML 插件排障(2026-10-16,time 插件死因定案 + SVG 解码 + 观测面升级)
+- **缘起**:M3-3 挂账「官方 time 插件时钟从未上屏」。排障中发现 release 构建缺一切插件页观测手段,先升级观测面(全部永久保留):**透明 fetch polyfill**(file: 请求转 opendeckReadFile 桥 → 字节体 Response,其余协议透传原生;XMLHint:官方 bundle 静态扫描仅 1 处 fetch=modulepreload polyfill,但 polyfill 消灭整类 file:// fetch 失败)、**未捕获 error/unhandledrejection/console.error|warn 上报**(经 opendeckFile 通道 diag 分支 → 📜 日志;console 限前 20 条)、**5s 页面健康探针**(readyState/dom 体量/argv/fonts/worker 存活/#app innerHTML;Blob Worker 在 file:// 下可用,实测 worker-ok)、**注册重放计数日志**(`重放 willAppear×N[key…]`)。诊断方法论:evaluateJavaScript 旧 API 不解包 Promise(返回 Promise 对象 → "unsupported type"),异步结果须自落全局变量二次读取
+- **time 死因定案(非宿主,不再追)**:Vue 应用挂载正常(argv 就位/Pinia store 收到 willAppear 完整报文/插件自行重写了 settings 默认值),**但视图层永远渲染 7 字节空注释 `<!---->`**,全程零异常、零 console 错误——消息链全通而视图不渲染,系 481KB 压缩 bundle 内部视图逻辑问题(其自带默认值 `"title":"UTCundefined"` 佐证带病);字体加载/Worker/UUID 匹配/报文形状(payload.settings 等)逐一实证排除。官方插件兼容性甄别归 M3「逐插件适配」
+- **对照实验牵出真 bug**:装 centeredclock 于槽4 对照,其**活着且每秒推 SVG 表盘**,但 `setImage 解码失败(SVG 或坏数据)` 全拒——即 §6.8 已知限制命中。**PluginImageDecoder 补 SVG 支路**:percent-encoded(charset=utf8,`%3Csvg…` 实测形态)与 base64 双载体 → NSImage(CoreSVG)栅格化到按键面尺寸;无尺寸病态输入由 NSImage 容忍(透明图叠瓷贴无害,不另设契约);契约测试同步翻新(双载体尺寸断言)。**顺手销掉 §6.8 两条已知限制:SVG 数据 URL ✅ 已支持、HTML 家族 ✅ 已宿主**
+- **处置(用户拍板「两个都清除」)**:time 与 centeredclock 插件目录及孤儿 settings 移废纸篓;槽3/4 摘除绑定、编号瓷贴保留;仅存 zcode.status。注意 shutdown 落盘兜底会把内存 settingsDocs 写回盘——**摘 settings 文件必须先退 app 再动盘**

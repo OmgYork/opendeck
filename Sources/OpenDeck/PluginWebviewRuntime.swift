@@ -55,6 +55,42 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
         webView.navigationDelegate = self
         webView.underPageBackgroundColor = .black // 插件页面多为深色,加载前防白闪
         webView.loadFileURL(entryURL, allowingReadAccessTo: directoryURL) // 读取域 = 插件根(根级 i18n/Worker/字体)
+        probePageHealth(after: 5) // 静默死亡排查面:加载 5s 后报 DOM 体量与就绪态
+    }
+
+    /// 一次性页面健康探针:Vue/SPA 挂载失败时 body 近空,一眼判别「页面死了」还是「逻辑没跑」
+    private func probePageHealth(after seconds: TimeInterval) {
+        let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.gone else { return }
+                self.webView.evaluateJavaScript(
+                    """
+                    (function() {
+                        var appEl = document.querySelector('#app');
+                        var app = appEl && appEl.__vue_app__;
+                        if (!app) return 'no __vue_app__';
+                        var pinia = app.config.globalProperties.$pinia;
+                        if (!pinia) return 'no pinia';
+                        var out = [];
+                        pinia._s.forEach(function(store, name) {
+                            try {
+                                var st = JSON.stringify(store.$state || {});
+                                out.push(name + '[' + st.slice(0, 400) + ']');
+                            } catch (e) { out.push(name + '[err ' + e + ']'); }
+                        });
+                        return 'stores: ' + (out.join(' | ') || 'none').slice(0, 1000);
+                    })()
+                    """,
+                    completionHandler: { [weak self] result, error in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            self.log("HTML 插件页 5s 探针 [\(self.pluginUUID)]: \(result ?? "nil")\(error.map { " err=" + $0.localizedDescription } ?? "")")
+                        }
+                    }
+                )
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// 主动拆除(卸载/关停):不触发 onGone;持有方随后摘除引用,连接随释放断开
@@ -67,16 +103,20 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
         webView.stopLoading()
     }
 
-    /// JS 侧 polyfill:window.opendeckReadFile(相对路径) → Promise<base64>。
-    /// 超时兜底防 pendings 泄漏;宿主回复经 __opendeckFileResolve 回填。
+    /// JS 侧注入(documentStart,先于插件脚本求值):
+    /// 1) opendeckReadFile 桥 + Promise 回填(超时兜底防泄漏);
+    /// 2) 透明 fetch polyfill:file: 请求转桥(WebKit 拒绝 file:// fetch,实测见 §6.13),
+    ///    其余协议透传原生;Response 以字节体构造,res.json()/text() 均可用;
+    /// 3) 未捕获错误/拒绝上报(opendeckFile 通道 diag 分支)——插件页静默死亡的唯一观测面
     private static let fileBridgeScript = """
     (function() {
         var seq = 0, pending = {};
+        function post(msg) { try { window.webkit.messageHandlers.opendeckFile.postMessage(msg); } catch (e) {} }
         window.opendeckReadFile = function(path) {
             return new Promise(function(resolve, reject) {
                 var id = ++seq;
                 pending[id] = { resolve: resolve, reject: reject };
-                window.webkit.messageHandlers.opendeckFile.postMessage({ seq: id, path: String(path) });
+                post({ seq: id, path: String(path) });
                 setTimeout(function() {
                     if (pending[id]) { delete pending[id]; reject(new Error('opendeckReadFile timeout')); }
                 }, 5000);
@@ -88,14 +128,67 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
             delete pending[id];
             if (ok) { p.resolve(b64); } else { p.reject(new Error(errText || 'read failed')); }
         };
+        var nativeFetch = window.fetch ? window.fetch.bind(window) : null;
+        window.fetch = function(input, init) {
+            var url = null;
+            try { url = new URL(typeof input === 'string' ? input : (input && input.url) || String(input), location.href); } catch (e) {}
+            if (url && url.protocol === 'file:') {
+                var rel;
+                try { rel = decodeURIComponent(url.pathname); } catch (e) { rel = url.pathname; }
+                return window.opendeckReadFile(rel)
+                    .then(function(b64) {
+                        var raw = atob(b64), bytes = new Uint8Array(raw.length);
+                        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+                        return new Response(bytes, { status: 200, statusText: 'OK' });
+                    })
+                    .catch(function() { return new Response(null, { status: 404, statusText: 'Not Found' }); });
+            }
+            if (nativeFetch) return nativeFetch(input, init);
+            return Promise.reject(new Error('fetch unavailable'));
+        };
+        window.addEventListener('error', function(e) {
+            post({ diag: 'js-error', detail: (e.message || '?') + ' @' + ((e.filename || '').split('/').pop()) + ':' + (e.lineno || 0) });
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+            post({ diag: 'rejection', detail: String(e.reason).slice(0, 300) });
+        });
+        var consoleCount = 0;
+        ['error', 'warn'].forEach(function(level) {
+            var orig = console[level] ? console[level].bind(console) : function() {};
+            console[level] = function() {
+                if (consoleCount < 20) {
+                    consoleCount += 1;
+                    try {
+                        var parts = Array.prototype.map.call(arguments, function(a) {
+                            return typeof a === 'object' ? JSON.stringify(a).slice(0, 150) : String(a).slice(0, 150);
+                        });
+                        post({ diag: 'console-' + level, detail: parts.join(' ').slice(0, 300) });
+                    } catch (e) {}
+                }
+                orig.apply(null, arguments);
+            };
+        });
+        // Blob Worker 存活自检(官方模板定时器跑在 Worker 里;file:// 页面创建可能被拒):
+        // documentStart 自跑,结果落全局变量供宿主探针同步读取(旧 API 不解包 Promise)
+        try {
+            var w = new Worker(URL.createObjectURL(new Blob(['postMessage(1)'])));
+            w.onmessage = function() { window.__opendeckWorkerResult = 'worker-ok'; };
+            w.onerror = function() { window.__opendeckWorkerResult = 'worker-error'; };
+            setTimeout(function() { if (!window.__opendeckWorkerResult) window.__opendeckWorkerResult = 'worker-timeout'; }, 1500);
+        } catch (e) { window.__opendeckWorkerResult = 'worker-throw: ' + e; }
     })();
     """
 
-    /// 文件桥请求:沙盒校验(仅插件根内相对路径)→ 读盘 → base64 回填 Promise
+    /// 文件桥请求:沙盒校验(仅插件根内,相对/绝对路径皆可)→ 读盘 → base64 回填 Promise;
+    /// 另承载 pulse 注册与页面异常上报(diag)
     fileprivate func handleFileRequest(_ message: WKScriptMessage) {
         guard let body = message.body as? [String: Any] else { return }
         if (body["pulse"] as? Bool) == true {
             startPulseTimer()
+            return
+        }
+        if let kind = body["diag"] as? String {
+            log("HTML 插件页[\(kind)] \(pluginUUID): \(body["detail"] as? String ?? "")")
             return
         }
         guard let seq = body["seq"] as? Int,
@@ -105,8 +198,14 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
             let js = "__opendeckFileResolve(\(seq), false, null, '\(reason)')"
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
-        guard !path.hasPrefix("/") else { return reject("relative path required") }
-        let target = rootURL.appendingPathComponent(path).standardizedFileURL
+        // fetch polyfill 会传 file URL 的绝对 pathname(已 decodeURIComponent);相对路径按根拼接。
+        // 两种形态统一过 standardized + 根前缀校验,沙盒语义不变
+        let target: URL
+        if path.hasPrefix("/") {
+            target = URL(fileURLWithPath: path).standardizedFileURL
+        } else {
+            target = rootURL.appendingPathComponent(path).standardizedFileURL
+        }
         guard target.path.hasPrefix(rootURL.path + "/") else { return reject("path escapes plugin root") }
         guard let data = try? Data(contentsOf: target) else { return reject("notfound or unreadable") }
         let b64 = data.base64EncodedString()

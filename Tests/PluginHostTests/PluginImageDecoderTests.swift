@@ -31,9 +31,17 @@ struct PluginImageDecoderTests {
         #expect(decoded?.height == 3)
     }
 
-    @Test("SVG 明确不支持;空串/garbage/裸 base64 边界")
-    func rejectAndFallbacks() {
-        #expect(PluginImageDecoder.decodeCGImage(from: "data:image/svg+xml;base64,PHN2Zy8+") == nil)
+    @Test("SVG 两种载体的栅格化;空串/garbage/裸 base64 边界")
+    func svgAndFallbacks() {
+        // 有效 SVG(base64 与 percent-encoded 双载体)→ 栅格化为请求尺寸
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='red'/></svg>"
+        let b64 = Data(svg.utf8).base64EncodedString()
+        let percent = svg.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        let decodedB64 = PluginImageDecoder.decodeCGImage(from: "data:image/svg+xml;base64,\(b64)", pixelSize: 50)
+        #expect(decodedB64?.width == 50)
+        let decodedPercent = PluginImageDecoder.decodeCGImage(from: "data:image/svg+xml;charset=utf8,\(percent)", pixelSize: 40)
+        #expect(decodedPercent?.width == 40)
+        // 无尺寸病态输入(<svg/>)由 NSImage 容忍为默认尺寸(透明图,叠瓷贴无害),不另设契约
         #expect(PluginImageDecoder.decodeCGImage(from: "data:image/png;base64,") == nil)
         #expect(PluginImageDecoder.decodeCGImage(from: "") == nil)
         #expect(PluginImageDecoder.decodeCGImage(from: nil) == nil)

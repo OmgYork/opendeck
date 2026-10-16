@@ -279,9 +279,10 @@ final class PluginHostModel {
             runtime.connection = connection
             runtime.registered = true
             runtime.respawnAttempts = 0
-            hooks.log("插件已注册:\(uuid)")
+            let replay = instances.values.filter { $0.pluginUUID == uuid }
+            hooks.log("插件已注册:\(uuid),重放 willAppear×\(replay.count)[\(replay.map { "key\($0.keyIndex)" }.joined(separator: ","))]")
             send(SDProtocol.deviceDidConnect(.streamDock293V3), runtime: runtime)
-            for instance in instances.values where instance.pluginUUID == uuid {
+            for instance in replay {
                 sendWillAppear(instance, runtime: runtime)
             }
             return
@@ -374,14 +375,18 @@ final class PluginHostModel {
             } else {
                 instance.allStateImage = nil
             }
-        } else if let cgImage = PluginImageDecoder.decodeCGImage(from: image) {
+        } else if let cgImage = PluginImageDecoder.decodeCGImage(
+            from: image,
+            pixelSize: StreamDock293S.keySize(column: instance.keyIndex % StreamDock293S.columns)
+        ) {
             if let state {
                 instance.stateImages[state] = cgImage
             } else {
                 instance.allStateImage = cgImage
             }
         } else {
-            hooks.log("setImage 解码失败(SVG 或坏数据),回退默认图")
+            // 取证载荷:前缀定性(mime/base64 头)+ 长度(大图截断/坏码排查)
+            hooks.log("setImage 解码失败 len=\(image?.count ?? 0) head=\((image?.prefix(48) ?? ""))")
         }
         redraw(instance)
     }
