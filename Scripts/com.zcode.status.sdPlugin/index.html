@@ -18,16 +18,39 @@
         done:       { color: '#3fb950', glyph: '\u2713' }, // ✓ 回合完成待输入
         working:    { color: '#2f81f7', glyph: '\u25B6' }, // ▶ 工作中
         permission: { color: '#d29922', glyph: '\u003F' }, // ? 等待授权
+        asking:     { color: '#d29922', glyph: '\u003F' }, // ? 向用户提问(闪烁)
         error:      { color: '#f85149', glyph: '\u0021' }  // ! 出错
     };
+    var ASK_DIM = '#5c4712';       // asking 闪烁暗相
+    var ASK_PULSE_MS = 350;        // asking 时期望的宿主推拍间隔(其余 1s)
     var IDLE_TIMEOUT_MS = 30 * 60 * 1000; // state.json 超 30 分钟未更新 = 空闲
-    var POLL_MS = 1000;
 
     var canvas = document.getElementById('pad');
     var ctx = canvas.getContext('2d');
     var websocket;
     var contexts = {};        // context 集合(本插件全部键位同色)
     var currentState = 'idle';
+    var stateData = null;
+    var lastErrLogAt = 0;
+    var lastAliveLogAt = 0;
+    var blinkOn = false;
+    var nextInterval = 1000;  // 回传给宿主的下一拍间隔(自适应节拍契约)
+
+    // 读盘必须走宿主文件桥:WKWebView 禁止 file:// 页面 fetch()/XHR file:// 资源
+    // (TypeError: Load failed 即刻拒绝;allowingReadAccessTo 只放行子资源标签加载)
+    function readState() {
+        return window.opendeckReadFile('state.json').then(atob);
+    }
+
+    // 日志经宿主 logMessage 通道;err 限频 30s(首个 hook 事件前 state.json 不存在属正常)
+    function logLimited(msg, rateLimitMs) {
+        var now = Date.now();
+        if (now - lastErrLogAt < rateLimitMs) return;
+        lastErrLogAt = now;
+        if (websocket && websocket.readyState === 1) {
+            websocket.send(JSON.stringify({ event: 'logMessage', payload: { message: msg } }));
+        }
+    }
 
     function roundRect(c, x, y, w, h, r) {
         c.beginPath();
@@ -39,10 +62,10 @@
         c.closePath();
     }
 
-    function render(state) {
+    function render(state, dim) {
         var def = STATES[state] || STATES.idle;
         ctx.clearRect(0, 0, 100, 100);
-        ctx.fillStyle = def.color;
+        ctx.fillStyle = dim ? ASK_DIM : def.color;
         roundRect(ctx, 4, 4, 92, 92, 16);
         ctx.fill();
         ctx.fillStyle = 'rgba(255,255,255,0.95)';
@@ -53,6 +76,7 @@
     }
 
     function sendImage(context) {
+        if (websocket.readyState !== 1) return; // 关闭中 send 会抛,防炸掉单拍
         websocket.send(JSON.stringify({
             event: 'setImage', context: context,
             payload: { image: canvas.toDataURL('image/png'), target: 0 }
@@ -63,34 +87,49 @@
         Object.keys(contexts).forEach(function (context) { sendImage(context); });
     }
 
-    // 每 1s 轮询 state.json(cache-busting);仅在状态变化时重新上屏,避免刷 HID
+    // 单拍:读 state.json → 变化才重绘上屏(防 HID 刷屏)。
+    // 不自链 setTimeout —— 隐藏页面定时器会被 WebKit 治理冻毙(~2 分钟,实测),
+    // 节拍由宿主 evaluateJavaScript 推送(见 __opendeckPulse),异常隔离、下拍自愈
     function tick() {
-        fetch('state.json?t=' + Date.now())
-            .then(function (res) { return res.ok ? res.text() : null; })
-            .then(function (text) {
-                if (text) {
+        try {
+            readState()
+                .then(function (text) {
                     try {
                         var data = JSON.parse(text);
                         if (data && STATES[data.state]) stateData = data;
                     } catch (err) { /* 半截 JSON:保持上一状态 */ }
-                }
-            })
-            .catch(function () { /* 文件尚未生成:保持 idle */ })
-            .then(function () {
-                var state = 'idle';
-                if (stateData && Date.now() - stateData.updatedAt < IDLE_TIMEOUT_MS) {
-                    state = stateData.state;
-                }
-                if (state !== currentState) {
-                    currentState = state;
-                    render(state);
-                    pushToAll();
-                }
-                setTimeout(tick, POLL_MS);
-            });
+                })
+                .catch(function (err) { logLimited('read state.json failed: ' + err, 30000); })
+                .then(function () {
+                    var state = 'idle';
+                    if (stateData && Date.now() - stateData.updatedAt < IDLE_TIMEOUT_MS) {
+                        state = stateData.state;
+                    }
+                    var asking = state === 'asking';
+                    if (asking) { blinkOn = !blinkOn; } else { blinkOn = false; }
+                    // asking 每拍都要上屏(亮暗交替即闪烁);其余状态变化才推(防 HID 刷屏)
+                    if (state !== currentState || asking) {
+                        currentState = state;
+                        render(state, asking && blinkOn);
+                        pushToAll();
+                    }
+                    nextInterval = asking ? ASK_PULSE_MS : 1000;
+                    if (Date.now() - lastAliveLogAt >= 60000) {
+                        lastAliveLogAt = Date.now();
+                        logLimited('alive state=' + state + ' ctx=' + Object.keys(contexts).length, 0);
+                    }
+                });
+        } catch (err) {
+            logLimited('tick threw: ' + err, 30000);
+        }
     }
+    // 宿主推拍入口:返回期望的下一拍间隔(自适应节拍;宿主按返回值重排定时器)。
+    // 返回的是上一拍结算出的值,节拍自适应有一拍滞后——对闪烁无感知影响
+    window.__opendeckPulse = function () {
+        tick();
+        return nextInterval;
+    };
 
-    var stateData = null;
     window.connectElgatoStreamDeckSocket = function (port, uuid, registerEvent, info) {
         JSON.parse(info);
         websocket = new WebSocket('ws://127.0.0.1:' + port);
@@ -110,7 +149,7 @@
             }
         };
         render(currentState);
-        tick();
+        tick(); // 首拍(此时 WS 未开,只更新本地状态;willAppear 到达时按 currentState 上屏)
     };
     </script>
 </body>

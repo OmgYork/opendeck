@@ -28,6 +28,10 @@ final class AppModel {
     private var started = false
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
     private var workspaceObservers: [NSObjectProtocol] = []
+    /// App Nap 断言:菜单栏 app 长期无窗口时会被整进程挂起,插件 webview 的
+    /// 定时器/轮询随之冻结(HTML 家族无界面可见性,尤甚)。设备心跳与插件宿主
+    /// 是本 app 的存在意义,进程常驻即业务,断言与进程同生命周期。
+    private var activityToken: NSObjectProtocol?
 
     var latestLog: String? { recentLogs.last }
 
@@ -38,6 +42,10 @@ final class AppModel {
         guard !started else { return }
         started = true
 
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated],
+            reason: "OpenDeck:设备心跳与插件宿主常驻"
+        )
         refreshOfficialAppFlag()
         observeWorkspaceApplications()
 

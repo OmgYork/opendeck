@@ -2,8 +2,8 @@
 
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
-> 最后更新:2026-10-15(PI 落地 + settings 持久化重构 B「内存即真相」,47 测全绿,dist 与最新提交一致)
-> **M2.5 已全部验收通过(2026-10-15)**;M3 进行中:Property Inspector(✅ 代码落地见 §6.9,持久化健壮化见 §6.10,真机验收基本完成)> HTML 家族插件 > 自研 ZCode 状态灯
+> 最后更新:2026-10-16(ZCode 状态灯真机闭环:file:// fetch 根因修复 + 宿主文件读取桥,60 测全绿,dist 与最新提交一致)
+> **M3 优先级队列已消费完毕**:Property Inspector(✅ §6.9/§6.10)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13,2026-10-16 真机闭环)。M3 剩余:多状态图标、登录自启、屏幕休眠唤醒、逐插件适配(§3 原始清单)
 
 ---
 
@@ -220,3 +220,14 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **hooks 配置**(用户级 `~/.zcode/cli/config.json` 顶层 hooks,备份 `config.json.pre-zcode-light.bak`):6 事件 × `python3 <插件根>/hook.py`,timeoutMs 2000,enabled true。**hooks 在会话启动时加载——写入后需新 ZCode 会话才生效**(运行中的会话不受影响);hook.py 常驻插件根 = webview fetch 读取域内(file:// 读取域即插件根)
 - **验证**:webview 注册 ✓;hook 单测 working→permission 写入 ✓;插件 1s 轮询刷键 ✓(键面黄色 ?);写盘日志 `写盘[setSettings·PI]` 同款插桩可观测。ZCode 事件全环形验证待日常使用中自然覆盖(新会话即生效)
 - **v1 边界**:hooks 用户级全局,多会话并发后写覆盖;无「等待用户输入」专用事件(Stop≈,注意 Stop 可能触发 ≤3 次自动续跑造成短暂回蓝);安装脚本与 hooks 配置属用户目录变更不入库(源码已入库)
+
+### 6.13 M3-3 收尾:状态灯真机闭环(file:// fetch 根因修复 + 宿主文件读取桥)(2026-10-16)
+- **现象**:hooks 链路活(state.json 每事件实时刷新)、插件 webview 注册 ✓、willAppear 后首帧 setImage 已达服务端(帧日志 op=1 len=3265)——但键面永远停在 willAppear 推的那帧 idle 灰●(用户观感「白色」=灰块白●,非固件默认图;配置瓷贴是橙 #D08770,不在场)。早前「键面黄色 ? 验证 ✓」系连接时序误判:单帧推送无法区分「轮询活」与「一次性侥幸」
+- **根因(插件页 logMessage 遥测实锤)**:**WKWebView 禁止 file:// 页面用 fetch()/XHR 读 file:// 资源**——`TypeError: Load failed` 即刻拒绝;`loadFileURL(allowingReadAccessTo:)` 的读取域只放行 img/script 子资源标签加载,不含 fetch API。§6.12 设计假设「hook.py 常驻插件根 = fetch 读取域内」不成立。轮询循环本身每 1s 正常跳动(setTimeout 未被节流),但 100% 失败 → stateData 恒 null → 永不重绘
+- **修复(宿主通用文件读取桥)**:`PluginWebviewRuntime` 增 `window.opendeckReadFile(相对路径)` polyfill(atDocumentStart 注入,Promise+5s 超时兜底)+ `WKScriptMessageHandler "opendeckFile"`(经 WeakScriptMessageHandler 弱代理注册防 Runtime↔webview 保留环,注册须在 super.init() 后)+ 沙盒校验(拒绝绝对路径、standardized 后必须落在插件根内)→ 读盘 base64 → `evaluateJavaScript("__opendeckFileResolve(seq, ok, b64, err)")` 回填。**通用能力:任何 HTML 插件运行时读插件根文件皆可用**。另 `AppModel.start()` 增 `beginActivity(.userInitiated)` 断言:菜单栏 app 长期无窗口会被整进程 App Nap 挂起连累插件页定时器(进程常驻即业务,与 Elgato 同类做法)
+- **插件侧**:`com.zcode.status` 弃 fetch 改 `opendeckReadFile('state.json')` → atob → 既有解析/变化检测/推送管线零改动;读失败 logMessage 限频日志(30s 一条,state.json 首事件前不存在属正常)
+- **验证**:60 测全绿(含 webview 集成测试);dist 重编译部署;真机:遥测 chain-ok 每秒 state=working ageMs 递增 ✓,**用户目视键面 idle 灰● → 绿✓ 活切换**(M3-3 全链路首次闭环);绿✓→黄?→红!→绿✓ 序列实验已排队(遥测通道佐证)
+- **同族受害者(新已知边界)**:官方 **time 插件**(Vite 打包)启动即 fetch i18n JSON + modulepreload polyfill 走 fetch,file:// 域全拒 → 注册后静默零输出,表盘从未上屏(§6.11「待目视」实为从未画出)。后续候选:官方 HTML 插件逐个甄别、必要时在桥上做透明 fetch/XHR polyfill(拦截 window.fetch 到 file 相对路径转桥),归入 M3「逐插件适配」
+- **诊断方法论沉淀**:release 构建的 print/📤 插桩不落 oslog;serverLog.info 级 oslog 需 `log stream --level info`(`log show` 不含 info 历史区);宿主 logMessage 通道(`📜 插件日志:`)是免重编译的插件页观测面,排障首选
+- **补遗(同日第二层根因,用户目视「工作态仍绿✓」触发)**:桥修好后键面仅活了 ~2 分钟——遥测实测页面自链 setTimeout 节拍 +0~89s 每 30s 窗 28-29 跳(1s 正常)、+90s 起衰减、**+108s 归零永不恢复**(隐藏页面 WebKit 定时器治理;节流加深/单环异常断链,链式结构一断即永久死亡;且链内任一回调抛异常也会静默断链)。**定案:轮询节拍所有权归宿主,页面自持定时器一律不可靠**。重构:`PluginWebviewRuntime` 增宿主推拍——documentEnd 用户脚本检测页面定义了 `__opendeckPulse` 即经 opendeckFile 通道回报,宿主起 Foundation 1s Timer(`evaluateJavaScript("window.__opendeckPulse&&__opendeckPulse()")`,不经 DOM 定时器队列、不受隐藏页节流,单拍异常下拍自愈;close() 注销);官方插件未定义回调零成本。插件页:tick 改纯函数由推拍驱动(去自链)、`sendImage` 加 readyState 守卫、新增 **60s 一条的 alive 存活日志**(本次排查缺它多绕一小时,长期观测面)。复验:推拍存活 8 分钟+、test 消息 UserPromptSubmit→working 1s 内检出推送、alive 序列 working→done→working 与回合边界完全吻合
+- **状态机扩展:asking 黄?闪烁(2026-10-16,用户需求「向我提问时可见」)**:新状态 `asking`(亮黄↔暗黄 #5c4712 交替)。触发链:hooks 配置新增 **PreToolUse** 事件(条目形状照抄 UserPromptSubmit;备份 config.json.pre-asking.bak)→ `hook.py` 特判 `PreToolUse + tool_name=="AskUserQuestion"` → asking(其余工具调用不写,working 仍归 PostToolUse);用户作答即 PostToolUse → working 自动恢复。**闪烁的快节拍走自适应推拍契约**:页面 `__opendeckPulse()` 返回期望的下一拍间隔 ms(asking 350 / 其余 1000,宿主钳制 200…5000),`PluginWebviewRuntime` 单发 Timer 链按返回值重排——快节拍依然宿主驱动,不受页面定时器冻结影响;节拍自适应有一拍滞后,视觉无感。已知边界:纯文本问句无 hook 事件可挂,不触发 asking(记录不处理);hooks 会话启动时加载,新配置需新 ZCode 会话生效。验证:hook.py 单测(假 PreToolUse stdin → state=asking)✓、直写 state.json 用户目视黄?闪烁 ✓、回复后回蓝 ✓
