@@ -15,27 +15,38 @@ final class AppModel {
     static let officialBundleID = "com.mirabox.streamdock"
 
     let device = DeviceController()
-    // MARK: - 固定导航键
+    // MARK: - 固定保留槽(位置 14/15 导航 + 位置 6/7/8 Stats)
 
-    /// 末两格(位置 14/15)全页保留的导航键:任何场景/页都渲染,不读配置、不可编辑。
-    /// 按压循环下一个(场景末尾回绕到第一景;页同理),箭头瓷贴区分语义
-    static let reservedNavKeys: [Int: KeyAction] = [
-        13: .nextScene, // 位置 14:切换场景(↔)
-        14: .nextPage,  // 位置 15:切换页(↕)
-    ]
+    /// 保留槽语义:导航键强制动作+箭头瓷贴;Stats 槽由采样定时器整帧覆盖,按压无动作
+    enum ReservedSlot {
+        case nav(KeyAction, tile: KeyConfig)
+        case stat(StatKind)
+    }
 
-    /// 固定导航键的瓷贴外观
-    private static func reservedNavConfig(for index: Int) -> KeyConfig {
+    /// 末两格(位置 14/15)导航 + 中排前三格(位置 6/7/8)Stats,全页保留,不读配置、不可编辑
+    static func reservedSlot(at index: Int) -> ReservedSlot? {
         switch index {
-        case 13: return KeyConfig(title: "↔", backgroundColorHex: "#5E81AC", action: .nextScene)
-        default: return KeyConfig(title: "↕", backgroundColorHex: "#B48EAD", action: .nextPage)
+        case 13: return .nav(.nextScene, tile: KeyConfig(title: "↔", backgroundColorHex: "#5E81AC", action: .nextScene))
+        case 14: return .nav(.nextPage, tile: KeyConfig(title: "↕", backgroundColorHex: "#B48EAD", action: .nextPage))
+        case 5: return .stat(.gpu)
+        case 6: return .stat(.cpu)
+        case 7: return .stat(.temp)
+        default: return nil
         }
     }
 
-    /// 键位最终生效配置:固定导航槽强制导航瓷贴,其余读用户配置
+    /// Stats 槽位(索引):GPU 6 / CPU 7 / 温度 8
+    static let statSlots: [(index: Int, kind: StatKind)] = [
+        (5, .gpu), (6, .cpu), (7, .temp),
+    ]
+
+    /// 键位最终生效配置:保留槽强制保留瓷贴(Stats 槽在首帧采样前显示占位),其余读用户配置
     static func resolvedKeyConfig(at index: Int, config: ConfigStore) -> KeyConfig {
-        guard reservedNavKeys[index] != nil else { return config.keyConfig(at: index) }
-        return reservedNavConfig(for: index)
+        guard let slot = reservedSlot(at: index) else { return config.keyConfig(at: index) }
+        switch slot {
+        case .nav(_, let tile): return tile
+        case .stat(let kind): return KeyConfig(title: kind.label, backgroundColorHex: "#3B4252")
+        }
     }
 
     let config = ConfigStore()
@@ -54,6 +65,11 @@ final class AppModel {
     private var started = false
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
     private var workspaceObservers: [NSObjectProtocol] = []
+    /// Stats 集成:采样器(CPU/GPU/温度)与 2s 刷新定时器
+    private let statSampler = StatSampler()
+    private var statTimer: Timer?
+    /// 最近一次采样(UI 网格占位帧与定时刷新共用)
+    private(set) var lastStatSample: StatSample?
     /// App Nap 断言:菜单栏 app 长期无窗口时会被整进程挂起,插件 webview 的
     /// 定时器/轮询随之冻结(HTML 家族无界面可见性,尤甚)。设备心跳与插件宿主
     /// 是本 app 的存在意义,进程常驻即业务,断言与进程同生命周期。
@@ -72,6 +88,11 @@ final class AppModel {
             options: [.userInitiated],
             reason: "OpenDeck:设备心跳与插件宿主常驻"
         )
+        // Stats 集成:2s 采样,统计瓷贴整帧刷新(设备 + UI 镜像同源)
+        statTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshStatTiles() }
+        }
+
         refreshOfficialAppFlag()
         observeWorkspaceApplications()
 
@@ -323,6 +344,13 @@ final class AppModel {
         // 固定导航键:无视配置,强制导航动作(配置里这两格的内容不渲染、不建实例)
         let key = Self.resolvedKeyConfig(at: index, config: config)
         pluginHost.syncKey(at: index, action: key.action)
+        // Stats 槽:整帧由采样定时器覆盖,这里先上占位帧(采样值或 "--")
+        if case .stat(let kind) = Self.reservedSlot(at: index) {
+            let image = StatTileRenderer.tile(kind: kind, value: statValueText(kind))
+                ?? StatTileRenderer.tile(kind: kind, value: "--")
+            if let image { setKeyImage(index: index, image: image) }
+            return
+        }
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
         let title: String?
         let iconPath: String?
@@ -583,6 +611,34 @@ final class AppModel {
         NSWorkspace.shared.runningApplications
             .first { $0.bundleIdentifier == Self.officialBundleID }?
             .terminate()
+    }
+
+    // MARK: - Stats 集成
+
+    /// 统计瓷贴取值文本:无数据显示 "--"
+    private func statValueText(_ kind: StatKind) -> String {
+        guard let sample = lastStatSample else { return "--" }
+        switch kind {
+        case .gpu: return sample.gpu.map { "\($0)%" } ?? "--"
+        case .cpu: return sample.cpu.map { "\($0)%" } ?? "--"
+        case .temp: return sample.temp.map { "\(Int($0.rounded()))°" } ?? "--"
+        }
+    }
+
+    /// 后台采样 → 主线程整帧刷新统计瓷贴(设备 + UI 镜像同源)
+    private func refreshStatTiles() {
+        let sampler = statSampler
+        Task.detached(priority: .utility) { [weak self] in
+            let sample = sampler.sample()
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                lastStatSample = sample
+                for (index, kind) in Self.statSlots {
+                    guard let image = StatTileRenderer.tile(kind: kind, value: statValueText(kind)) else { continue }
+                    setKeyImage(index: index, image: image)
+                }
+            }
+        }
     }
 
     // MARK: - 登录项

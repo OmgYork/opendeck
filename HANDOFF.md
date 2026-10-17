@@ -260,3 +260,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **manifest**:com.zcode.status 加 `"ActivateAppBundleID": "dev.zcode.app"`(bundle id 实测取自 /Applications/ZCode.app/Contents/Info.plist;仓库源码与部署目录已同步,重启 OpenDeck 生效)
 - **测试**:69 全绿零警告(+3):SDManifest 解析(声明可解析/缺省 nil);真 socket 两用例(spy hook:抬起沿触发且参数正确、按下沿与未声明 action 不触发);KeyAction/ConfigStore 零改动,无配置兼容问题
 - **边界**:ZCode 未运行时按键=启动并置前(预期行为);激活失败静默落日志;同一插件多键声明同 app 重复激活无副作用(LS 幂等)。待真机验收:按灯 ZCode 置前、未运行时启动置前、其他键零影响
+
+### 6.18 Stats 集成:GPU/CPU/温度上屏(2026-10-18,槽位 6/7/8;含固定导航键+滚轮+镜像 v2 收尾)
+- **需求**:Stats 软件同款指标上屏——GPU 利用率(槽6)、CPU 利用率(槽7)、传感器温度 hottest CPU(槽8)
+- **数据源(全部本机实测打通,零外部依赖)**:①GPU = IOAccelerator 注册表 `PerformanceStatistics["Device Utilization %"]` 直读(多 GPU 取最大);②CPU = mach `host_statistics64` 差分;③温度 = **AppleSMC 现代接口**——经典 selector(5/8/9)在 macOS 26 全部 kIOReturnUnsupported,反汇编 Stats 的 Sensors.framework 定案:**仅 selector 2 存在(分发器),80 字节结构,data8@42=传统功能号(5=读键/8=按索引取键/9=键信息)、data32@44=参数、classic 字段整体后移 3 字节(keyInfo 对齐 12 字节,总长恰 80)**;温度键 = Tp* 全枚举(1762 键中 27 个),4 字节 IEEE754 浮点(实测 58~83°C 合理域),取最大
+- **实现**:StatSampler.swift(SMCTemperatureReader + StatSampler + StatTileRenderer);StatTileRenderer 用 CoreText 直绘(NSAttributedString.draw 在裸 CGContext 上坐标错乱实测),100×100 深底+顶部标签+中央大值,预旋转 180°;保留槽泛化 `reservedSlot(at:)`(导航 nav + 统计 stat 两类),Stats 槽由 2s 采样定时器整帧覆盖(setKeyImage → 设备 + UI 镜像同源),applyKey 先上占位帧
+- **诊断陷阱(排障耗时实录)**:app 内 SMC 枚举 0 键 vs 脚本 1762 键——根因是移植时用了经典流程(funcID 9 keyInfo 拿 #KEY),而实测打通的现代流程是 funcID 5 读 #KEY + funcID 8 枚举;诊断日志(category stats,notice 级)定位
+- **验收(截图自验)**:GPU 85%/CPU 35%/82° 实时刷新,状态灯蓝▶/Hermes 灰●/autotoggle 待命 同帧镜像;晨起用户验收硬件面
+- **边界**:Stats 槽按压无动作;槽 5/6/7 原配置内容不渲染(保留槽语义);GPU 利用率依赖 IOAccelerator 键存在(缺则 N/A);温度键名按前缀 Tp* 过滤+合理域(15~110°C)过滤,机型相关的键位清单由枚举自适应,无需按机型硬编码

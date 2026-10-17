@@ -456,8 +456,8 @@ struct EditorView: View {
         LazyVGrid(columns: Self.gridColumns, spacing: 12) {
             ForEach(0..<(StreamDock293S.rows * StreamDock293S.columns), id: \.self) { index in
                 Button {
-                    // 固定导航键(位置 14/15):全页保留,不开放编辑
-                    guard AppModel.reservedNavKeys[index] == nil else { return }
+                    // 保留槽(导航 14/15 + Stats 6/7/8):全页保留,不开放编辑
+                    guard AppModel.reservedSlot(at: index) == nil else { return }
                     editingTarget = EditTarget(index: index)
                 } label: {
                     KeycapView(
@@ -467,9 +467,9 @@ struct EditorView: View {
                     )
                 }
                 .buttonStyle(KeycapButtonStyle())
-                .help(AppModel.reservedNavKeys[index] == nil
+                .help(AppModel.reservedSlot(at: index) == nil
                       ? "编辑第 \(index + 1) 键"
-                      : "固定导航键(按压循环切换,不可编辑)")
+                      : "保留键(不可编辑)")
             }
         }
     }
