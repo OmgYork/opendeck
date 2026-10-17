@@ -456,15 +456,20 @@ struct EditorView: View {
         LazyVGrid(columns: Self.gridColumns, spacing: 12) {
             ForEach(0..<(StreamDock293S.rows * StreamDock293S.columns), id: \.self) { index in
                 Button {
+                    // 固定导航键(位置 14/15):全页保留,不开放编辑
+                    guard AppModel.reservedNavKeys[index] == nil else { return }
                     editingTarget = EditTarget(index: index)
                 } label: {
                     KeycapView(
-                        config: appModel.config.keyConfig(at: index),
-                        remotePressed: appModel.pressedKeyIndices.contains(index)
+                        config: AppModel.resolvedKeyConfig(at: index, config: appModel.config),
+                        remotePressed: appModel.pressedKeyIndices.contains(index),
+                        slot: appModel.keyImageSlots[index]
                     )
                 }
                 .buttonStyle(KeycapButtonStyle())
-                .help("编辑第 \(index + 1) 键")
+                .help(AppModel.reservedNavKeys[index] == nil
+                      ? "编辑第 \(index + 1) 键"
+                      : "固定导航键(按压循环切换,不可编辑)")
             }
         }
     }
@@ -1017,7 +1022,7 @@ enum ActionKind: Hashable, CaseIterable {
 /// 机制:NSEvent 本地监听(AppKit 派发给本应用的滚动事件先经此处)。
 /// 步进保证:触控板精确手势以「手指接触周期」(phase began→changed→ended)为单位,
 /// 周期内至多步进 1,手指离开后的惯性滚动(momentumPhase)全部吞掉——
-/// 不论速度多快、行程多长,一次扫动恰好步进 1。传统滚轮(无相位)退回冷却机制。
+/// 不论速度多快、行程多长,一次扫动恰好步进 1。传统滚轮(无相位)一格一步 + 0.35s 冷却防连翻。
 @MainActor
 private final class SwipePageMonitor {
     private var token: Any?
@@ -1033,8 +1038,13 @@ private final class SwipePageMonitor {
     private var gestureActive = false
     /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
     private let threshold: CGFloat = 30
+    /// 传统滚轮一格 = 一步:非精确增量单位是「行」,一格约 ±1~±3;若沿用触控板阈值 30
+    /// 等于要滚 10~30 格才翻一页,体感即「滚轮没反应」(2026-10-17 用户反馈)
+    private let wheelStep: CGFloat = 1
     /// 传统滚轮(无精确增量、无相位)的触发冷却
     private var wheelCooldownUntil = Date.distantPast
+    /// 上一格滚轮时刻:两格间隔超 0.5s 视为新动作,清掉零星半行残余防误触
+    private var lastWheelAt = Date.distantPast
 
     func start() {
         end()
@@ -1065,30 +1075,11 @@ private final class SwipePageMonitor {
         // 动量结束、下一次 phase .began 到来才开启新的一次扫动。
         if event.momentumPhase != [] { return nil }
 
-        // 传统滚轮(无精确增量、无相位):退回冷却机制,行为与硬件滚轮一致
-        guard event.hasPreciseScrollingDeltas else {
-            guard Date() >= wheelCooldownUntil else { return event }
-            if abs(dx) > abs(dy), abs(dx) >= 1 {
-                horizontalAccumulated += dx
-                guard abs(horizontalAccumulated) >= threshold else { return event }
-                // 滚轮前滚 = 内容上移 = 上一页(滚动语义)
-                let direction = horizontalAccumulated > 0 ? 1 : -1
-                horizontalAccumulated = 0
-                wheelCooldownUntil = Date().addingTimeInterval(0.35)
-                onSwipe?(true, direction)
-                return nil
-            }
-            if abs(dy) > abs(dx), abs(dy) >= 1 {
-                verticalAccumulated += dy
-                guard abs(verticalAccumulated) >= threshold else { return event }
-                // 滚轮下滚 = 内容下移 = 下一页(AppKit 符号:deltaY 正 = 向上滚)
-                let direction = verticalAccumulated > 0 ? -1 : 1
-                verticalAccumulated = 0
-                wheelCooldownUntil = Date().addingTimeInterval(0.35)
-                onSwipe?(false, direction)
-                return nil
-            }
-            return event
+        // 分流依据是「有无手势相位」而非「是否精确增量」:机械滚轮无相位且非精确;
+        // Logi Options+ 等平滑滚动驱动是精确增量但同样无相位——若按精确路由进触控板分支,
+        // 手势永远等不到 .ended,翻一页后 flipped 卡死,滚轮从此失灵(2026-10-17 用户反馈)
+        guard event.phase != [] else {
+            return handleDiscrete(dx: dx, dy: dy, precise: event.hasPreciseScrollingDeltas)
         }
 
         // 触控板精确手势:一次接触周期(phase began→changed→ended)至多步进 1
@@ -1126,6 +1117,46 @@ private final class SwipePageMonitor {
         }
         return nil
     }
+
+    /// 无相位的离散滚动(机械滚轮 / 平滑滚动驱动):一步一触发 + 0.35s 冷却防连翻,全程吞掉;
+    /// 机械滚轮增量单位是行(一格 ±1~±3)→ 步长 1;精确增量单位是点 → 步长 20(一格约 10~40 点)。
+    /// 诊断日志(默认级别,log show 可查):每个滚动突发首事件 + 每次触发,定位设备类别与方向
+    private func handleDiscrete(dx: CGFloat, dy: CGFloat, precise: Bool) -> NSEvent? {
+        let now = Date()
+        if now.timeIntervalSince(lastWheelAt) > 0.5 {
+            horizontalAccumulated = 0
+            verticalAccumulated = 0
+            Self.swipeLog.notice("离散滚动开始 precise=\(precise) dx=\(dx) dy=\(dy)")
+        }
+        lastWheelAt = now
+        guard now >= wheelCooldownUntil else { return nil }
+        let step: CGFloat = precise ? 20 : wheelStep
+        if abs(dx) > abs(dy) {
+            horizontalAccumulated += dx
+            guard abs(horizontalAccumulated) >= step else { return nil }
+            // 右滚(Shift+滚轮转水平)= 看右侧 = 下一场景
+            let direction = horizontalAccumulated > 0 ? 1 : -1
+            horizontalAccumulated = 0
+            wheelCooldownUntil = now.addingTimeInterval(0.35)
+            Self.swipeLog.notice("离散触发 水平 direction=\(direction)")
+            onSwipe?(true, direction)
+            return nil
+        }
+        if dy != 0 {
+            verticalAccumulated += dy
+            guard abs(verticalAccumulated) >= step else { return nil }
+            // 滚轮下滚 = 内容下移 = 下一页(AppKit 符号:deltaY 正 = 向上滚)
+            let direction = verticalAccumulated > 0 ? -1 : 1
+            verticalAccumulated = 0
+            wheelCooldownUntil = now.addingTimeInterval(0.35)
+            Self.swipeLog.notice("离散触发 垂直 direction=\(direction) acc=\(dy)")
+            onSwipe?(false, direction)
+            return nil
+        }
+        return nil
+    }
+
+    private static let swipeLog = Logger(subsystem: "opendeck", category: "swipe")
 }
 
 // MARK: - 模态滑动抑制

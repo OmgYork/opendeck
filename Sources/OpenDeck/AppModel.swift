@@ -15,6 +15,29 @@ final class AppModel {
     static let officialBundleID = "com.mirabox.streamdock"
 
     let device = DeviceController()
+    // MARK: - 固定导航键
+
+    /// 末两格(位置 14/15)全页保留的导航键:任何场景/页都渲染,不读配置、不可编辑。
+    /// 按压循环下一个(场景末尾回绕到第一景;页同理),箭头瓷贴区分语义
+    static let reservedNavKeys: [Int: KeyAction] = [
+        13: .nextScene, // 位置 14:切换场景(↔)
+        14: .nextPage,  // 位置 15:切换页(↕)
+    ]
+
+    /// 固定导航键的瓷贴外观
+    private static func reservedNavConfig(for index: Int) -> KeyConfig {
+        switch index {
+        case 13: return KeyConfig(title: "↔", backgroundColorHex: "#5E81AC", action: .nextScene)
+        default: return KeyConfig(title: "↕", backgroundColorHex: "#B48EAD", action: .nextPage)
+        }
+    }
+
+    /// 键位最终生效配置:固定导航槽强制导航瓷贴,其余读用户配置
+    static func resolvedKeyConfig(at index: Int, config: ConfigStore) -> KeyConfig {
+        guard reservedNavKeys[index] != nil else { return config.keyConfig(at: index) }
+        return reservedNavConfig(for: index)
+    }
+
     let config = ConfigStore()
     let pluginHost = PluginHostModel()
 
@@ -22,6 +45,9 @@ final class AppModel {
     private(set) var officialAppRunning = false
     /// 当前物理按下的键(index 集合)——UI 键帽同步凹陷,验证「按哪颗亮哪颗」
     private(set) var pressedKeyIndices: Set<Int> = []
+    /// 实时键面镜像(单键粒度):每键一个 @Observable 槽,只有读过该槽的 KeycapView 因其变化重绘。
+    /// 首版把全部键面塞进一个字典属性,任一键推图=整网格重渲+逐键磁盘 IO,触控板滚动被打断(§6.15)
+    let keyImageSlots: [KeyImageSlot] = (0..<(StreamDock293S.rows * StreamDock293S.columns)).map { _ in KeyImageSlot() }
     /// 最近设备日志(尾部最新),仅供状态栏展示,环形保留一屏即可
     private(set) var recentLogs: [String] = []
 
@@ -51,8 +77,7 @@ final class AppModel {
 
         pluginHost.hooks.draw = { [weak self] index, image in
             guard let self else { return }
-            self.device.drawKey(row: index / StreamDock293S.columns,
-                                column: index % StreamDock293S.columns, image: image)
+            self.setKeyImage(index: index, image: image)
         }
         pluginHost.hooks.backgroundColor = { [weak self] index in
             self?.config.keyConfig(at: index).backgroundColorHex ?? "#3B4252"
@@ -65,8 +90,10 @@ final class AppModel {
                 self?.appendLog("状态灯激活目标未安装:\(bundleID)")
                 return
             }
+            // Logger 本身 Sendable;先取值再进 Sendable 回调,避免闭包内触碰 MainActor 隔离的静态属性
+            let log = Self.oslog
             workspace.openApplication(at: url, configuration: .init()) { _, error in
-                if let error { Self.oslog.error("激活 \(bundleID, privacy: .public) 失败:\(error.localizedDescription, privacy: .public)") }
+                if let error { log.error("激活 \(bundleID, privacy: .public) 失败:\(error.localizedDescription, privacy: .public)") }
             }
         }
         pluginHost.hooks.log = { [weak self] line in
@@ -98,7 +125,9 @@ final class AppModel {
                 self.setBrightness(self.lastNonZeroMirroredBrightness, userInitiated: false)
                 self.armPeekReDarken()
             }
-            let action = self.config.keyConfig(at: index).action
+            // 固定导航键(位置 14/15)的动作是解析后强制的,配置原文在这两格恒空,
+            // 直接读配置会让按键事件无动作(2026-10-18 用户反馈按压无反应)
+            let action = Self.resolvedKeyConfig(at: index, config: config).action
             // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
             if case .plugin = action {
                 self.pluginHost.handleKey(index: index, phase: event.phase)
@@ -291,7 +320,8 @@ final class AppModel {
     func applyKey(at index: Int) {
         let row = index / StreamDock293S.columns
         let column = index % StreamDock293S.columns
-        let key = config.keyConfig(at: index)
+        // 固定导航键:无视配置,强制导航动作(配置里这两格的内容不渲染、不建实例)
+        let key = Self.resolvedKeyConfig(at: index, config: config)
         pluginHost.syncKey(at: index, action: key.action)
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
         let title: String?
@@ -316,11 +346,20 @@ final class AppModel {
             appendLog("键面渲染失败(r\(row) c\(column),检查颜色/图标)")
             return
         }
-        device.drawKey(row: row, column: column, image: image)
+        setKeyImage(index: index, image: image)
         // 插件实例在则按当前态重渲(多状态动作上屏即显 manifest 默认图,盖过上方瓷砖)
         if case .plugin = key.action {
             pluginHost.redrawInstanceIfPresent(at: index)
         }
+    }
+
+    /// 键面图像统一入口:设备写一份、对应单键镜像槽存一份(网格 KeycapView 据此与设备同源)
+    private func setKeyImage(index: Int, image: CGImage) {
+        if keyImageSlots.indices.contains(index) {
+            keyImageSlots[index].image = image
+        }
+        device.drawKey(row: index / StreamDock293S.columns,
+                       column: index % StreamDock293S.columns, image: image)
     }
 
     // MARK: - 亮度

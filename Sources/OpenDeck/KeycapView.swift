@@ -4,8 +4,16 @@ import SwiftUI
 
 // MARK: - 键帽(拟真键面)
 
+/// 单键实时镜像槽:设备最近一次写入的键面帧(IconRenderer 合成产物,已预旋转 180°)。
+/// @Observable 按对象粒度追踪——只有读过该槽的 KeycapView 因其变化重绘,网格其余键不动
+@Observable
+final class KeyImageSlot {
+    var image: CGImage?
+}
+
 /// 一颗键的视觉呈现:底色渐变 + 顶部光泽 + 底图 + 标题 + 动作角标。
 /// 网格单元与编辑器实时预览共用,保证「编辑器里看到的 = 设备上亮起的」。
+/// 有实时镜像槽且已有帧时,整面以设备帧为准(原样显示,仅转正),不再叠配置层。
 /// 交互遵循 fluid interfaces:悬停浮起、按下凹陷,弹簧可中断。
 struct KeycapView: View {
     let config: KeyConfig
@@ -13,6 +21,8 @@ struct KeycapView: View {
     var interactive = true
     /// 物理设备上正被按住(远程按压态:凹陷 + 发光描边)
     var remotePressed = false
+    /// 实时镜像槽(网格传入;编辑器草稿预览不传)
+    var slot: KeyImageSlot?
 
     @State private var hovering = false
 
@@ -20,6 +30,8 @@ struct KeycapView: View {
     private var isEmptyKey: Bool {
         config.title.isEmpty && config.iconPath == nil && config.action == nil
     }
+    /// 设备帧:存在即整面接管(scaledToFit 方中方=1:1 不裁;帧已预旋转 180°,此处转回正立)
+    private var liveFrame: CGImage? { slot?.image }
 
     var body: some View {
         // 布局锚:基础形状链(overlays 不参与布局, oversized 图片不会撑爆网格)
@@ -38,7 +50,13 @@ struct KeycapView: View {
                 )
             }
             .overlay {
-                if let path = config.iconPath, let image = NSImage(contentsOfFile: path) {
+                if let liveFrame {
+                    Image(decorative: liveFrame, scale: 1.0, orientation: .up)
+                        .resizable()
+                        .scaledToFit()
+                        .rotationEffect(.degrees(180))
+                        .allowsHitTesting(false)
+                } else if let path = config.iconPath, let image = NSImage(contentsOfFile: path) {
                     // scaledToFill 溢出部分由整体 clipShape 裁掉
                     Image(nsImage: image)
                         .resizable()
@@ -47,20 +65,20 @@ struct KeycapView: View {
                 }
             }
             .overlay {
-                if config.iconPath != nil {
+                if config.iconPath != nil && liveFrame == nil {
                     // 压暗底图,保证标题可读(vibrancy 原则:重背景配重文字)
                     Rectangle().fill(.black.opacity(0.18))
                 }
             }
             .overlay {
-                if isEmptyKey {
+                if isEmptyKey && liveFrame == nil {
                     Image(systemName: "plus")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.white.opacity(0.35))
                 }
             }
             .overlay(alignment: .bottom) {
-                if !config.title.isEmpty {
+                if !config.title.isEmpty && liveFrame == nil {
                     Text(config.title)
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .foregroundStyle(palette.textColor)
@@ -72,7 +90,7 @@ struct KeycapView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if let action = config.action {
+                if let action = config.action, liveFrame == nil {
                     Image(systemName: ActionStyle.symbol(for: action))
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(palette.textColor.opacity(0.85))
