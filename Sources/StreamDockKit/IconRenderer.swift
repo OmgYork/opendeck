@@ -91,8 +91,11 @@ public enum IconRenderer {
     public static func jpeg(from image: CGImage, maxBytes: Int = StreamDock293S.maxKeyJPEGBytes) -> Data? {
         var current = image
         for scale in [1.0, 0.8, 0.6] {
-            if scale < 1.0, let scaled = redraw(image, scale: scale) {
-                current = scaled
+            if scale < 1.0, let shrunk = redraw(image, scale: scale),
+               let restored = expand(shrunk, toWidth: image.width, height: image.height) {
+                // 缩小只为降细节省字节,画布必须还原原尺寸:小于键面的图会被固件锚在
+                // 右下角显示,呈现「左/上空隙大」的偏移(2026-10-18 用户实测定位)
+                current = restored
             }
             var quality = 0.9
             while quality >= 0.1 {
@@ -118,6 +121,21 @@ public enum IconRenderer {
         )
         guard CGImageDestinationFinalize(dest) else { return nil }
         return out as Data
+    }
+
+    /// 把低分辨率图放大回指定画布(双线性):细节已丢失,字节量级保持省,但尺寸与键面一致
+    private static func expand(_ image: CGImage, toWidth width: Int, height: Int) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                  data: nil, width: width, height: height,
+                  bitsPerComponent: 8, bytesPerRow: width * 4,
+                  space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()
     }
 
     private static func redraw(_ image: CGImage, scale: Double) -> CGImage? {

@@ -81,4 +81,32 @@ struct IconRendererTests {
         }
         #expect(darkPixels == side * side)
     }
+
+    @Test("JPEG 超限降级:画布尺寸保持不变(防固件右下锚定偏移)")
+    func jpegFallbackKeepsCanvasSize() throws {
+        // 高细节噪声图:100×100 必然超过 10240B,触发 scale 降级路径
+        let side = 100
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ctx = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                                         bytesPerRow: side * 4, space: space,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        for y in 0..<side {
+            for x in 0..<side {
+                seed = seed &* 6364136223846793005 &+ 1442695040888963407
+                let r = UInt8((seed >> 33) & 0xFF)
+                let g = UInt8((seed >> 41) & 0xFF)
+                let b = UInt8((seed >> 49) & 0xFF)
+                ctx.setFillColor(CGColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255,
+                                         blue: CGFloat(b) / 255, alpha: 1))
+                ctx.fill(CGRect(x: x, y: y, width: 1, height: 1))
+            }
+        }
+        let noisy = try #require(ctx.makeImage())
+        let jpeg = try #require(IconRenderer.jpeg(from: noisy, maxBytes: 10240))
+        let source = try #require(CGImageSourceCreateWithData(jpeg as CFData, nil))
+        let decoded = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(decoded.width == side, "降级后画布宽度应保持 100,实得 \(decoded.width)")
+        #expect(decoded.height == side, "降级后画布高度应保持 100,实得 \(decoded.height)")
+    }
 }

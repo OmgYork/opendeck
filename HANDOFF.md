@@ -269,3 +269,8 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **验收(截图自验)**:GPU 85%/CPU 35%/82° 实时刷新,状态灯蓝▶/Hermes 灰●/autotoggle 待命 同帧镜像;晨起用户验收硬件面
 - **边界**:Stats 槽按压无动作;槽 5/6/7 原配置内容不渲染(保留槽语义);GPU 利用率依赖 IOAccelerator 键存在(缺则 N/A);温度键名按前缀 Tp* 过滤+合理域(15~110°C)过滤,机型相关的键位清单由枚举自适应,无需按机型硬编码
 - **补遗(数值口径对齐,用户反馈「三个值与 Stats 不一致」)**:逐项对表 Stats 源码(exelban/stats,GPL)——①**温度**:Stats 的「Hottest CPU」= 其**分代精选键表**(Sensors/values.swift,group .CPU + average:true)上取最大,**不是全部 Tp***;本机 M2 表 = Tp1h/Tp1t/Tp1p/Tp1l + Tp01/Tp05/Tp09/Tp0D/Tp0X/Tp0b/Tp0f/Tp0j,我们此前全量 27 键取最大把表外键(本机 Tp0g 82.8°)算了进来 → 偏高;已按芯片代际(sysctl brand_string)硬编码 M1/M2/M3/M4 四代键表并与本机存在键取交集,无交集回退全量;独立验算 Stats 口径 65°C(Tp09)✓。②**CPU**:Stats totalUsage=(user+sys)/total,**nice 只入分母**;已对齐(此前 1-idle 含 nice)。③**GPU**:同源(IOAccelerator Device Utilization %,Stats reader.swift:139 逐字一致),本机仅 1 个 accelerator,残余差异纯属瞬时采样抖动(屏保下波动大)。侧记:槽 4 autotoggle 绑定在某次编辑器操作后消失(非渲染 bug);槽 5(位置 6)旧 mediaKey 绑定被 Stats 保留槽按设计覆盖,待用户决策去留
+
+### 6.19 硬件 icon 偏移根因修复 + 官方 HTML 插件兼容矩阵(2026-10-18)
+- **icon 左/上空隙大(用户实测定位)**:根因 = **JPEG 超限降级路径改变了画布尺寸**——高细节图标(动漫图)JPEG q0.1 仍超 10240B 时,`jpeg(from:)` 用 `redraw(scale:)` 缩到 80×80/60×60 并原样发送;固件把小于键面的图锚定在右下角 → 呈现「左/上空隙大、右下贴合」的偏移。瓷贴纯色不超限、100×100 全铺故正常。**修复**:降级后 `expand()` 双线性放大回原画布再编码(细节已丢失即省字节,画布尺寸恒定);新增回归测试「JPEG 超限降级:画布尺寸保持不变」(噪声图强制触发降级,70 测全绿)
+- **官方 HTML 插件兼容矩阵(脚本化扫描:绑定→启动→采集→卸载,10 个 HTML 插件)**:全部**注册成功**;8 个 Vue+Pinia 挂载(calendar/dateTime/eatgoldcoins/h1time/pigmenteffects/screensaver/time/watertank,其中 7 个探针可见 store 已收到 willAppear——消息链通),memo/weather 为非 Vue 裸页面(weather 有 1 条 console 错误);**零解码失败、零渲染失败**。剩余「是否真正渲染上屏」属插件视图内部逻辑(time 的 `<!---->` 为已知插件侧问题),需逐插件目视,归 M3 逐插件适配后续;扫描产物(插件拷贝/孤儿 settings)已清理,现场恢复
+- **媒体键调整(用户指令)**:「播放/暂停」从槽 6(Stats GPU 保留槽上被覆盖的旧绑定)挪到槽 11,已落 config
