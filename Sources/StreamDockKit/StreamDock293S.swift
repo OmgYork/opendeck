@@ -65,10 +65,12 @@ public enum StreamDock293S {
         return nil
     }
 
-    /// 键面分辨率:全部主键 100×100
+    /// 键面分辨率:全部主键 **112×112**。
+    /// 官方 app 实测:每个键下发 112×112 JPEG(包头 BAT + 4 字节长度 + 键 id,与本实现一致);
+    /// 此前按 100×100 渲染,小于键面 → 固件按右下角锚定,呈现「左/上空隙大」的假偏移。
     public static func keySize(column: Int) -> Int {
         _ = column
-        return 100
+        return 112
     }
 
     // MARK: - 命令构造(纯函数)

@@ -27,10 +27,10 @@ struct IconRendererTests {
         }
     }
 
-    @Test("键面尺寸统一 100")
+    @Test("键面尺寸统一 112(官方 app 实测键面分辨率)")
     func keySize() {
         for column in 0..<StreamDock293S.columns {
-            #expect(StreamDock293S.keySize(column: column) == 100)
+            #expect(StreamDock293S.keySize(column: column) == 112)
         }
     }
 

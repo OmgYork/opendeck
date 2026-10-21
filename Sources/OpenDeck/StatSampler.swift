@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import IOKit
+import StreamDockKit
 import os
 
 // MARK: - Stats 集成采样(GPU / CPU 利用率 + 最热 CPU 温度)
@@ -212,12 +213,14 @@ nonisolated final class StatSampler: @unchecked Sendable {
     }
 }
 
-/// 统计瓷贴渲染:100×100 深底 + 顶部标签 + 中央大值,末尾旋转 180°(设备方向;
+/// 统计瓷贴渲染:112×112 深底 + 顶部标签 + 中央大值,末尾旋转 180°(设备方向;
 /// UI 镜像侧 KeycapView 会转回正立,与设备帧同源)。
 /// 文字用 CoreText 直绘(AppKit NSAttributedString.draw 在裸 CGContext 上坐标错乱,实测)
 enum StatTileRenderer {
     static func tile(kind: StatKind, value: String) -> CGImage? {
-        let side = 100
+        let side = StreamDock293S.keySize(column: 0)
+        // 版式按 100→112 等比缩放,保持原设计比例
+        let s = CGFloat(side) / 100
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
                                   bytesPerRow: side * 4, space: space,
@@ -234,19 +237,19 @@ enum StatTileRenderer {
         ctx.setFillColor(Self.color(bgBottom) ?? CGColor(gray: 0.18, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
         ctx.setFillColor(Self.color(bgTop)?.copy(alpha: 0.22) ?? CGColor(gray: 0.25, alpha: 0.2))
-        ctx.fill(CGRect(x: 0, y: CGFloat(side) - 34, width: CGFloat(side), height: 34))
+        ctx.fill(CGRect(x: 0, y: CGFloat(side) - 34 * s, width: CGFloat(side), height: 34 * s))
 
         let accentColor = Self.color(accent) ?? CGColor(gray: 1, alpha: 1)
         // 顶部标签
-        let labelFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 13, weight: .semibold).fontName as CFString, 13, nil)
+        let labelFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 13 * s, weight: .semibold).fontName as CFString, 13 * s, nil)
         centered(NSAttributedString(string: kind.label, attributes: [
             .font: labelFont, .foregroundColor: accentColor,
-        ]), in: CGRect(x: 0, y: CGFloat(side) - 30, width: CGFloat(side), height: 26), ctx: ctx)
+        ]), in: CGRect(x: 0, y: CGFloat(side) - 30 * s, width: CGFloat(side), height: 26 * s), ctx: ctx)
         // 中央大值
-        let valueFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 30, weight: .bold).fontName as CFString, value.count > 3 ? 24 : 30, nil)
+        let valueFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 30 * s, weight: .bold).fontName as CFString, (value.count > 3 ? 24 : 30) * s, nil)
         centered(NSAttributedString(string: value, attributes: [
             .font: valueFont, .foregroundColor: accentColor,
-        ]), in: CGRect(x: 0, y: 18, width: CGFloat(side), height: 52), ctx: ctx)
+        ]), in: CGRect(x: 0, y: 18 * s, width: CGFloat(side), height: 52 * s), ctx: ctx)
 
         guard let upright = ctx.makeImage() else { return nil }
         // 设备 180° 显示:预旋转输出(UI 镜像侧 KeycapView 会转回正立)。

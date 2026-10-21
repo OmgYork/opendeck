@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 public enum IconRenderer {
     /// 画一张键面图。
     /// - Parameters:
-    ///   - size: 键面边长(293V3:100)
+    ///   - size: 键面边长(293V3:112,官方 app 实测)
     ///   - backgroundColorHex: "#RRGGBB" 或 "#RRGGBBAA"
     ///   - title: 居中标题(支持中文)
     ///   - iconPath: 可选底图路径(按比例铺满居中裁切)

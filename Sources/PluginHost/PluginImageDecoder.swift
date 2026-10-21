@@ -7,7 +7,7 @@ import ImageIO
 /// 位图族(png/jpeg/gif/bmp/webp)走 ImageIO;SVG(百分号编码或 base64)经 NSImage
 /// 栅格化到键面尺寸(官方 HTML 插件如 centeredclock 以 SVG 推表盘,每秒一帧)。
 public enum PluginImageDecoder {
-    public static func decodeCGImage(from dataURLString: String?, pixelSize: Int = 100) -> CGImage? {
+    public static func decodeCGImage(from dataURLString: String?, pixelSize: Int = 112) -> CGImage? {
         guard var payload = dataURLString, !payload.isEmpty else { return nil }
         var isSVG = false
         if payload.hasPrefix("data:") {
