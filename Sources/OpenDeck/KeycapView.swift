@@ -33,19 +33,15 @@ struct KeycapView: View {
     /// 设备帧:存在即整面接管(scaledToFit 方中方=1:1 不裁;帧已预旋转 180°,此处转回正立)
     private var liveFrame: CGImage? { slot?.image }
 
-    /// 物理结构:圆角键帽外壳包裹**直角矩形**显示区,两者之间一圈黑边。
-    /// 预览按此还原:外壳仍是拟真圆角;有实时帧时把帧内缩 bezel 并保持直角(不再把整颗键切成尖角)。
-    private let bezel: CGFloat = 5
-
     var body: some View {
         // 布局锚:基础形状链(overlays 不参与布局, oversized 图片不会撑爆网格)
         RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(liveFrame == nil
-                  ? AnyShapeStyle(LinearGradient(
-                      colors: [palette.color.lighten(by: 0.10), palette.color],
-                      startPoint: .top, endPoint: .bottom
-                  ))
-                  : AnyShapeStyle(Color.black.opacity(0.92)))
+            .fill(
+                LinearGradient(
+                    colors: [palette.color.lighten(by: 0.10), palette.color],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
             .overlay {
                 // 顶部光泽:让键面读作有厚度的实体,而非平面色块
                 LinearGradient(
@@ -59,7 +55,6 @@ struct KeycapView: View {
                         .resizable()
                         .scaledToFit()
                         .rotationEffect(.degrees(180))
-                        .padding(bezel)   // 圆角外壳与直角显示区之间的黑边
                         .allowsHitTesting(false)
                 } else if let path = config.iconPath, let image = NSImage(contentsOfFile: path) {
                     // scaledToFill 溢出部分由整体 clipShape 裁掉
