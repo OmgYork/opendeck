@@ -33,6 +33,14 @@ struct KeycapView: View {
     /// 设备帧:存在即整面接管(scaledToFit 方中方=1:1 不裁;帧已预旋转 180°,此处转回正立)
     private var liveFrame: CGImage? { slot?.image }
 
+    /// 设备显示区是**尖角矩形(90°)**——有设备帧时按矩形裁切,不用键帽的圆角,
+    /// 否则预览会把画面四角切掉,与硬件不一致;无帧时仍用拟真圆角键帽外观
+    private var surface: AnyShape {
+        liveFrame == nil
+            ? AnyShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            : AnyShape(Rectangle())
+    }
+
     var body: some View {
         // 布局锚:基础形状链(overlays 不参与布局, oversized 图片不会撑爆网格)
         RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -101,18 +109,17 @@ struct KeycapView: View {
             }
             .overlay {
                 // 键帽边缘:一圈极细高光,深浅两种模式都成立
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+                surface.stroke(.white.opacity(0.14), lineWidth: 0.5)
             }
             .overlay {
                 if remotePressed {
                     // 物理按压的即时可视反馈:发光描边
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.65), lineWidth: 2.5)
+                    surface
+                        .stroke(.white.opacity(0.65), lineWidth: 2.5)
                         .shadow(color: .white.opacity(0.35), radius: 6)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(surface)
             .aspectRatio(1, contentMode: .fit)
             .scaleEffect(scale, anchor: .center)
             .shadow(

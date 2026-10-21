@@ -284,6 +284,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **对位补偿降级为可选微调**:`glassOffset` 机制与实时预览区调参条保留(X/Y/缩放),但**本机正确值就是 0,0,100**。用户此前为 100×100 调出的 `{-4,-3}` 已归零(配置备份 `backup-config-20261022-0418.json`);补偿算法(平移 + 边缘延展 + 缩放)本身经合成四象限图验证正确,继续作为物理玻璃个体差异的兜底
 - **配置化**:`AppConfig.glassOffset: GlassOffset?`(可选,旧配置缺键可解码),字段 `x/y/zoom`;手写 `init(from:)` 保证上一版只有 `{x,y}` 的配置不整份解码失败。主窗口底座下方内联调参条(⋯ 菜单 Toggle 呼出),拖动即时落盘 + `redrawCachedKeys()` 重发缓存帧;缓存存原始帧、发送前统一套用参数
 - **删除的临时物**:`/tmp/opendeck-calib` 文件通道、`StatTileRenderer.calibration` 标定帧、AppModel 每 2s 标定帧块、临时 Sheet;官方 app 副本(1.6GB)与探针脚本已清理
+- **显示区是 90° 尖角矩形(用户补充,2026-10-22)**:设备 LCD 显示区**没有圆角**。设备下发帧本身一直是全幅方形(IconRenderer/StatTileRenderer/黑图都无 mask),但 UI 预览 `KeycapView` 用 14pt 圆角 `clipShape` 会把实时帧四角切掉,与硬件不一致 → 有实时帧时改用 `AnyShape(Rectangle())`(描边/按压反馈同步换尖角),无帧的空键/草稿预览仍保留拟真圆角键帽。截图确认媒体/统计/图片键均为尖角
 - **验证**:`swift test` 58 测(15+30+13)全绿(`keySize` 断言改为 112);增量构建零警告;完整 release 仍只有既有的 `JSONValue.swift` deprecated ×6 与 PIFlowTests 多余 `try` ×1(未触碰)。已 `make-app.sh` 重打包并重启,配置 `glassOffset = {0,0,100}`,日志无失败项
 - **教训**:键面分辨率不要照抄社区模块(100×100)或从照片反推;直接抓官方 app 的实际下发帧最可靠。`sendPicSizeCommand` 等库内符号容易误导,真正决定显示锚点的是 JPEG 的画布尺寸
 
