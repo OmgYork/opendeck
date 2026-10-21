@@ -7,33 +7,27 @@
 </head>
 
 <body>
-    <canvas id="pad" width="100" height="100"></canvas>
+    <canvas id="pad" width="112" height="112"></canvas>
+    <script src="whale.js"></script>
     <script>
     'use strict';
 
-    // 状态定义:颜色 + 居中符号
+    // 状态集合:鲸鱼娘动画由 whale.js 按状态选择;颜色只用于光晕
     var STATES = {
-        idle:       { color: '#6e7681', glyph: '\u25CF' }, // ● 空闲
-        ready:      { color: '#3fb950', glyph: '\u2713' }, // ✓ 会话就绪
-        done:       { color: '#3fb950', glyph: '\u2713' }, // ✓ 回合完成待输入
-        working:    { color: '#2f81f7', glyph: '\u25B6' }, // ▶ 工作中
-        permission: { color: '#d29922', glyph: '\u003F' }, // ? 等待授权
-        asking:     { color: '#d29922', glyph: '\u003F' }, // ? 向用户提问(闪烁)
-        error:      { color: '#f85149', glyph: '\u0021' }  // ! 出错
+        idle: true, ready: true, done: true, working: true,
+        permission: true, asking: true, error: true
     };
-    var ASK_DIM = '#5c4712';       // asking 闪烁暗相
-    var ASK_PULSE_MS = 350;        // asking 时期望的宿主推拍间隔(其余 1s)
     var IDLE_TIMEOUT_MS = 30 * 60 * 1000; // state.json 超 30 分钟未更新 = 空闲
 
     var canvas = document.getElementById('pad');
     var ctx = canvas.getContext('2d');
     var websocket;
-    var contexts = {};        // context 集合(本插件全部键位同色)
+    var contexts = {};        // context 集合(本插件全部键位同动画)
     var currentState = 'idle';
     var stateData = null;
+    var frame = 0;
     var lastErrLogAt = 0;
     var lastAliveLogAt = 0;
-    var blinkOn = false;
     var nextInterval = 1000;  // 回传给宿主的下一拍间隔(自适应节拍契约)
 
     // 读盘必须走宿主文件桥:WKWebView 禁止 file:// 页面 fetch()/XHR file:// 资源
@@ -52,27 +46,9 @@
         }
     }
 
-    function roundRect(c, x, y, w, h, r) {
-        c.beginPath();
-        c.moveTo(x + r, y);
-        c.arcTo(x + w, y, x + w, y + h, r);
-        c.arcTo(x + w, y + h, x, y + h, r);
-        c.arcTo(x, y + h, x, y, r);
-        c.arcTo(x, y, x + w, y, r);
-        c.closePath();
-    }
-
-    function render(state, dim) {
-        var def = STATES[state] || STATES.idle;
-        ctx.clearRect(0, 0, 100, 100);
-        ctx.fillStyle = dim ? ASK_DIM : def.color;
-        roundRect(ctx, 4, 4, 92, 92, 16);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,0.95)';
-        ctx.font = '56px -apple-system, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(def.glyph, 50, 55);
+    function render(state) {
+        ctx.clearRect(0, 0, 112, 112);
+        drawWhale(ctx, state, frame, 112);
     }
 
     function sendImage(context) {
@@ -87,7 +63,7 @@
         Object.keys(contexts).forEach(function (context) { sendImage(context); });
     }
 
-    // 单拍:读 state.json → 变化才重绘上屏(防 HID 刷屏)。
+    // 单拍:读 state.json → 推进一帧 → 上屏。
     // 不自链 setTimeout —— 隐藏页面定时器会被 WebKit 治理冻毙(~2 分钟,实测),
     // 节拍由宿主 evaluateJavaScript 推送(见 __opendeckPulse),异常隔离、下拍自愈
     function tick() {
@@ -105,15 +81,20 @@
                     if (stateData && Date.now() - stateData.updatedAt < IDLE_TIMEOUT_MS) {
                         state = stateData.state;
                     }
-                    var asking = state === 'asking';
-                    if (asking) { blinkOn = !blinkOn; } else { blinkOn = false; }
-                    // asking 每拍都要上屏(亮暗交替即闪烁);其余状态变化才推(防 HID 刷屏)
-                    if (state !== currentState || asking) {
+                    if (!STATES[state]) state = 'idle';
+                    if (state !== currentState) {
                         currentState = state;
-                        render(state, asking && blinkOn);
-                        pushToAll();
+                        frame = 0; // 状态切换从第 0 帧起
                     }
-                    nextInterval = asking ? ASK_PULSE_MS : 1000;
+                    frame++;
+                    render(state);
+                    pushToAll(); // 动画每拍都要上屏(帧内容不同)
+                    // 动画节拍:工作中/招手 5fps;询问 3.3fps;完成/报错 4fps;空闲 2.2fps
+                    nextInterval = state === 'working' || state === 'asking' ? 200
+                                 : state === 'permission' ? 300
+                                 : state === 'error' ? 250
+                                 : state === 'done' || state === 'ready' ? 250
+                                 : 450;
                     if (Date.now() - lastAliveLogAt >= 60000) {
                         lastAliveLogAt = Date.now();
                         logLimited('alive state=' + state + ' ctx=' + Object.keys(contexts).length, 0);
@@ -124,7 +105,6 @@
         }
     }
     // 宿主推拍入口:返回期望的下一拍间隔(自适应节拍;宿主按返回值重排定时器)。
-    // 返回的是上一拍结算出的值,节拍自适应有一拍滞后——对闪烁无感知影响
     window.__opendeckPulse = function () {
         tick();
         return nextInterval;

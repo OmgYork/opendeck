@@ -290,3 +290,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **验证**:`swift test` 58 测(15+30+13)全绿(`keySize` 断言改为 112);增量构建零警告;完整 release 仍只有既有的 `JSONValue.swift` deprecated ×6 与 PIFlowTests 多余 `try` ×1(未触碰)。已 `make-app.sh` 重打包并重启,配置 `glassOffset = {0,0,100}`,日志无失败项
 - **教训**:键面分辨率不要照抄社区模块(100×100)或从照片反推;直接抓官方 app 的实际下发帧最可靠。`sendPicSizeCommand` 等库内符号容易误导,真正决定显示锚点的是 JPEG 的画布尺寸
 
+### 6.21 状态灯换鲸鱼娘动画(2026-10-22,槽 2/ZCode + 槽 3/Hermes)
+- **需求**:两个状态灯不再用色块+符号,改为原创 Q 版鲸鱼娘;不同状态不同动作,黄色闪烁(asking)= 招手。
+- **硬约束**:293V3 键面是 112×112 **静态 JPEG**,设备不支持 GIF;动图只能靠插件连续 `setImage` 推帧。宿主推拍最短 200ms(5fps),页面返回 `nextInterval` 自适应节拍。
+- **实现**:新 `Scripts/com.zcode.status.sdPlugin/whale.js`(canvas 2D,112×112 透明底,状态→动作 + 状态色光晕);两插件 `index.html` 改 112 画布、引入 `whale.js`、`tick` 每拍推进一帧并 `pushToAll`,状态切换重置帧。透明区域由宿主 `IconRenderer` 合成到键面底色(本机黑)后转 JPEG 下发。
+- **动作映射**:`idle` 打盹+Zzz(灰/450ms)、`working` 敲键盘+气泡(蓝/200ms)、`permission` 举手+?(黄/300ms)、`asking` **招手**+黄色脉冲(黄/200ms)、`error` X 眼+汗+抖动(红/250ms)、`done`/`ready` 开心+星星(绿/250ms)。
+- **验证**:WKWebView 离屏快照生成 7 状态×4 帧对照图(工具在 /tmp,不入库);真机 UI 镜像实测 working 动画、asking 招手(临时写 state.json 验证后恢复);app CPU 约 3–4%(2 键 5fps)。
+- **边界**:槽 3 Hermes 插件属另一 agent,已备份 `index.html.bak-20261022-whale` 后同步改;对方若重新生成会覆盖,需协调。`whale.js` 以子资源方式加载(宿主 `allowingReadAccessTo` 插件根,实测可行);插件源在仓库 `Scripts/com.zcode.status.sdPlugin/`,部署时两个插件目录都要带 `whale.js`。
+
