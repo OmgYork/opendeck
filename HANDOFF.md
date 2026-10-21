@@ -283,6 +283,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **修复**:`StreamDock293S.keySize` → **112**;`StatTileRenderer` 改 112 且版式按 100→112 等比缩放;`DeviceController.blackImage` 用 keySize;`PluginImageDecoder` 默认 pixelSize 112;插件图经 `IconRenderer.render(size: 112, baseImage:)` 以 aspect-fill 放大到 112。JPEG 10240 字节上限不变(官方 112×112 实测 6.5–8.9KB)
 - **对位补偿降级为可选微调**:`glassOffset` 机制与实时预览区调参条保留(X/Y/缩放),但**本机正确值就是 0,0,100**。用户此前为 100×100 调出的 `{-4,-3}` 已归零(配置备份 `backup-config-20261022-0418.json`);补偿算法(平移 + 边缘延展 + 缩放)本身经合成四象限图验证正确,继续作为物理玻璃个体差异的兜底
 - **配置化**:`AppConfig.glassOffset: GlassOffset?`(可选,旧配置缺键可解码),字段 `x/y/zoom`;手写 `init(from:)` 保证上一版只有 `{x,y}` 的配置不整份解码失败。主窗口底座下方内联调参条(⋯ 菜单 Toggle 呼出),拖动即时落盘 + `redrawCachedKeys()` 重发缓存帧;缓存存原始帧、发送前统一套用参数
+- **缩放 <100% 的白框伪影(2026-10-22 用户实测)**:缩放后内容矩形落在**小数像素**上,内容与边带两块相邻矩形各自抗锯齿,接缝处 alpha < 1,JPEG 把半透明垫成白色 → 显示区边缘出现一圈白线(不是硬件线条,也不是图片内容)。修法:`content`/`origin` 全部取整(`rounded`),边带绘制改 `.none` 最近邻(1px 源列/行整段复制,避免插值在 1px 源外采到透明);合成纯黑图 90% 缩放跑 JPEG 回归,修前接缝亮度 61、修后 0
 - **删除的临时物**:`/tmp/opendeck-calib` 文件通道、`StatTileRenderer.calibration` 标定帧、AppModel 每 2s 标定帧块、临时 Sheet;官方 app 副本(1.6GB)与探针脚本已清理
 - **物理结构(用户补充,2026-10-22,仅信息同步)**:键帽外壳是**圆角矩形**,内部真正的显示区是 **90° 直角矩形**,两者之间一圈黑边;设备下发帧本身无圆角(IconRenderer/StatTileRenderer/黑图都是全幅方形)。**UI 预览保持既有拟真圆角键帽样式,不做修改(用户明确要求「之前的 UI 挺好看」)**;此条作为后续视觉判读/渲染的事实基线,勿据此改 UI
 - **验证**:`swift test` 58 测(15+30+13)全绿(`keySize` 断言改为 112);增量构建零警告;完整 release 仍只有既有的 `JSONValue.swift` deprecated ×6 与 PIFlowTests 多余 `try` ×1(未触碰)。已 `make-app.sh` 重打包并重启,配置 `glassOffset = {0,0,100}`,日志无失败项

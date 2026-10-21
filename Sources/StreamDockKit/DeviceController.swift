@@ -169,35 +169,41 @@ public final class DeviceController {
               abs(shiftX) < width / 2, abs(shiftY) < height / 2
         else { return nil }
         let scale = CGFloat(max(50, min(150, zoom))) / 100
-        let side = CGFloat(width)
-        let content = side * scale
-        let originX = (side - content) / 2 + CGFloat(shiftX)
-        let originY = (side - content) / 2 + CGFloat(shiftY)
+        // 内容与边带全部对齐整数像素:小数边界会让两块相邻矩形各自抗锯齿,
+        // 接缝处 alpha < 1,JPEG 把半透明垫成白色 → 缩放 <100% 时出现白框(实测)
+        let content = max(1, Int((CGFloat(width) * scale).rounded()))
+        let originX = (width - content) / 2 + shiftX
+        let originY = (height - content) / 2 + shiftY
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                   bytesPerRow: width * 4, space: space,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
         ctx.interpolationQuality = .high
-        ctx.draw(image, in: CGRect(x: originX, y: originY, width: content, height: content))
+        ctx.draw(image, in: CGRect(x: CGFloat(originX), y: CGFloat(originY),
+                                   width: CGFloat(content), height: CGFloat(content)))
+        // 边带用最近邻:1px 源列/行整段复制,不做插值采样(插值会在 1px 源外
+        // 采到透明,同样产生白边)
+        ctx.interpolationQuality = .none
         // 横向暴露带:左侧取源左列,右侧取源右列
         if originX > 0, let edge = image.cropping(to: CGRect(x: 0, y: 0, width: 1, height: height)) {
-            ctx.draw(edge, in: CGRect(x: 0, y: originY, width: originX, height: content))
+            ctx.draw(edge, in: CGRect(x: 0, y: CGFloat(originY),
+                                      width: CGFloat(originX), height: CGFloat(content)))
         }
-        if originX + content < side,
+        if originX + content < width,
            let edge = image.cropping(to: CGRect(x: width - 1, y: 0, width: 1, height: height)) {
-            ctx.draw(edge, in: CGRect(x: originX + content, y: originY,
-                                      width: side - (originX + content), height: content))
+            ctx.draw(edge, in: CGRect(x: CGFloat(originX + content), y: CGFloat(originY),
+                                      width: CGFloat(width - (originX + content)), height: CGFloat(content)))
         }
         // 纵向暴露带(画布 y 向上):底部取源底行,顶部取源顶行;全宽绘制以覆盖四角
         if originY > 0,
            let edge = image.cropping(to: CGRect(x: 0, y: height - 1, width: width, height: 1)) {
-            ctx.draw(edge, in: CGRect(x: 0, y: 0, width: side, height: originY))
+            ctx.draw(edge, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(originY)))
         }
-        if originY + content < side,
+        if originY + content < height,
            let edge = image.cropping(to: CGRect(x: 0, y: 0, width: width, height: 1)) {
-            ctx.draw(edge, in: CGRect(x: 0, y: originY + content,
-                                      width: side, height: side - (originY + content)))
+            ctx.draw(edge, in: CGRect(x: 0, y: CGFloat(originY + content),
+                                      width: CGFloat(width), height: CGFloat(height - (originY + content))))
         }
         return ctx.makeImage()
     }
