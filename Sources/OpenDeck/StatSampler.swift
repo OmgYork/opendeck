@@ -89,12 +89,45 @@ nonisolated final class SMCTemperatureReader: @unchecked Sendable {
         return !self.tpKeys.isEmpty
     }
 
-    /// 最热 CPU 温度(全部 Tp* 浮点键取最大)
+    /// Stats 分代 CPU 温度键表(exelban/stats Sensors/values.swift,group .CPU + average:true 的忠实拷贝)。
+    /// 「Hottest CPU」只在精选键上取最大;全量 Tp* 会把表外传感器(如本机 Tp0g)算进来导致偏高
+    private static func cpuTempKeys(forBrand brand: String) -> [String]? {
+        if brand.contains("Apple M4") {
+            return ["Te05", "Te0S", "Te09", "Te0H", "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0V", "Tp0Y", "Tp0b", "Tp0e"]
+        }
+        if brand.contains("Apple M3") {
+            return ["Te05", "Te0L", "Te0P", "Te0S", "Tf04", "Tf09", "Tf0A", "Tf0B", "Tf0D", "Tf0E",
+                    "Tf44", "Tf49", "Tf4A", "Tf4B", "Tf4D", "Tf4E"]
+        }
+        if brand.contains("Apple M2") {
+            return ["Tp1h", "Tp1t", "Tp1p", "Tp1l", "Tp01", "Tp05", "Tp09", "Tp0D", "Tp0X", "Tp0b", "Tp0f", "Tp0j"]
+        }
+        if brand.contains("Apple M1") {
+            return ["Tp09", "Tp0T", "Tp01", "Tp05", "Tp0D", "Tp0H", "Tp0L", "Tp0P", "Tp0X"]
+        }
+        return nil
+    }
+
+    private static func chipBrand() -> String {
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        guard size > 0 else { return "" }
+        var buffer = [CChar](repeating: 0, count: size)
+        sysctlbyname("machdep.cpu.brand_string", &buffer, &size, nil, 0)
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// 最热 CPU 温度:优先 Stats 精选键表(按芯片代际;与本机存在键取交集),无交集回退全部 Tp*
     func hottestCPU() -> Double? {
         guard open() else { return nil }
+        var candidates = tpKeys
+        if let curated = Self.cpuTempKeys(forBrand: Self.chipBrand()) {
+            let matched = tpKeys.filter { curated.contains($0) }
+            if !matched.isEmpty { candidates = matched }
+        }
         var hottest: Double?
         var failures = 0
-        for name in tpKeys {
+        for name in candidates {
             let r = call(Param(funcID: 5, key: name, data32: 4, sizeAt28: 4))
             guard r.result == 0, r.bytes.count >= 4 else {
                 failures += 1
@@ -104,7 +137,7 @@ nonisolated final class SMCTemperatureReader: @unchecked Sendable {
             guard f.isFinite, f > 0, f < 150 else { continue }
             hottest = max(hottest ?? 0, Double(f))
         }
-        if failures > 0 { Self.log.notice("stats: Tp 读取失败 \(failures)/\(self.tpKeys.count)") }
+        if failures > 0 { Self.log.notice("stats: Tp 读取失败 \(failures)/\(candidates.count)") }
         return hottest
     }
 
@@ -144,13 +177,14 @@ nonisolated final class StatSampler: @unchecked Sendable {
         guard result == KERN_SUCCESS else { return nil }
         defer { previous = load }
         guard let prev = previous else { return nil }
-        let total = { (i: host_cpu_load_info) -> Int in
-            Int(i.cpu_ticks.0) + Int(i.cpu_ticks.1) + Int(i.cpu_ticks.2) + Int(i.cpu_ticks.3)
-        }
-        let totalDelta = total(load) - total(prev)
+        // 与 Stats CPU readers 同口径:totalUsage = (user+sys)/total,nice 计入分母但不计入分子
+        let userDelta = Int(load.cpu_ticks.0) - Int(prev.cpu_ticks.0)
+        let sysDelta = Int(load.cpu_ticks.1) - Int(prev.cpu_ticks.1)
         let idleDelta = Int(load.cpu_ticks.2) - Int(prev.cpu_ticks.2)
+        let niceDelta = Int(load.cpu_ticks.3) - Int(prev.cpu_ticks.3)
+        let totalDelta = userDelta + sysDelta + idleDelta + niceDelta
         guard totalDelta > 0 else { return nil }
-        return Int((1 - Double(idleDelta) / Double(totalDelta)) * 100)
+        return Int(Double(userDelta + sysDelta) / Double(totalDelta) * 100)
     }
 
     /// IOAccelerator 注册表:多 GPU 取最大利用率
