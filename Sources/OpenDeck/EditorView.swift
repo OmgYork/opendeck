@@ -13,6 +13,7 @@ struct EditorView: View {
     @State private var editingTarget: EditTarget?
     @State private var brightness: Double = 0
     @State private var showLayoutTuning = false
+    @State private var showGlassCalibration = false
     @State private var showPluginManager = false
     @State private var deleteTargetID: UUID?
     @State private var pageDeleteConfirm = false
@@ -41,6 +42,9 @@ struct EditorView: View {
             // 以理想高度(=底座高度)布局本行:右缘轨的 maxHeight:.infinity 只在底座高度内
             // 展开、与底座等高——否则会被 VStack 的整窗高度提案拉成通天空轨
             .fixedSize(horizontal: false, vertical: true)
+            if showGlassCalibration {
+                glassCalibrationBar
+            }
             sceneNavBottom
             hint
         }
@@ -142,6 +146,9 @@ struct EditorView: View {
                     showLayoutTuning = true
                 } label: {
                     Label("亮度布局调参…", systemImage: "slider.horizontal.3")
+                }
+                Toggle(isOn: $showGlassCalibration) {
+                    Label("玻璃对位校准", systemImage: "scope")
                 }
                 Button {
                     showPluginManager = true
@@ -477,6 +484,73 @@ struct EditorView: View {
     // 5×3 全主键;键帽定尺 100pt(与设备键面 1:1),窗口缩放不改变键帽大小
     private static let gridColumns: [GridItem] =
         Array(repeating: GridItem(.fixed(100), spacing: 12), count: StreamDock293S.columns)
+
+    // MARK: - 玻璃对位校准(实时预览区内联)
+
+    /// 与键帽底座同宽(5×100 + 4×12 + 2×18 = 584),贴在预览下方实时调参
+    private var glassCalibrationBar: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Label("玻璃对位校准", systemImage: "scope")
+                    .font(.subheadline.weight(.semibold))
+                Text("拖动即时下发设备,软件镜像不偏移")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("复位") { appModel.setGlassOffset(.zero) }
+                    .controlSize(.small)
+                Button("收起") { showGlassCalibration = false }
+                    .controlSize(.small)
+            }
+            HStack(spacing: 16) {
+                glassSlider("X(正=右)", keyPath: \.x, range: -12...12, suffix: "")
+                glassSlider("Y(正=上)", keyPath: \.y, range: -12...12, suffix: "")
+                glassSlider("缩放", keyPath: \.zoom, range: 80...120, suffix: "%")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 584)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [.black.opacity(0.34), .black.opacity(0.20)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(.white.opacity(0.07), lineWidth: 1)
+                }
+        }
+    }
+
+    private func glassSlider(_ title: String, keyPath: WritableKeyPath<GlassOffset, Int>,
+                             range: ClosedRange<Double>, suffix: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(appModel.glassOffset[keyPath: keyPath])\(suffix)")
+                    .font(.caption.monospacedDigit())
+            }
+            Slider(value: glassBinding(keyPath), in: range, step: 1)
+                .controlSize(.small)
+        }
+    }
+
+    /// 滑杆是 Double,配置是整数像素/百分比:四舍五入后写回并即时下发
+    private func glassBinding(_ keyPath: WritableKeyPath<GlassOffset, Int>) -> Binding<Double> {
+        Binding(
+            get: { Double(appModel.glassOffset[keyPath: keyPath]) },
+            set: { newValue in
+                var next = appModel.glassOffset
+                next[keyPath: keyPath] = Int(newValue.rounded())
+                appModel.setGlassOffset(next)
+            }
+        )
+    }
 
     private var hint: some View {
         Text("单击键帽编辑,保存后立即上屏")

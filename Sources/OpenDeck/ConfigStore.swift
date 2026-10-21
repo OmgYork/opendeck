@@ -64,6 +64,31 @@ struct LayoutParams: Codable, Equatable {
     static var concentricTrail: CGFloat { 14 }
 }
 
+/// 玻璃对位补偿(视觉坐标:正 = 右/上;zoom = 百分比,100 = 原尺寸)。
+/// 键板玻璃窗口相对 framebuffer 有轻微偏心:下发前整帧缩放+平移,
+/// 空出的边带由设备侧用边缘像素延展填满;全默认值 = 不补偿。
+struct GlassOffset: Codable, Equatable {
+    var x: Int = 0
+    var y: Int = 0
+    var zoom: Int = 100
+
+    static let zero = GlassOffset()
+
+    /// 手写解码:旧配置里的 glassOffset 只有 x/y(无 zoom),必须按 100 兜底
+    init(x: Int = 0, y: Int = 0, zoom: Int = 100) {
+        self.x = x
+        self.y = y
+        self.zoom = zoom
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        x = try container.decodeIfPresent(Int.self, forKey: .x) ?? 0
+        y = try container.decodeIfPresent(Int.self, forKey: .y) ?? 0
+        zoom = try container.decodeIfPresent(Int.self, forKey: .zoom) ?? 100
+    }
+}
+
 /// 编辑器导航区样式(classic = 现行「场景芯片栏 + 页点胶囊」)
 enum NavigationStyle: String, Codable, CaseIterable {
     case classic        // 场景芯片栏(下方)+ 页点胶囊(右缘悬浮)
@@ -87,6 +112,8 @@ struct AppConfig: Codable {
     var navStyle: NavigationStyle? = nil
     /// 亮度滑杆拖到 0% 时键面涂黑(而不只是背光最暗);nil/缺省 = 关
     var sliderZeroBlacksKeys: Bool? = nil
+    /// 玻璃对位补偿(可选保证旧配置缺键可解码);nil/缺省 = 0,0
+    var glassOffset: GlassOffset? = nil
 }
 
 // MARK: - 配置存储
@@ -134,6 +161,15 @@ final class ConfigStore {
         get { config.layout ?? .defaultValue }
         set {
             config.layout = newValue
+            save()
+        }
+    }
+
+    /// 玻璃对位补偿(缺省 = 0,0);调参面板每步落盘
+    var glassOffset: GlassOffset {
+        get { config.glassOffset ?? .zero }
+        set {
+            config.glassOffset = newValue
             save()
         }
     }
