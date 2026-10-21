@@ -163,9 +163,6 @@ final class AppModel {
 
         // 先同步亮度再 start():设备连接校准时控制器会以已存值设置背光
         device.setBrightness(config.config.brightness)
-        // 对位补偿须在任何键面下发前就位(连接校准会按缓存全量重画)
-        device.setGlassOffset(x: config.glassOffset.x, y: config.glassOffset.y,
-                              zoom: config.glassOffset.zoom)
         device.start()
         // 配置了跟随系统亮度则启动轮询(设备连上后 1.5s 内完成首次镜像)
         if config.followSystemBrightness {
@@ -391,20 +388,6 @@ final class AppModel {
         }
         device.drawKey(row: index / StreamDock293S.columns,
                        column: index % StreamDock293S.columns, image: image)
-    }
-
-    // MARK: - 玻璃对位校准
-
-    /// 当前玻璃对位补偿(视觉坐标,正 = 右/上;0,0 = 不补偿)
-    var glassOffset: GlassOffset { config.glassOffset }
-
-    /// 设备玻璃窗口相对 framebuffer 的偏心补偿(视觉坐标,正 = 右/上;zoom 百分比)。
-    /// 实时预览区拖动即时生效:落盘配置 → 下发给设备 → 按新参数重发缓存帧(UI 镜像不变)。
-    func setGlassOffset(_ offset: GlassOffset) {
-        guard offset != config.glassOffset else { return }
-        config.glassOffset = offset
-        device.setGlassOffset(x: offset.x, y: offset.y, zoom: offset.zoom)
-        device.redrawCachedKeys()
     }
 
     // MARK: - 亮度

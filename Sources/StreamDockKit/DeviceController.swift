@@ -20,13 +20,8 @@ public final class DeviceController {
     public var onLog: ((String) -> Void)?
 
     private let transport = HIDTransport()
-    /// 已画键位缓存(原始未补偿帧):index = row * columns + column;
-    /// 设备休眠唤醒/重插、对位调参后据此按当前补偿参数全量重画
+    /// 已画键位缓存:index = row * columns + column;设备休眠唤醒/重插后据此全量重画
     private var keyImageCache: [Int: CGImage] = [:]
-    /// 玻璃对位补偿(视觉坐标,正 = 右/上;zoom = 百分比,100 = 原尺寸)
-    private var glassOffsetX = 0
-    private var glassOffsetY = 0
-    private var glassZoom = 100
 
     public init() {
         transport.onReport = { [weak self] bytes in
@@ -146,68 +141,6 @@ public final class DeviceController {
         }
     }
 
-    /// 设置玻璃对位补偿(视觉坐标,正 = 右/上;zoom = 百分比,100 = 原尺寸)。
-    /// 只改参数,不重绘;调用方随后用 redrawCachedKeys() 让新参数立即生效。
-    public func setGlassOffset(x: Int, y: Int, zoom: Int) {
-        glassOffsetX = x
-        glassOffsetY = y
-        glassZoom = zoom
-    }
-
-    /// 玻璃对位补偿(正立视觉偏移 dx,dy → 画布旋转 180° 后取反):
-    /// 整帧缩放+平移,空出的边带用源图相邻边缘的 1px 拉伸填满(纯色瓷贴无缝,
-    /// 图片瓷贴仅在边带处轻微拉伸),保证瓷贴无黑边
-    private func compensatedForGlass(_ image: CGImage) -> CGImage? {
-        let visualX = glassOffsetX
-        let visualY = glassOffsetY
-        let zoom = glassZoom
-        guard visualX != 0 || visualY != 0 || zoom != 100 else { return nil }
-        let shiftX = -visualX
-        let shiftY = -visualY
-        let width = image.width, height = image.height
-        guard width == height, width > 8,
-              abs(shiftX) < width / 2, abs(shiftY) < height / 2
-        else { return nil }
-        let scale = CGFloat(max(50, min(150, zoom))) / 100
-        // 内容与边带全部对齐整数像素:小数边界会让两块相邻矩形各自抗锯齿,
-        // 接缝处 alpha < 1,JPEG 把半透明垫成白色 → 缩放 <100% 时出现白框(实测)
-        let content = max(1, Int((CGFloat(width) * scale).rounded()))
-        let originX = (width - content) / 2 + shiftX
-        let originY = (height - content) / 2 + shiftY
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                  bytesPerRow: width * 4, space: space,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        ctx.interpolationQuality = .high
-        ctx.draw(image, in: CGRect(x: CGFloat(originX), y: CGFloat(originY),
-                                   width: CGFloat(content), height: CGFloat(content)))
-        // 边带用最近邻:1px 源列/行整段复制,不做插值采样(插值会在 1px 源外
-        // 采到透明,同样产生白边)
-        ctx.interpolationQuality = .none
-        // 横向暴露带:左侧取源左列,右侧取源右列
-        if originX > 0, let edge = image.cropping(to: CGRect(x: 0, y: 0, width: 1, height: height)) {
-            ctx.draw(edge, in: CGRect(x: 0, y: CGFloat(originY),
-                                      width: CGFloat(originX), height: CGFloat(content)))
-        }
-        if originX + content < width,
-           let edge = image.cropping(to: CGRect(x: width - 1, y: 0, width: 1, height: height)) {
-            ctx.draw(edge, in: CGRect(x: CGFloat(originX + content), y: CGFloat(originY),
-                                      width: CGFloat(width - (originX + content)), height: CGFloat(content)))
-        }
-        // 纵向暴露带(画布 y 向上):底部取源底行,顶部取源顶行;全宽绘制以覆盖四角
-        if originY > 0,
-           let edge = image.cropping(to: CGRect(x: 0, y: height - 1, width: width, height: 1)) {
-            ctx.draw(edge, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(originY)))
-        }
-        if originY + content < height,
-           let edge = image.cropping(to: CGRect(x: 0, y: 0, width: width, height: 1)) {
-            ctx.draw(edge, in: CGRect(x: 0, y: CGFloat(originY + content),
-                                      width: CGFloat(width), height: CGFloat(height - (originY + content))))
-        }
-        return ctx.makeImage()
-    }
-
     /// 112×112 纯黑位图(键面原生尺寸)
     private static func blackImage() -> CGImage? {
         let side = StreamDock293S.keySize(column: 0)
@@ -225,17 +158,14 @@ public final class DeviceController {
               let keyId = StreamDock293S.keyId(row: row, column: column)
         else { return }
 
-        // 缓存原始帧:熄屏/断开时也要更新,恢复时按当前补偿参数重发
+        // 缓存原始帧:熄屏/断开时也要更新,恢复时重发
         keyImageCache[row * StreamDock293S.columns + column] = image
         guard state == .running else { return }
 
         // 熄屏/键面纯黑中只更新缓存、不写设备:防插件 setImage/编辑操作盖掉黑屏;恢复时 redrawAll
         guard !isScreenOff, !keysBlacked else { return }
 
-        // 设备侧对位补偿:玻璃窗口相对 framebuffer 有偏心,仅对下发帧平移;
-        // UI 镜像拿到的仍是未偏移帧(用户要求「软件不用偏移」)
-        let frame = compensatedForGlass(image) ?? image
-        guard let jpeg = IconRenderer.jpeg(from: frame) else {
+        guard let jpeg = IconRenderer.jpeg(from: image) else {
             onLog?("JPEG 编码失败 r\(row)c\(column)")
             return
         }
@@ -257,22 +187,15 @@ public final class DeviceController {
         sendCachedFrames()
     }
 
-    /// 按当前对位补偿重发全部缓存帧(不唤醒):调参面板实时预览用
-    public func redrawCachedKeys() {
-        guard state == .running, !isScreenOff, !keysBlacked else { return }
-        sendCachedFrames()
-    }
-
-    /// 缓存里存的是原始帧,发送前统一套用当前补偿参数
+    /// 按缓存全量重发(不唤醒)
     private func sendCachedFrames() {
         for index in keyImageCache.keys.sorted() {
             let row = index / StreamDock293S.columns
             let column = index % StreamDock293S.columns
-            guard let raw = keyImageCache[index],
-                  let keyId = StreamDock293S.keyId(row: row, column: column)
+            guard let image = keyImageCache[index],
+                  let keyId = StreamDock293S.keyId(row: row, column: column),
+                  let jpeg = IconRenderer.jpeg(from: image)
             else { continue }
-            let frame = compensatedForGlass(raw) ?? raw
-            guard let jpeg = IconRenderer.jpeg(from: frame) else { continue }
             transport.sendCommand(StreamDock293S.imageHeaderCommand(jpegSize: jpeg.count, keyId: keyId))
             for chunk in StreamDock293S.imageChunks(jpeg) {
                 transport.sendRaw(chunk)

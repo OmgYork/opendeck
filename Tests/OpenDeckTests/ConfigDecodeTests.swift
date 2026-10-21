@@ -48,41 +48,4 @@ struct ConfigDecodeTests {
             #expect(decoded.scenes.count == 1)  // 其余字段不受影响
         }
     }
-
-    /// 玻璃对位:旧配置缺键可解码;只写了 x/y 的旧对象 zoom 兜底 100;声明值往返稳定
-    @Test("glassOffset 缺省兼容与编解码往返")
-    @MainActor
-    func glassOffsetRoundTrip() throws {
-        let json = """
-        {
-          "scenes" : [ { "name" : "默认页面", "pages" : [ { "keys" : [] } ] } ],
-          "currentSceneIndex" : 0,
-          "currentPageIndex" : 0,
-          "brightness" : 80
-        }
-        """
-        let data = try #require(json.data(using: .utf8))
-        let legacy = try JSONDecoder().decode(AppConfig.self, from: data)
-        #expect(legacy.glassOffset == nil)
-        #expect(legacy.scenes.count == 1)
-
-        // 上一版配置只写过 x/y: zoom 必须按原尺寸兜底,不能整份配置解码失败
-        let withOffsetOnly = """
-        {
-          "scenes" : [ { "name" : "默认页面", "pages" : [ { "keys" : [] } ] } ],
-          "currentSceneIndex" : 0,
-          "currentPageIndex" : 0,
-          "brightness" : 80,
-          "glassOffset" : { "x" : -3, "y" : 3 }
-        }
-        """
-        let offsetData = try #require(withOffsetOnly.data(using: .utf8))
-        let partial = try JSONDecoder().decode(AppConfig.self, from: offsetData)
-        #expect(partial.glassOffset == GlassOffset(x: -3, y: 3, zoom: 100))
-
-        var config = AppConfig()
-        config.glassOffset = GlassOffset(x: -3, y: 3, zoom: 108)
-        let round = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
-        #expect(round.glassOffset == GlassOffset(x: -3, y: 3, zoom: 108))
-    }
 }

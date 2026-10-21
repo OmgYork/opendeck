@@ -275,17 +275,16 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **官方 HTML 插件兼容矩阵(脚本化扫描:绑定→启动→采集→卸载,10 个 HTML 插件)**:全部**注册成功**;8 个 Vue+Pinia 挂载(calendar/dateTime/eatgoldcoins/h1time/pigmenteffects/screensaver/time/watertank,其中 7 个探针可见 store 已收到 willAppear——消息链通),memo/weather 为非 Vue 裸页面(weather 有 1 条 console 错误);**零解码失败、零渲染失败**。剩余「是否真正渲染上屏」属插件视图内部逻辑(time 的 `<!---->` 为已知插件侧问题),需逐插件目视,归 M3 逐插件适配后续;扫描产物(插件拷贝/孤儿 settings)已清理,现场恢复
 - **媒体键调整(用户指令)**:「播放/暂停」从槽 6(Stats GPU 保留槽上被覆盖的旧绑定)挪到槽 11,已落 config
 
-### 6.20 键面尺寸根因定案(官方 app 抓包:112×112)+ 对位调参面板(2026-10-22)
+### 6.20 键面尺寸根因定案(官方 app 抓包:112×112)(2026-10-22)
 - **缘起**:§6.19 之后用户仍反馈「方形图标左/上空隙大」。先后试过「90% 内缩 + 平移」与「平移 + 边缘像素延展」,都只能把症状挪一挪;用户明确要求「看看官方软件怎么做的」
 - **根因定案(动态抓包,一锤定音)**:官方 StreamDock.app 每个键下发的是 **112×112 JPEG**;本实现一直用 **100×100**。100 < 键面 → 固件把图按**右下角锚定**,于是左/上多出 12px 空隙。此前 §6.19 只堵住了「JPEG 超限降到 80×80」这一条路径,基座 100×100 本身仍是错的
 - **抓包方法(可复用)**:把官方 app 复制到 /tmp → `codesign --force --deep --sign -`(ad-hoc,去掉 hardened runtime)→ 在副本 Info.plist 加 `LSEnvironment.DYLD_INSERT_LIBRARIES=/tmp/hidspy.dylib`(官方 app 会经 LaunchServices 重启自己,命令行 env 会被清掉,LSEnvironment 才可靠)→ 注入 fishhook 版探针拦截 `IOHIDDeviceSetReport`。**不要用 `__DATA,__interpose` + `dlsym(RTLD_NEXT)`**:实测 dlsym 返回的是探针自身,形成无限递归并触发官方 app 崩溃转储。fishhook(rebind_symbols)能拿到真实原函数
 - **官方报文实证**:`43 52 54 00 00`("CRT\0\0")+ `42 41 54`("BAT")+ **4 字节大端 JPEG 长度** + 键 id,与我们的 `imageHeaderCommand` 逐字节一致;其后是 JPEG 数据块 + `STP` 刷新;前置 `DIS` 唤醒、`LIG` 亮度、`CLE` 清屏。抓到的首批键 id 0x0b/0x0c/0x0d/0x0e,JPEG SOF 全部 **112×112**,长度 8422/8871/6544/7728 字节(均 < 10240)
 - **修复**:`StreamDock293S.keySize` → **112**;`StatTileRenderer` 改 112 且版式按 100→112 等比缩放;`DeviceController.blackImage` 用 keySize;`PluginImageDecoder` 默认 pixelSize 112;插件图经 `IconRenderer.render(size: 112, baseImage:)` 以 aspect-fill 放大到 112。JPEG 10240 字节上限不变(官方 112×112 实测 6.5–8.9KB)
-- **对位补偿降级为可选微调**:`glassOffset` 机制与实时预览区调参条保留(X/Y/缩放),但**本机正确值就是 0,0,100**。用户此前为 100×100 调出的 `{-4,-3}` 已归零(配置备份 `backup-config-20261022-0418.json`);补偿算法(平移 + 边缘延展 + 缩放)本身经合成四象限图验证正确,继续作为物理玻璃个体差异的兜底
-- **配置化**:`AppConfig.glassOffset: GlassOffset?`(可选,旧配置缺键可解码),字段 `x/y/zoom`;手写 `init(from:)` 保证上一版只有 `{x,y}` 的配置不整份解码失败。主窗口底座下方内联调参条(⋯ 菜单 Toggle 呼出),拖动即时落盘 + `redrawCachedKeys()` 重发缓存帧;缓存存原始帧、发送前统一套用参数
-- **缩放 <100% 的白框伪影(2026-10-22 用户实测)**:缩放后内容矩形落在**小数像素**上,内容与边带两块相邻矩形各自抗锯齿,接缝处 alpha < 1,JPEG 把半透明垫成白色 → 显示区边缘出现一圈白线(不是硬件线条,也不是图片内容)。修法:`content`/`origin` 全部取整(`rounded`),边带绘制改 `.none` 最近邻(1px 源列/行整段复制,避免插值在 1px 源外采到透明);合成纯黑图 90% 缩放跑 JPEG 回归,修前接缝亮度 61、修后 0
-- **删除的临时物**:`/tmp/opendeck-calib` 文件通道、`StatTileRenderer.calibration` 标定帧、AppModel 每 2s 标定帧块、临时 Sheet;官方 app 副本(1.6GB)与探针脚本已清理
+- **对位补偿已删除(用户拍板,2026-10-22)**:补偿是 100×100 误诊期的产物(平移/缩放 + 边带边缘延展),在 112 定案后只是空操作,非默认值时还会引入接缝白框、图片边缘拉伸条纹等伪影。最终下发路径回到**原帧 1:1**(与官方同构):`DeviceController` 的 `glassOffsetX/Y/zoom`、`setGlassOffset`、`compensatedForGlass`、`redrawCachedKeys` 全部移除;`ConfigStore` 的 `GlassOffset`/`glassOffset` 字段、`AppModel` 的注线与 setter、主窗口调参条与 ⋯ 菜单入口、对应回归测试一并删除。配置里残留的 `glassOffset` 键由 Codable 忽略,无迁移问题
+- **保留的历史教训(仅备查,代码已不存在)**:①补偿接缝白框 = 内容/边带落在小数像素、各自抗锯齿后 alpha < 1 被 JPEG 垫白;若未来重做,必须整数对齐 + 单次 clamp/mirror 变换,勿拼四块矩形;②zoom<100% 的图片边缘拉伸条是边带填充内容本身,无法既缩小又无痕
+- **删除的其他临时物**:`/tmp/opendeck-calib` 文件通道、`StatTileRenderer.calibration` 标定帧、AppModel 每 2s 标定帧块、临时 Sheet;官方 app 副本(1.6GB)与探针脚本已清理
 - **物理结构(用户补充,2026-10-22,仅信息同步)**:键帽外壳是**圆角矩形**,内部真正的显示区是 **90° 直角矩形**,两者之间一圈黑边;设备下发帧本身无圆角(IconRenderer/StatTileRenderer/黑图都是全幅方形)。**UI 预览保持既有拟真圆角键帽样式,不做修改(用户明确要求「之前的 UI 挺好看」)**;此条作为后续视觉判读/渲染的事实基线,勿据此改 UI
-- **验证**:`swift test` 58 测(15+30+13)全绿(`keySize` 断言改为 112);增量构建零警告;完整 release 仍只有既有的 `JSONValue.swift` deprecated ×6 与 PIFlowTests 多余 `try` ×1(未触碰)。已 `make-app.sh` 重打包并重启,配置 `glassOffset = {0,0,100}`,日志无失败项
+- **验证**:`swift test` 57 测(15+30+12)全绿(`keySize` 断言为 112,glassOffset 测试随功能删除);增量构建零警告;完整 release 仍只有既有的 `JSONValue.swift` deprecated ×6 与 PIFlowTests 多余 `try` ×1(未触碰)。已 `make-app.sh` 重打包并重启,下发路径无补偿,日志无失败项
 - **教训**:键面分辨率不要照抄社区模块(100×100)或从照片反推;直接抓官方 app 的实际下发帧最可靠。`sendPicSizeCommand` 等库内符号容易误导,真正决定显示锚点的是 JPEG 的画布尺寸
 
