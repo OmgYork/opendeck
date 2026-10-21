@@ -33,23 +33,19 @@ struct KeycapView: View {
     /// 设备帧:存在即整面接管(scaledToFit 方中方=1:1 不裁;帧已预旋转 180°,此处转回正立)
     private var liveFrame: CGImage? { slot?.image }
 
-    /// 设备显示区是**尖角矩形(90°)**——有设备帧时按矩形裁切,不用键帽的圆角,
-    /// 否则预览会把画面四角切掉,与硬件不一致;无帧时仍用拟真圆角键帽外观
-    private var surface: AnyShape {
-        liveFrame == nil
-            ? AnyShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            : AnyShape(Rectangle())
-    }
+    /// 物理结构:圆角键帽外壳包裹**直角矩形**显示区,两者之间一圈黑边。
+    /// 预览按此还原:外壳仍是拟真圆角;有实时帧时把帧内缩 bezel 并保持直角(不再把整颗键切成尖角)。
+    private let bezel: CGFloat = 5
 
     var body: some View {
         // 布局锚:基础形状链(overlays 不参与布局, oversized 图片不会撑爆网格)
         RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [palette.color.lighten(by: 0.10), palette.color],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
+            .fill(liveFrame == nil
+                  ? AnyShapeStyle(LinearGradient(
+                      colors: [palette.color.lighten(by: 0.10), palette.color],
+                      startPoint: .top, endPoint: .bottom
+                  ))
+                  : AnyShapeStyle(Color.black.opacity(0.92)))
             .overlay {
                 // 顶部光泽:让键面读作有厚度的实体,而非平面色块
                 LinearGradient(
@@ -63,6 +59,7 @@ struct KeycapView: View {
                         .resizable()
                         .scaledToFit()
                         .rotationEffect(.degrees(180))
+                        .padding(bezel)   // 圆角外壳与直角显示区之间的黑边
                         .allowsHitTesting(false)
                 } else if let path = config.iconPath, let image = NSImage(contentsOfFile: path) {
                     // scaledToFill 溢出部分由整体 clipShape 裁掉
@@ -109,17 +106,18 @@ struct KeycapView: View {
             }
             .overlay {
                 // 键帽边缘:一圈极细高光,深浅两种模式都成立
-                surface.stroke(.white.opacity(0.14), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
             }
             .overlay {
                 if remotePressed {
                     // 物理按压的即时可视反馈:发光描边
-                    surface
-                        .stroke(.white.opacity(0.65), lineWidth: 2.5)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.white.opacity(0.65), lineWidth: 2.5)
                         .shadow(color: .white.opacity(0.35), radius: 6)
                 }
             }
-            .clipShape(surface)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .aspectRatio(1, contentMode: .fit)
             .scaleEffect(scale, anchor: .center)
             .shadow(
