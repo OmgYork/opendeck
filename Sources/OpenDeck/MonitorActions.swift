@@ -64,6 +64,8 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
     case sharpnessDown
     case sharpnessUp
     case gammaCycle
+    case pictureModeCycle
+    case colorPresetCycle
 
     // 游戏
     case responseTimeCycle
@@ -98,6 +100,14 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
         case .gammaCycle:
             MonitorSpec(code: 0x72, op: .cycle([25600, 30720, 35840, 40960]),
                         note: "实测：0x72 为主码（+5120/档），0xFE 自动跟随")
+        // 图像模式：11 档全枚举，不能按菜单顺序递增；切预设会连带改亮度/锐度/响应时间
+        case .pictureModeCycle:
+            MonitorSpec(code: 0x15, op: .cycle([1, 6, 15, 18, 19, 30, 31, 39, 45, 46, 49]),
+                        note: "实测 11 档全枚举（显式值表，勿递增）；切预设会连带改亮度/锐度/响应")
+        // 色温预设：写入已验证；切「用户」档会把 0x69 拉回 6500
+        case .colorPresetCycle:
+            MonitorSpec(code: 0x14, op: .cycle([11, 3, 5, 9, 65502]),
+                        note: "实测：用户11/暖3/自然5/冷9/手动65502；切用户档会把色温值拉回 6500")
         case .responseTimeCycle: MonitorSpec(code: 0xF7, op: .cycle([0, 1, 2, 3]), note: "实测 0…3 全档可写")
         case .smartEnergyCycle: MonitorSpec(code: 0xF6, op: .cycle([0, 1, 2]), note: "待校准：关/低/高")
         // 只暴露「基本(2) / 扩展(3)」：0=关 会让 OSD 的 Overclock 置灰、已开的 OC 被连带锁掉，
@@ -126,7 +136,7 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
     var group: MonitorGroup {
         switch self {
         case .brightnessDown, .brightnessUp, .contrastDown, .contrastUp,
-             .sharpnessDown, .sharpnessUp, .gammaCycle:
+             .sharpnessDown, .sharpnessUp, .gammaCycle, .pictureModeCycle, .colorPresetCycle:
             .picture
         case .responseTimeCycle, .smartEnergyCycle, .adaptiveSyncCycle,
              .blackStabilizerDown, .blackStabilizerUp:
@@ -135,6 +145,14 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
             .audio
         case .inputMac, .inputPC, .inputToggle:
             .input
+        }
+    }
+
+    /// 输入类动作绑定键位时自动附带动效键面（显示当前输入源图标/翻转动画，与槽位 1 同款）
+    var carriesInputAnimation: Bool {
+        switch self {
+        case .inputMac, .inputPC, .inputToggle: true
+        default: false
         }
     }
 
@@ -148,6 +166,8 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
         case .sharpnessDown: "锐度 −"
         case .sharpnessUp: "锐度 +"
         case .gammaCycle: "伽马"
+        case .pictureModeCycle: "图像模式"
+        case .colorPresetCycle: "色温预设"
         case .responseTimeCycle: "响应"
         case .smartEnergyCycle: "节能"
         case .adaptiveSyncCycle: "同步"
@@ -171,6 +191,8 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
         case .sharpnessDown: "minus.magnifyingglass"
         case .sharpnessUp: "plus.magnifyingglass"
         case .gammaCycle: "camera.filters"
+        case .pictureModeCycle: "paintpalette"
+        case .colorPresetCycle: "thermometer.medium"
         case .responseTimeCycle: "speedometer"
         case .smartEnergyCycle: "leaf"
         case .adaptiveSyncCycle: "arrow.triangle.2.circlepath"

@@ -10,11 +10,17 @@ import UniformTypeIdentifiers
 struct EditorView: View {
     let appModel: AppModel
 
+    private static let monitorLog = Logger(subsystem: "opendeck", category: "monitor")
+
     @State private var editingTarget: EditTarget?
     @State private var brightness: Double = 0
     @State private var showLayoutTuning = false
     @State private var showGlassCalibration = false
     @State private var showPluginManager = false
+    @State private var showMonitorPalette = true
+    @State private var dropTargetIndex: Int?
+    /// 点选绑定:点一下托盘条目 → 再点任意键位即绑定(拖拽之外的兜底路径)
+    @State private var pendingMonitorCommand: MonitorCommand?
     @State private var deleteTargetID: UUID?
     @State private var pageDeleteConfirm = false
     @State private var renameTargetID: UUID?
@@ -79,6 +85,18 @@ struct EditorView: View {
             }
         }
         .toolbar { toolbar }
+        .overlay(alignment: .topTrailing) {
+            if showMonitorPalette {
+                MonitorPaletteView(
+                    picked: pendingMonitorCommand,
+                    onPick: { command in
+                        pendingMonitorCommand = (pendingMonitorCommand == command) ? nil : command
+                    }
+                )
+                .padding(.top, 6)
+                .padding(.trailing, 6)
+            }
+        }
         .containerBackground(for: .window) {
             Color(nsColor: .windowBackgroundColor)
         }
@@ -149,6 +167,9 @@ struct EditorView: View {
                 }
                 Toggle(isOn: $showGlassCalibration) {
                     Label("玻璃对位校准", systemImage: "scope")
+                }
+                Toggle(isOn: $showMonitorPalette) {
+                    Label("显示器功能托盘", systemImage: "display")
                 }
                 Button {
                     showPluginManager = true
@@ -462,18 +483,52 @@ struct EditorView: View {
     private var keyGrid: some View {
         LazyVGrid(columns: Self.gridColumns, spacing: 12) {
             ForEach(0..<(StreamDock293S.rows * StreamDock293S.columns), id: \.self) { index in
-                Button {
-                    // 保留槽(导航 14/15 + Stats 6/7/8):全页保留,不开放编辑
-                    guard AppModel.reservedSlot(at: index) == nil else { return }
-                    editingTarget = EditTarget(index: index)
-                } label: {
-                    KeycapView(
-                        config: AppModel.resolvedKeyConfig(at: index, config: appModel.config),
-                        remotePressed: appModel.pressedKeyIndices.contains(index),
-                        slot: appModel.keyImageSlots[index]
-                    )
+                let key = AppModel.resolvedKeyConfig(at: index, config: appModel.config)
+                // 放置目标挂在 ZStack 而非 Button 上：Button 自身吃掉手势，
+                // 直接往 Button 上挂 dropDestination 在合成输入下收不到落点
+                ZStack {
+                    Button {
+                        // 保留槽(导航 14/15 + Stats 6/7/8):全页保留,不开放编辑
+                        guard AppModel.reservedSlot(at: index) == nil else { return }
+                        if let pending = pendingMonitorCommand {
+                            Self.monitorLog.info("monitor click-bind \(pending.rawValue, privacy: .public) → key \(index, privacy: .public)")
+                            pendingMonitorCommand = nil
+                            bindMonitor(pending, at: index)
+                            return
+                        }
+                        editingTarget = EditTarget(index: index)
+                    } label: {
+                        KeycapView(
+                            config: key,
+                            remotePressed: appModel.pressedKeyIndices.contains(index),
+                            slot: appModel.keyImageSlots[index],
+                            staticFrame: appModel.animationPreviewFrame(for: key)
+                        )
+                    }
+                    .buttonStyle(KeycapButtonStyle())
+                    if dropTargetIndex == index {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(.white.opacity(0.9), lineWidth: 2)
+                            .allowsHitTesting(false)
+                    }
                 }
-                .buttonStyle(KeycapButtonStyle())
+                .dropDestination(for: String.self) { items, _ in
+                    // 用纯文本承载命令 rawValue：自定义 UTType 在宿主 NSView 上不保证被接受，
+                    // 而 public.utf8-plain-text 是系统注册类型，投放链路最稳
+                    guard let raw = items.first,
+                          let command = MonitorCommand(rawValue: raw),
+                          AppModel.reservedSlot(at: index) == nil else {
+                        Self.monitorLog.info("monitor drop rejected at \(index, privacy: .public)")
+                        return false
+                    }
+                    dropTargetIndex = nil
+                    Self.monitorLog.info("monitor drop \(raw, privacy: .public) → key \(index, privacy: .public)")
+                    bindMonitor(command, at: index)
+                    return true
+                } isTargeted: { targeted in
+                    if targeted { Self.monitorLog.info("monitor drop target entered \(index, privacy: .public)") }
+                    dropTargetIndex = targeted ? index : (dropTargetIndex == index ? nil : dropTargetIndex)
+                }
                 .help(AppModel.reservedSlot(at: index) == nil
                       ? "编辑第 \(index + 1) 键"
                       : "保留键(不可编辑)")
@@ -484,6 +539,19 @@ struct EditorView: View {
     // 5×3 全主键;键帽定尺 100pt(与设备键面 1:1),窗口缩放不改变键帽大小
     private static let gridColumns: [GridItem] =
         Array(repeating: GridItem(.fixed(100), spacing: 12), count: StreamDock293S.columns)
+
+    /// 托盘落下:把显示器动作绑到该键(保留槽不可放置),并即时上屏
+    private func bindMonitor(_ command: MonitorCommand, at index: Int) {
+        guard AppModel.reservedSlot(at: index) == nil else { return }
+        var key = appModel.config.keyConfig(at: index)
+        key.action = .monitor(command)
+        // 落下即写短标签:槽位里原有的数字占位(3…15)不是用户标题,留着会读成"5 号键在调亮度"
+        key.title = command.title
+        // 输入类动作自动带 monitorInput 动效键面(与槽位 1 同款);其它动作清掉动效,避免残留
+        key.animation = command.carriesInputAnimation ? .monitorInput : nil
+        appModel.config.updateKey(key, at: index)
+        appModel.applyKey(at: index)
+    }
 
     // MARK: - 玻璃对位校准(实时预览区内联)
 
@@ -600,6 +668,7 @@ private struct KeyEditView: View {
     @State private var title: String
     @State private var colorHex: String
     @State private var iconPath: String?
+    @State private var animation: KeyAnimation?
     @State private var kind: ActionKind
     @State private var appPath: String
     @State private var urlString: String
@@ -610,6 +679,8 @@ private struct KeyEditView: View {
     @State private var mediaKeyValue: String
     @State private var pluginID: String
     @State private var pluginActionUUID: String
+    /// 显示器动作草稿:托盘拖到键位后,点开该键编辑时也落到这里
+    @State private var monitorCommand: MonitorCommand
     /// 草稿实例身份:PI(webview 生命周期)与保存组装共用,必须跨渲染稳定。
     /// 原动作未变 = 复用持久化 contextID;换了动作 = onChange 时一次性生成新 UUID。
     @State private var draftContextID: String
@@ -624,6 +695,7 @@ private struct KeyEditView: View {
         _title = State(initialValue: key.title)
         _colorHex = State(initialValue: key.backgroundColorHex)
         _iconPath = State(initialValue: key.iconPath)
+        _animation = State(initialValue: key.animation)
 
         var kind = ActionKind.none
         var appPath = ""
@@ -636,6 +708,7 @@ private struct KeyEditView: View {
         var pluginID = ""
         var pluginActionUUID = ""
         var draftContextID = ""
+        var monitorCommand = MonitorCommand.brightnessUp
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url
@@ -656,6 +729,7 @@ private struct KeyEditView: View {
         case .gotoPage: break // 旧动作类型不再提供编辑,重新保存即清除
         case .pageIndicator: kind = .pageIndicator
         case .screenOff: kind = .screenOff
+        case .monitor(let command): kind = .monitor; monitorCommand = command
         case nil: break
         }
         _kind = State(initialValue: kind)
@@ -669,6 +743,7 @@ private struct KeyEditView: View {
         _pluginID = State(initialValue: pluginID)
         _pluginActionUUID = State(initialValue: pluginActionUUID)
         _draftContextID = State(initialValue: draftContextID)
+        _monitorCommand = State(initialValue: monitorCommand)
     }
 
     /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
@@ -677,7 +752,8 @@ private struct KeyEditView: View {
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             backgroundColorHex: normalizedColorHex,
             iconPath: iconPath,
-            action: assembledAction
+            action: assembledAction,
+            animation: animation
         )
     }
 
@@ -686,7 +762,8 @@ private struct KeyEditView: View {
             Form {
                 Section {
                     HStack(spacing: 14) {
-                        KeycapView(config: draftConfig, interactive: false)
+                        KeycapView(config: draftConfig, interactive: false,
+                                   staticFrame: appModel.animationPreviewFrame(for: draftConfig))
                             .frame(width: 64)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("实时预览")
@@ -704,6 +781,17 @@ private struct KeyEditView: View {
                     }
                     LabeledContent("颜色") { colorPicker }
                     LabeledContent("图标") { iconRow }
+                    LabeledContent("动效") {
+                        Toggle("显示器输入切换", isOn: Binding(
+                            get: { animation == .monitorInput },
+                            set: { animation = $0 ? .monitorInput : nil }
+                        ))
+                    }
+                    if animation == .monitorInput {
+                        Text("键面实时显示当前输入源(Mac / PC),按压时播放信号迁移动效。开启后标题与图标不再叠加。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Section("动作") {
                     Picker("类型", selection: $kind) {
@@ -885,6 +973,25 @@ private struct KeyEditView: View {
             }
         case .plugin:
             pluginActionForm
+        case .monitor:
+            LabeledContent("功能") {
+                Picker("", selection: $monitorCommand) {
+                    ForEach(MonitorGroup.allCases) { group in
+                        Section(group.title) {
+                            ForEach(MonitorCommand.allCases.filter { $0.group == group }) { command in
+                                Text(command.title).tag(command)
+                            }
+                        }
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            }
+            if let note = monitorCommand.spec.note {
+                Text("VCP 0x\(String(monitorCommand.spec.code, radix: 16))　\(note)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         case .previousPage:
             LabeledContent("说明") { Text("在当前场景内循环切到上一页").foregroundStyle(.secondary) }
         case .nextPage:
@@ -1015,6 +1122,8 @@ private struct KeyEditView: View {
             .mediaKey(mediaKeyValue)
         case .plugin:
             assembledPluginAction
+        case .monitor:
+            .monitor(monitorCommand)
         case .previousPage:
             .previousPage
         case .nextPage:
@@ -1068,6 +1177,7 @@ enum ActionKind: Hashable, CaseIterable {
     case pageIndicator
     case screenOff
     case plugin
+    case monitor
 
     var label: String {
         switch self {
@@ -1086,6 +1196,7 @@ enum ActionKind: Hashable, CaseIterable {
         case .pageIndicator: "页面指示"
         case .screenOff: "熄屏"
         case .plugin: "插件动作"
+        case .monitor: "显示器（DDC）"
         }
     }
 }
