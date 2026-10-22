@@ -15,6 +15,14 @@ final class KeyImageSlot {
 /// 网格单元与编辑器实时预览共用,保证「编辑器里看到的 = 设备上亮起的」。
 /// 有实时镜像槽且已有帧时,整面以设备帧为准(原样显示,仅转正),不再叠配置层。
 /// 交互遵循 fluid interfaces:悬停浮起、按下凹陷,弹簧可中断。
+extension KeyAction {
+    /// 默认图标：无自定义 iconPath 时键面主视觉使用的 SF Symbol（显示器动作 = 其语义图标）
+    var defaultIconSymbol: String? {
+        if case .monitor(let command) = self { return command.symbol }
+        return nil
+    }
+}
+
 struct KeycapView: View {
     let config: KeyConfig
     /// 预览场景禁用悬停动效
@@ -23,12 +31,14 @@ struct KeycapView: View {
     var remotePressed = false
     /// 实时镜像槽(网格传入;编辑器草稿预览不传)
     var slot: KeyImageSlot?
+    /// 编辑器草稿预览用:动效键的静息帧(与设备帧同源,已预旋转)
+    var staticFrame: CGImage? = nil
 
     @State private var hovering = false
 
     private var palette: KeyPalette { KeyPalette(hex: config.backgroundColorHex) }
     private var isEmptyKey: Bool {
-        config.title.isEmpty && config.iconPath == nil && config.action == nil
+        config.title.isEmpty && config.iconPath == nil && config.action == nil && config.animation == nil
     }
     /// 设备帧:存在即整面接管(scaledToFit 方中方=1:1 不裁;帧已预旋转 180°,此处转回正立)
     private var liveFrame: CGImage? { slot?.image }
@@ -56,6 +66,12 @@ struct KeycapView: View {
                         .scaledToFit()
                         .rotationEffect(.degrees(180))
                         .allowsHitTesting(false)
+                } else if let staticFrame {
+                    Image(decorative: staticFrame, scale: 1.0, orientation: .up)
+                        .resizable()
+                        .scaledToFit()
+                        .rotationEffect(.degrees(180))
+                        .allowsHitTesting(false)
                 } else if let path = config.iconPath, let image = NSImage(contentsOfFile: path) {
                     // scaledToFill 溢出部分由整体 clipShape 裁掉
                     Image(nsImage: image)
@@ -65,7 +81,7 @@ struct KeycapView: View {
                 }
             }
             .overlay {
-                if config.iconPath != nil && liveFrame == nil {
+                if config.iconPath != nil && liveFrame == nil && staticFrame == nil {
                     // 压暗底图,保证标题可读(vibrancy 原则:重背景配重文字)
                     Rectangle().fill(.black.opacity(0.18))
                 }
@@ -77,8 +93,20 @@ struct KeycapView: View {
                         .foregroundStyle(.white.opacity(0.35))
                 }
             }
+            .overlay {
+                // 默认图标:无自定义底图/动效帧时,显示器动作以语义图标作主视觉(即「默认图标」)
+                if config.iconPath == nil, liveFrame == nil, staticFrame == nil,
+                   let symbol = config.action?.defaultIconSymbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 30, weight: .medium))
+                        .foregroundStyle(palette.textColor.opacity(0.92))
+                        .shadow(color: .black.opacity(palette.isLight ? 0 : 0.45), radius: 2, y: 1)
+                        .offset(y: config.title.isEmpty ? 0 : -9)
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay(alignment: .bottom) {
-                if !config.title.isEmpty && liveFrame == nil {
+                if !config.title.isEmpty && liveFrame == nil && staticFrame == nil {
                     Text(config.title)
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .foregroundStyle(palette.textColor)
@@ -90,7 +118,9 @@ struct KeycapView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                if let action = config.action, liveFrame == nil {
+                // 已用默认图标做主视觉时不再叠角标
+                if let action = config.action, liveFrame == nil, staticFrame == nil,
+                   !(config.iconPath == nil && action.defaultIconSymbol != nil) {
                     Image(systemName: ActionStyle.symbol(for: action))
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(palette.textColor.opacity(0.85))
@@ -175,6 +205,7 @@ enum ActionStyle {
         case .pageIndicator: "rectangle.split.2x2"
         case .screenOff: "moon.zzz"
         case .plugin: "puzzlepiece.extension"
+        case .monitor(let command): command.symbol
         }
     }
 
@@ -195,6 +226,7 @@ enum ActionStyle {
         case .pageIndicator: "页面指示"
         case .screenOff: "熄屏"
         case .plugin: "插件"
+        case .monitor(let command): command.title
         }
     }
 }

@@ -51,6 +51,8 @@ final class AppModel {
 
     let config = ConfigStore()
     let pluginHost = PluginHostModel()
+    /// 内建动效键面:显示器输入源(Mac ↔ PC)。全局只有一路输入状态,故单实例。
+    let monitorInput = MonitorInputAnimator()
 
     /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)
     private(set) var officialAppRunning = false
@@ -122,6 +124,15 @@ final class AppModel {
         }
         pluginHost.start()
 
+        // 动效键面:帧回调落到当前挂载的键位(设备 + UI 镜像同源)
+        monitorInput.onFrame = { [weak self] image in
+            guard let self, let index = self.monitorInput.activeIndex else { return }
+            self.setKeyImage(index: index, image: image)
+        }
+        monitorInput.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
+
         device.onLog = { [weak self] line in
             self?.appendLog(line)
         }
@@ -148,7 +159,8 @@ final class AppModel {
             }
             // 固定导航键(位置 14/15)的动作是解析后强制的,配置原文在这两格恒空,
             // 直接读配置会让按键事件无动作(2026-10-18 用户反馈按压无反应)
-            let action = Self.resolvedKeyConfig(at: index, config: config).action
+            let key = Self.resolvedKeyConfig(at: index, config: config)
+            let action = key.action
             // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
             if case .plugin = action {
                 self.pluginHost.handleKey(index: index, phase: event.phase)
@@ -158,6 +170,10 @@ final class AppModel {
             guard event.phase == .down, let action else { return }
             // 设备控制动作(页面/亮度/熄屏)本地消化,不经 ActionRunner
             if self.handleDeviceAction(action) { return }
+            // 动效键面:先起动画,再照常执行动作(乐观展示,状态文件随后对账)
+            if key.animation == .monitorInput {
+                self.monitorInput.handlePress()
+            }
             Task { await ActionRunner.run(action) }
         }
 
@@ -354,6 +370,12 @@ final class AppModel {
             if let image { setKeyImage(index: index, image: image) }
             return
         }
+        // 内建动效键:整帧由动画驱动,跳过常规「底色 + 底图 + 标题」渲染
+        if key.animation == .monitorInput {
+            monitorInput.attach(index: index, size: StreamDock293S.keySize(column: column))
+            return
+        }
+        monitorInput.detach(ifIndex: index) // 同页其它键/换页后的旧动效键
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
         let title: String?
         let iconPath: String?
@@ -372,7 +394,8 @@ final class AppModel {
             size: StreamDock293S.keySize(column: column),
             backgroundColorHex: key.backgroundColorHex,
             title: title,
-            iconPath: iconPath
+            iconPath: iconPath,
+            symbolName: key.action?.defaultIconSymbol
         ) else {
             appendLog("键面渲染失败(r\(row) c\(column),检查颜色/图标)")
             return
@@ -382,6 +405,12 @@ final class AppModel {
         if case .plugin = key.action {
             pluginHost.redrawInstanceIfPresent(at: index)
         }
+    }
+
+    /// 编辑器实时预览:动效键的静息帧(已预旋转,KeycapView 会转回正立)
+    func animationPreviewFrame(for key: KeyConfig) -> CGImage? {
+        guard key.animation == .monitorInput else { return nil }
+        return monitorInput.previewImage(size: StreamDock293S.keySize(column: 0))
     }
 
     /// 键面图像统一入口:设备写一份、对应单键镜像槽存一份(网格 KeycapView 据此与设备同源)

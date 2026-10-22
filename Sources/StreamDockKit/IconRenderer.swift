@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import CoreText
 import Foundation
@@ -18,11 +19,12 @@ public enum IconRenderer {
         backgroundColorHex: String,
         title: String?,
         iconPath: String? = nil,
+        symbolName: String? = nil,
         rotationDegrees: Int = StreamDock293S.displayRotationDegrees
     ) -> CGImage? {
         let icon = iconPath.flatMap { loadImage(at: $0) }
         return render(size: size, backgroundColorHex: backgroundColorHex, title: title,
-                      baseImage: icon, rotationDegrees: rotationDegrees)
+                      baseImage: icon, symbolName: symbolName, rotationDegrees: rotationDegrees)
     }
 
     /// 插件图像路径:现成位图(setImage 解码产物)作底图 + 可选标题 → 预旋转输出。
@@ -32,10 +34,12 @@ public enum IconRenderer {
         backgroundColorHex: String,
         title: String?,
         baseImage: CGImage?,
+        symbolName: String? = nil,
         rotationDegrees: Int = StreamDock293S.displayRotationDegrees
     ) -> CGImage? {
         guard let upright = composeUpright(
-            size: size, backgroundColorHex: backgroundColorHex, title: title, icon: baseImage
+            size: size, backgroundColorHex: backgroundColorHex, title: title,
+            icon: baseImage, symbolName: symbolName
         ) else { return nil }
         // 设备以 180° 旋转显示,预旋转输出;图与文同源同变换,方向恒一致
         return rotated(upright, byDegrees: rotationDegrees)
@@ -43,7 +47,7 @@ public enum IconRenderer {
 
     /// 在正立空间合成键面(identity CTM、identity textMatrix——文字天然正立)
     private static func composeUpright(
-        size: Int, backgroundColorHex: String, title: String?, icon: CGImage?
+        size: Int, backgroundColorHex: String, title: String?, icon: CGImage?, symbolName: String?
     ) -> CGImage? {
         guard size > 0 else { return nil }
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
@@ -64,6 +68,9 @@ public enum IconRenderer {
 
         if let icon {
             drawAspectFill(icon, in: ctx, square: square.size)
+        } else if let symbolName, let symbol = symbolImage(named: symbolName, canvas: square.size) {
+            // 默认图标:无底图时用 SF Symbol 作主视觉(与编辑器 KeycapView 的默认图标同语义)
+            drawSymbol(symbol, in: ctx, square: square.size)
         }
         if let title, !title.isEmpty {
             drawTitle(title, in: ctx, square: square.size, on: background)
@@ -193,6 +200,30 @@ public enum IconRenderer {
             y: square.height * 0.08
         )
         CTLineDraw(line, ctx)
+    }
+
+    /// SF Symbol → 白色 CGImage(按画布尺寸取点大小;用 AppKit 的 paletteColors 上色)
+    private static func symbolImage(named name: String, canvas: CGSize) -> CGImage? {
+        let pointSize = canvas.width * 0.5
+        let base = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+        let tinted = base.applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(tinted) else { return nil }
+        var rect = CGRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+
+    /// 居中略上移绘制(底部留给标题)
+    private static func drawSymbol(_ image: CGImage, in ctx: CGContext, square: CGSize) {
+        let maxSide = square.width * 0.54
+        let scale = min(maxSide / CGFloat(image.width), maxSide / CGFloat(image.height))
+        let size = CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        let origin = CGPoint(
+            x: (square.width - size.width) / 2,
+            y: (square.height - size.height) / 2 + square.height * 0.06
+        )
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(origin: origin, size: size))
     }
 
     private static func fontSizeFactor(forCount count: Int) -> CGFloat {
