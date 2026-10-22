@@ -8,9 +8,10 @@ import UniformTypeIdentifiers
 // 校准结果（新的码、新的枚举值）只改这里，不动执行层与渲染层。
 //
 // 状态标注（对应 ~/projects/lg-osc/FEATURES.md 的分级）：
-//   confirmed = 已在本机实测写入并回读一致
-//   draft     = 读到合理值、编码来自同族调研，待 OSD 校准确认
-//   pending   = 私有码语义未知，仍未接线
+//   confirmed   = 已在本机实测写入并回读一致
+//   draft       = 读到合理值、编码来自同族调研，待 OSD 校准确认
+//   pending     = 私有码语义未知，仍未接线
+//   unavailable = 本机写入不可靠，已停用（保留枚举仅为兼容旧配置）
 
 /// 托盘分组（顺序即渲染顺序）
 enum MonitorGroup: String, CaseIterable, Identifiable {
@@ -50,6 +51,8 @@ struct MonitorSpec {
     var note: String? = nil
     /// 写入会让 DP 链路重协商、画面闪断十余秒
     var disruptive: Bool = false
+    /// 本机写入不可靠：托盘隐藏、按下返回明确失败（保留枚举仅为兼容旧配置）
+    var unavailable: Bool = false
 }
 
 enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Sendable {
@@ -90,20 +93,33 @@ enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Send
         case .contrastUp: MonitorSpec(code: 0x12, op: .step(5), note: "标准码，实测可读")
         case .sharpnessDown: MonitorSpec(code: 0x87, op: .step(-10), note: "实测可写")
         case .sharpnessUp: MonitorSpec(code: 0x87, op: .step(10), note: "实测可写")
-        case .gammaCycle: MonitorSpec(code: 0xFE, op: .cycle([1, 2, 3]), note: "待校准：枚举值随型号变")
+        // 以 0x72（MCCS Gamma）为主码：4 档 = 25600/30720/35840/40960（+5120/档，线性）；
+        // 写 0x72 时 0xFE 自动跟随（实测 35840→0xFE=4、30720→3），不要用 0xFE 的断续值循环
+        case .gammaCycle:
+            MonitorSpec(code: 0x72, op: .cycle([25600, 30720, 35840, 40960]),
+                        note: "实测：0x72 为主码（+5120/档），0xFE 自动跟随")
         case .responseTimeCycle: MonitorSpec(code: 0xF7, op: .cycle([0, 1, 2, 3]), note: "实测 0…3 全档可写")
         case .smartEnergyCycle: MonitorSpec(code: 0xF6, op: .cycle([0, 1, 2]), note: "待校准：关/低/高")
+        // 只暴露「基本(2) / 扩展(3)」：0=关 会让 OSD 的 Overclock 置灰、已开的 OC 被连带锁掉，
+        // 且 DDC 读不到 OC 锁定状态（无法提示、无法校验）；写入本身会闪断画面十余秒
         case .adaptiveSyncCycle:
-            MonitorSpec(code: 0xF8, op: .cycle([0, 2, 3]), note: "实测可写；写入会闪断画面十余秒", disruptive: true)
+            MonitorSpec(code: 0xF8, op: .cycle([2, 3]),
+                        note: "实测：只做基本/扩展（关会锁掉 OC）；写入闪断十余秒", disruptive: true)
+        // 0xF9 本机写入不可靠：写 20/40/60 全部回读 100（写 0 回 0），语义未定 → 停用
         case .blackStabilizerDown:
-            MonitorSpec(code: 0xF9, op: .step(-10), note: "待校准：本机回读异常（写 20 读回 100）")
+            MonitorSpec(code: 0xF9, op: .step(-10),
+                        note: "本机写入不可靠（非零值回读恒为 100），已停用", unavailable: true)
         case .blackStabilizerUp:
-            MonitorSpec(code: 0xF9, op: .step(10), note: "待校准：本机回读异常（写 20 读回 100）")
+            MonitorSpec(code: 0xF9, op: .step(10),
+                        note: "本机写入不可靠（非零值回读恒为 100），已停用", unavailable: true)
         case .volumeDown: MonitorSpec(code: 0x62, op: .step(-5), note: "标准码，实测可读")
         case .volumeUp: MonitorSpec(code: 0x62, op: .step(5), note: "标准码，实测可读")
         case .muteToggle: MonitorSpec(code: 0x8D, op: .cycle([1, 2]), note: "1=静音 2=取消（标准码）")
+        // 实测闭环（2026-10-23）：144 切到 PC(HDMI1)、208 切回 Mac(DP)；切换期间 DDC 不掉。
+        // 0xF4 不可读、0x60 只回缓存 → toggle 方向靠 ~/.cache/lg_input（与快捷指令共用同一文件）
         case .inputMac, .inputPC, .inputToggle:
-            MonitorSpec(code: 0xF4, op: .switchInput(mac: 208, pc: 144), note: "与 lg-toggle.sh 同一编码")
+            MonitorSpec(code: 0xF4, op: .switchInput(mac: 208, pc: 144),
+                        note: "实测闭环：144=HDMI1(PC) / 208=DP(Mac)，切换时 DDC 不掉")
         }
     }
 

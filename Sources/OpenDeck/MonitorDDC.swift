@@ -50,6 +50,10 @@ enum MonitorDDC {
     /// 执行一条语义动作：读当前值 → 算目标值 → 写 → 读回校验
     static func apply(_ command: MonitorCommand) -> MonitorOutcome {
         let spec = command.spec
+        // 本机写入不可靠的动作（如 0xF9 黑阶稳定器）：保留枚举兼容旧配置，但明确失败
+        if spec.unavailable {
+            return .failed("\(command.title)：本机写入不可靠，已停用")
+        }
         do {
             switch spec.op {
             case .switchInput(let mac, let pc):

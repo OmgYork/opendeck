@@ -93,7 +93,7 @@ struct MonitorPaletteView: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.42))
             LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                ForEach(MonitorCommand.allCases.filter { $0.group == group }) { command in
+                ForEach(MonitorCommand.allCases.filter { $0.group == group && !$0.spec.unavailable }) { command in
                     paletteItem(command)
                 }
             }
