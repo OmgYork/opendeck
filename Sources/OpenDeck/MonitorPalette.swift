@@ -2,37 +2,49 @@ import SwiftUI
 
 // MARK: - 显示器功能托盘（独立浮动 deco）
 //
-// 从「矩阵·右缘」挂轨的深色胶囊语言里剥出来的独立面板：可拖动、可收起、
-// 条目可拖到 15 个真实键位上（落下即绑定 .monitor 动作）。
-// 视觉与底座/挂轨同族：黑 0.38→0.22 渐变 + 1pt 白 7% 描边 + 圆角 20。
+// 从「矩阵·右缘」挂轨的深色胶囊语言里剥出来的独立面板：可拖动、可收起。
+// 2026-10-23 改版：方形磁贴 + 置顶「自定义/复合」分类 + 分组/小节可折叠；
+// 条目全是**原子动作**（单值/单步），复合配方在置顶分类里。
+// 载荷（拖拽/点选统一）：MonitorCommand.rawValue 或 "composite:<id>"。
 
 struct MonitorPaletteView: View {
-    /// 当前点选的命令(点选绑定模式下高亮)
-    var picked: MonitorCommand? = nil
-    /// 点选回调:点条目 → 再点键位即绑定
-    var onPick: (MonitorCommand) -> Void = { _ in }
+    /// 当前点选的载荷（点选绑定模式下高亮）
+    var picked: String? = nil
+    /// 点选回调：点条目 → 再点键位即绑定
+    var onPick: (String) -> Void = { _ in }
 
     @State private var collapsed = false
     @State private var offset: CGSize = .zero
     @State private var dragAnchor: CGSize = .zero
+    /// 折叠的分组/小节 key（默认全展开）
+    @State private var collapsedSections: Set<String> = []
 
-    private let columns = [GridItem(.adaptive(minimum: 78), spacing: 8)]
+    private let tileSide: CGFloat = 72
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.fixed(tileSide), spacing: 8), count: 4)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: collapsed ? 0 : 12) {
             header
             if !collapsed {
-                Text(picked == nil ? "拖到键位，或点一下再点键位" : "已选中「\(picked?.title ?? "")」，再点一个键位")
+                Text(pickedHint)
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.45))
-                ForEach(MonitorGroup.allCases) { group in
-                    groupSection(group)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        compositeSection
+                        ForEach(MonitorGroup.allCases.filter { $0 != .composite }) { group in
+                            groupSection(group)
+                        }
+                    }
                 }
+                .frame(maxHeight: 520)
             }
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
-        .frame(width: collapsed ? nil : 288, alignment: .leading)
+        .frame(width: collapsed ? nil : 340, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(
@@ -85,56 +97,119 @@ struct MonitorPaletteView: View {
         .help("拖动移动托盘")
     }
 
-    // MARK: 分组
+    private var pickedHint: String {
+        guard let picked else { return "拖到键位，或点一下再点键位" }
+        if let tile = MonitorCompositeCatalog.tile(payload: picked) {
+            return "已选中「\(tile.title)」，再点一个键位"
+        }
+        if let command = MonitorCommand(rawValue: picked) {
+            return "已选中「\(command.title)」，再点一个键位"
+        }
+        return "已选中，再点一个键位"
+    }
 
-    private func groupSection(_ group: MonitorGroup) -> some View {
+    // MARK: 置顶：自定义 / 复合
+
+    private var compositeSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(group.title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.42))
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                ForEach(MonitorCommand.allCases.filter { $0.group == group && !$0.spec.unavailable }) { command in
-                    paletteItem(command)
+            sectionHeader("自定义 / 复合", key: "composite")
+            if !collapsedSections.contains("composite") {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                    ForEach(MonitorCompositeCatalog.all) { tile in
+                        tileView(symbol: tile.symbol, title: tile.title,
+                                 payload: tile.payload, note: tile.note)
+                    }
                 }
             }
         }
     }
 
-    private func paletteItem(_ command: MonitorCommand) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: command.symbol)
-                .font(.system(size: 15, weight: .medium))
-            Text(command.title)
+    // MARK: 分组（组 → 小节）
+
+    private func groupSection(_ group: MonitorGroup) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(group.title, key: group.rawValue)
+            if !collapsedSections.contains(group.rawValue) {
+                ForEach(MonitorCommand.subgroups(in: group), id: \.self) { subgroup in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(subgroup)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.35))
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                            ForEach(MonitorCommand.allCases.filter {
+                                $0.group == group && $0.subgroup == subgroup
+                            }) { command in
+                                tileView(symbol: command.symbol, title: command.title,
+                                         payload: command.rawValue, note: command.spec.note)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String, key: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: collapsedSections.contains(key) ? "chevron.right" : "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white.opacity(0.45))
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.62))
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.snappy(duration: 0.15)) {
+                if collapsedSections.contains(key) {
+                    collapsedSections.remove(key)
+                } else {
+                    collapsedSections.insert(key)
+                }
+            }
+        }
+        .help("折叠 / 展开")
+    }
+
+    // MARK: 磁贴（方形）
+
+    private func tileView(symbol: String, title: String, payload: String, note: String?) -> some View {
+        let isPicked = picked == payload
+        return VStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .medium))
+            Text(title)
                 .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.65)
         }
         .foregroundStyle(.white.opacity(0.92))
-        .frame(maxWidth: .infinity)
-        .frame(height: 46)
+        .frame(width: tileSide, height: tileSide)
         .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(.white.opacity(picked == command ? 0.22 : 0.08))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.white.opacity(isPicked ? 0.22 : 0.08))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(
-                            picked == command ? .white.opacity(0.85) : .white.opacity(0.08),
-                            lineWidth: picked == command ? 2 : 1
+                            isPicked ? .white.opacity(0.85) : .white.opacity(0.08),
+                            lineWidth: isPicked ? 2 : 1
                         )
                 }
         )
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .onTapGesture { onPick(command) }
-        .draggable(command.rawValue) {
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture { onPick(payload) }
+        .draggable(payload) {
             // 拖拽跟随图：与条目同视觉，避免系统默认灰块
             VStack(spacing: 3) {
-                Image(systemName: command.symbol).font(.system(size: 14))
-                Text(command.title).font(.system(size: 9, weight: .semibold))
+                Image(systemName: symbol).font(.system(size: 14))
+                Text(title).font(.system(size: 9, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(8)
             .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
         }
-        .help(command.spec.note ?? command.title)
+        .help(note ?? title)
     }
 }

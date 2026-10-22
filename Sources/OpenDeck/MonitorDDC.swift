@@ -50,10 +50,6 @@ enum MonitorDDC {
     /// 执行一条语义动作：读当前值 → 算目标值 → 写 → 读回校验
     static func apply(_ command: MonitorCommand) -> MonitorOutcome {
         let spec = command.spec
-        // 本机写入不可靠的动作（如 0xF9 黑阶稳定器）：保留枚举兼容旧配置，但明确失败
-        if spec.unavailable {
-            return .failed("\(command.title)：本机写入不可靠，已停用")
-        }
         do {
             switch spec.op {
             case .switchInput(let mac, let pc):
@@ -69,7 +65,12 @@ enum MonitorDDC {
 
             case .set(let value):
                 try write(code: spec.code, value: value)
-                return .ok("\(command.title) → \(value)")
+                if spec.disruptive {
+                    // 链路重协商期间读不回来是预期行为，不做校验、不重试
+                    return .ok("\(command.title)（画面会闪断十余秒）")
+                }
+                let after = (try? read(code: spec.code))?.current ?? value
+                return .ok("\(command.title) → \(after)")
 
             case .step(let delta):
                 let reading = try read(code: spec.code)
@@ -78,22 +79,23 @@ enum MonitorDDC {
                 let after = (try? read(code: spec.code))?.current ?? target
                 return .ok("\(command.title) → \(after)")
 
-            case .cycle(let values):
-                guard !values.isEmpty else { return .failed("\(command.title): 枚举表为空") }
-                let reading = try read(code: spec.code)
-                let next: Int
-                if let index = values.firstIndex(of: reading.current) {
-                    next = values[(index + 1) % values.count]
-                } else {
-                    next = values[0]
+            case .manualTempStep(let delta):
+                // 0x69 只在「手动」档可写：先确保处于手动色温档（0x14 = 65502）
+                let preset = try read(code: 0x14)
+                if preset.current != 65502 {
+                    try write(code: 0x14, value: 65502)
                 }
-                try write(code: spec.code, value: next)
-                if spec.disruptive {
-                    // 链路重协商期间读不回来是预期行为，不做校验、不重试
-                    return .ok("\(command.title) → \(next)（画面会闪断十余秒）")
+                let reading = try read(code: 0x69)
+                let ladder = MonitorCommand.manualTempLadder
+                guard let nearest = ladder.enumerated().min(by: {
+                    abs($0.element - reading.current) < abs($1.element - reading.current)
+                })?.offset else {
+                    return .failed("\(command.title): 刻度表为空")
                 }
-                let after = (try? read(code: spec.code))?.current ?? next
-                return .ok("\(command.title) → \(after)")
+                let target = ladder[min(max(nearest + delta, 0), ladder.count - 1)]
+                try write(code: 0x69, value: target)
+                let after = (try? read(code: 0x69))?.current ?? target
+                return .ok("\(command.title) → \(after)K")
             }
         } catch let error as MonitorDDCError {
             return .failed("\(command.title): \(error.description)")

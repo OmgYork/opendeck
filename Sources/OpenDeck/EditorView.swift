@@ -20,7 +20,8 @@ struct EditorView: View {
     @State private var showMonitorPalette = true
     @State private var dropTargetIndex: Int?
     /// 点选绑定:点一下托盘条目 → 再点任意键位即绑定(拖拽之外的兜底路径)
-    @State private var pendingMonitorCommand: MonitorCommand?
+    /// 载荷 = MonitorCommand.rawValue 或 "composite:<id>"(自定义/复合磁贴)
+    @State private var pendingMonitorPayload: String?
     @State private var deleteTargetID: UUID?
     @State private var pageDeleteConfirm = false
     @State private var renameTargetID: UUID?
@@ -88,9 +89,9 @@ struct EditorView: View {
         .overlay(alignment: .topTrailing) {
             if showMonitorPalette {
                 MonitorPaletteView(
-                    picked: pendingMonitorCommand,
-                    onPick: { command in
-                        pendingMonitorCommand = (pendingMonitorCommand == command) ? nil : command
+                    picked: pendingMonitorPayload,
+                    onPick: { payload in
+                        pendingMonitorPayload = (pendingMonitorPayload == payload) ? nil : payload
                     }
                 )
                 .padding(.top, 6)
@@ -490,10 +491,10 @@ struct EditorView: View {
                     Button {
                         // 保留槽(导航 14/15 + Stats 6/7/8):全页保留,不开放编辑
                         guard AppModel.reservedSlot(at: index) == nil else { return }
-                        if let pending = pendingMonitorCommand {
-                            Self.monitorLog.info("monitor click-bind \(pending.rawValue, privacy: .public) → key \(index, privacy: .public)")
-                            pendingMonitorCommand = nil
-                            bindMonitor(pending, at: index)
+                        if let pending = pendingMonitorPayload {
+                            Self.monitorLog.info("monitor click-bind \(pending, privacy: .public) → key \(index, privacy: .public)")
+                            pendingMonitorPayload = nil
+                            bindPayload(pending, at: index)
                             return
                         }
                         editingTarget = EditTarget(index: index)
@@ -513,17 +514,16 @@ struct EditorView: View {
                     }
                 }
                 .dropDestination(for: String.self) { items, _ in
-                    // 用纯文本承载命令 rawValue：自定义 UTType 在宿主 NSView 上不保证被接受，
-                    // 而 public.utf8-plain-text 是系统注册类型，投放链路最稳
+                    // 用纯文本承载载荷（command rawValue 或 "composite:<id>"）：自定义 UTType
+                    // 在宿主 NSView 上不保证被接受，而 public.utf8-plain-text 投放链路最稳
                     guard let raw = items.first,
-                          let command = MonitorCommand(rawValue: raw),
                           AppModel.reservedSlot(at: index) == nil else {
                         Self.monitorLog.info("monitor drop rejected at \(index, privacy: .public)")
                         return false
                     }
                     dropTargetIndex = nil
                     Self.monitorLog.info("monitor drop \(raw, privacy: .public) → key \(index, privacy: .public)")
-                    bindMonitor(command, at: index)
+                    bindPayload(raw, at: index)
                     return true
                 } isTargeted: { targeted in
                     if targeted { Self.monitorLog.info("monitor drop target entered \(index, privacy: .public)") }
@@ -540,15 +540,25 @@ struct EditorView: View {
     private static let gridColumns: [GridItem] =
         Array(repeating: GridItem(.fixed(100), spacing: 12), count: StreamDock293S.columns)
 
-    /// 托盘落下:把显示器动作绑到该键(保留槽不可放置),并即时上屏
-    private func bindMonitor(_ command: MonitorCommand, at index: Int) {
+    /// 托盘落下/点选:把载荷绑到该键(保留槽不可放置),并即时上屏
+    /// 载荷 = MonitorCommand.rawValue(原子动作) 或 "composite:<id>"(自定义/复合配方)
+    private func bindPayload(_ raw: String, at index: Int) {
         guard AppModel.reservedSlot(at: index) == nil else { return }
         var key = appModel.config.keyConfig(at: index)
-        key.action = .monitor(command)
-        // 落下即写短标签:槽位里原有的数字占位(3…15)不是用户标题,留着会读成"5 号键在调亮度"
-        key.title = command.title
-        // 输入类动作自动带 monitorInput 动效键面(与槽位 1 同款);其它动作清掉动效,避免残留
-        key.animation = command.carriesInputAnimation ? .monitorInput : nil
+        if let tile = MonitorCompositeCatalog.tile(payload: raw) {
+            key.action = tile.action
+            key.animation = tile.animation
+            key.title = tile.title
+        } else if let command = MonitorCommand(rawValue: raw) {
+            key.action = .monitor(command)
+            // 落下即写短标签:槽位里原有的数字占位(3…15)不是用户标题,留着会读成"5 号键在调亮度"
+            key.title = command.title
+            // 输入类动作自动带 monitorInput 动效键面(与槽位 1 同款);其它动作清掉动效,避免残留
+            key.animation = command.carriesInputAnimation ? .monitorInput : nil
+        } else {
+            Self.monitorLog.info("monitor bind rejected unknown payload \(raw, privacy: .public)")
+            return
+        }
         appModel.config.updateKey(key, at: index)
         appModel.applyKey(at: index)
     }
@@ -794,6 +804,7 @@ private struct KeyEditView: View {
                     }
                 }
                 Section("动作") {
+                    Button("清除此键（动作 / 动效 / 标题 / 图标）", role: .destructive) { clearKey() }
                     Picker("类型", selection: $kind) {
                         ForEach(ActionKind.allCases, id: \.self) { option in
                             Text(option.label).tag(option)
@@ -976,7 +987,9 @@ private struct KeyEditView: View {
         case .monitor:
             LabeledContent("功能") {
                 Picker("", selection: $monitorCommand) {
-                    ForEach(MonitorGroup.allCases) { group in
+                    ForEach(MonitorGroup.allCases.filter { group in
+                        MonitorCommand.allCases.contains { $0.group == group }
+                    }) { group in
                         Section(group.title) {
                             ForEach(MonitorCommand.allCases.filter { $0.group == group }) { command in
                                 Text(command.title).tag(command)
@@ -1150,6 +1163,18 @@ private struct KeyEditView: View {
     /// 会误删活的 context 记录(18:27 插桩),故永久移除
     private func cancelEdit() {
         appModel.pluginHost.clearPendingPI(contextID: draftContextID)
+        dismiss()
+    }
+
+    /// 清除此键：动作 / 动效 / 标题 / 图标全部清空，立即保存上屏（槽位 11 清「切换输入」用这个）
+    private func clearKey() {
+        var key = appModel.config.keyConfig(at: index)
+        key.action = nil
+        key.animation = nil
+        key.title = ""
+        key.iconPath = nil
+        appModel.config.updateKey(key, at: index)
+        appModel.applyKey(at: index)
         dismiss()
     }
 
