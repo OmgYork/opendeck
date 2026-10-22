@@ -3,11 +3,13 @@ import SwiftUI
 // MARK: - 显示器功能托盘（独立浮动 deco）
 //
 // 从「矩阵·右缘」挂轨的深色胶囊语言里剥出来的独立面板：可拖动、可收起。
-// 2026-10-23 改版：方形磁贴 + 置顶「自定义/复合」分类 + 分组/小节可折叠；
-// 条目全是**原子动作**（单值/单步），复合配方在置顶分类里。
+// 2026-10-23 v3：磁贴 = **真实键帽渲染**（KeycapView，100pt 与编辑器槽位 1:1；
+// 复合磁贴直接显示动效帧，拖拽跟随图同源）；置顶「自定义/复合」；分组可折叠；
+// 指针悬停时滚动只作用于托盘（由 EditorView 的 onHover 门控 SwipePageMonitor）。
 // 载荷（拖拽/点选统一）：MonitorCommand.rawValue 或 "composite:<id>"。
 
 struct MonitorPaletteView: View {
+    let appModel: AppModel
     /// 当前点选的载荷（点选绑定模式下高亮）
     var picked: String? = nil
     /// 点选回调：点条目 → 再点键位即绑定
@@ -16,12 +18,12 @@ struct MonitorPaletteView: View {
     @State private var collapsed = false
     @State private var offset: CGSize = .zero
     @State private var dragAnchor: CGSize = .zero
-    /// 折叠的分组/小节 key（默认全展开）
-    @State private var collapsedSections: Set<String> = []
+    /// 折叠的分组 key（默认：四个功能组全折叠，自定义/复合展开）
+    @State private var collapsedSections: Set<String> = ["picture", "game", "audio", "input"]
 
-    private let tileSide: CGFloat = 72
+    private let tileSide: CGFloat = 100
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.fixed(tileSide), spacing: 8), count: 4)
+        Array(repeating: GridItem(.fixed(tileSide), spacing: 8), count: 3)
     }
 
     var body: some View {
@@ -39,12 +41,12 @@ struct MonitorPaletteView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 520)
+                .frame(maxHeight: 560)
             }
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 14)
-        .frame(width: collapsed ? nil : 340, alignment: .leading)
+        .frame(width: collapsed ? nil : 344, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(
@@ -116,8 +118,7 @@ struct MonitorPaletteView: View {
             if !collapsedSections.contains("composite") {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                     ForEach(MonitorCompositeCatalog.all) { tile in
-                        tileView(symbol: tile.symbol, title: tile.title,
-                                 payload: tile.payload, note: tile.note)
+                        tileView(payload: tile.payload, note: tile.note)
                     }
                 }
             }
@@ -139,8 +140,7 @@ struct MonitorPaletteView: View {
                             ForEach(MonitorCommand.allCases.filter {
                                 $0.group == group && $0.subgroup == subgroup
                             }) { command in
-                                tileView(symbol: command.symbol, title: command.title,
-                                         payload: command.rawValue, note: command.spec.note)
+                                tileView(payload: command.rawValue, note: command.spec.note)
                             }
                         }
                     }
@@ -172,44 +172,47 @@ struct MonitorPaletteView: View {
         .help("折叠 / 展开")
     }
 
-    // MARK: 磁贴（方形）
+    // MARK: 磁贴 = 真实键帽渲染（复合磁贴显示动效帧）
 
-    private func tileView(symbol: String, title: String, payload: String, note: String?) -> some View {
+    private func tileView(payload: String, note: String?) -> some View {
+        let config = tileConfig(for: payload)
         let isPicked = picked == payload
-        return VStack(spacing: 4) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .medium))
-            Text(title)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .minimumScaleFactor(0.65)
-        }
-        .foregroundStyle(.white.opacity(0.92))
-        .frame(width: tileSide, height: tileSide)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.white.opacity(isPicked ? 0.22 : 0.08))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(
-                            isPicked ? .white.opacity(0.85) : .white.opacity(0.08),
-                            lineWidth: isPicked ? 2 : 1
-                        )
-                }
+        return KeycapView(
+            config: config ?? KeyConfig(),
+            interactive: false,
+            staticFrame: config.flatMap { appModel.animationPreviewFrame(for: $0) }
         )
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: tileSide, height: tileSide)
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.9), lineWidth: 2.5)
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture { onPick(payload) }
         .draggable(payload) {
-            // 拖拽跟随图：与条目同视觉，避免系统默认灰块
-            VStack(spacing: 3) {
-                Image(systemName: symbol).font(.system(size: 14))
-                Text(title).font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(8)
-            .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
+            // 拖拽跟随图：与磁贴/最终键帽同源（复合带真实动效帧）
+            KeycapView(
+                config: config ?? KeyConfig(),
+                interactive: false,
+                staticFrame: config.flatMap { appModel.animationPreviewFrame(for: $0) }
+            )
+            .frame(width: tileSide, height: tileSide)
         }
-        .help(note ?? title)
+        .help(note ?? "")
+    }
+
+    /// 载荷 → 键帽配置（与落下后的最终键面一致）
+    private func tileConfig(for payload: String) -> KeyConfig? {
+        if let tile = MonitorCompositeCatalog.tile(payload: payload) {
+            return KeyConfig(title: tile.title, backgroundColorHex: "#000000",
+                             iconPath: nil, action: tile.action, animation: tile.animation)
+        }
+        if let command = MonitorCommand(rawValue: payload) {
+            return KeyConfig(title: command.title, backgroundColorHex: "#000000",
+                             iconPath: nil, action: .monitor(command), animation: nil)
+        }
+        return nil
     }
 }

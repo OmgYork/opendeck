@@ -89,11 +89,16 @@ struct EditorView: View {
         .overlay(alignment: .topTrailing) {
             if showMonitorPalette {
                 MonitorPaletteView(
+                    appModel: appModel,
                     picked: pendingMonitorPayload,
                     onPick: { payload in
                         pendingMonitorPayload = (pendingMonitorPayload == payload) ? nil : payload
                     }
                 )
+                .onHover { inside in
+                    // 指针在托盘内:滚动只作用于托盘,不翻页(见 SwipePageMonitor.handle)
+                    swipeMonitor.isPointerOverPalette = inside
+                }
                 .padding(.top, 6)
                 .padding(.trailing, 6)
             }
@@ -804,7 +809,6 @@ private struct KeyEditView: View {
                     }
                 }
                 Section("动作") {
-                    Button("清除此键（动作 / 动效 / 标题 / 图标）", role: .destructive) { clearKey() }
                     Picker("类型", selection: $kind) {
                         ForEach(ActionKind.allCases, id: \.self) { option in
                             Text(option.label).tag(option)
@@ -820,6 +824,8 @@ private struct KeyEditView: View {
 
             Divider()
             HStack {
+                Button("清除此键", role: .destructive) { clearKey() }
+                    .help("动作 / 动效 / 标题 / 图标全部清空，立即保存上屏")
                 Spacer()
                 Button("取消") { cancelEdit() }
                 Button("保存") { save() }
@@ -1240,6 +1246,8 @@ private final class SwipePageMonitor {
     var onSwipe: ((_ isHorizontal: Bool, _ direction: Int) -> Void)?
     /// 模态抑制:Sheet(键编辑/调参/插件管理/场景联动)打开时手势让路,滚动交还给面板
     var isSuppressed = false
+    /// 指针悬停在显示器托盘(deco)内:滚动只作用于托盘自身的 ScrollView,不触发翻页
+    var isPointerOverPalette = false
 
     private var horizontalAccumulated: CGFloat = 0
     private var verticalAccumulated: CGFloat = 0
@@ -1277,6 +1285,8 @@ private final class SwipePageMonitor {
     private func handle(_ event: NSEvent) -> NSEvent? {
         // 模态上下文(Sheet 打开):手势让路,滚动交还给面板;抑制期动量也放行
         if isSuppressed { return event }
+        // 指针在显示器托盘(deco)内:滚动只作用于托盘自身(其 ScrollView),不翻页
+        if isPointerOverPalette { return event }
 
         let dx = event.scrollingDeltaX
         let dy = event.scrollingDeltaY
