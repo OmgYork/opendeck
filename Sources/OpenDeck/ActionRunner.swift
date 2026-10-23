@@ -200,6 +200,12 @@ enum ActionRunner {
             await runHotkey(keyCode: keyCode, modifiers: modifiers)
         case .mediaKey(let name):
             postMediaKey(named: name)
+        case .monitor(let command):
+            let outcome = MonitorDDC.apply(command)
+            logger.info("monitor \(command.rawValue, privacy: .public) → \(String(describing: outcome), privacy: .public)")
+            if case .failed(let message) = outcome {
+                report(ActionError.processFailed(command: "DDC \(command.rawValue)", exitCode: -1, stderr: message))
+            }
         case .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff:
             break // 插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction,均不经此分发
         }

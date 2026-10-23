@@ -24,6 +24,8 @@ enum KeyAction: Codable, Hashable {
     /// 插件动作:pluginID = .sdPlugin 目录名去后缀(= manifest UUID),contextID = 实例身份
     /// (分配时生成的 UUID,持久化于此,跨重启稳定;settings 存 pluginSettings/<pluginID>.json)
     case plugin(pluginID: String, actionUUID: String, contextID: String)
+    /// 显示器 DDC/CI 动作(亮度/对比度/锐度/响应时间/输入源…):由 ActionRunner 直连显示器执行
+    case monitor(MonitorCommand)
 }
 
 struct KeyConfig: Codable, Hashable {
@@ -31,6 +33,20 @@ struct KeyConfig: Codable, Hashable {
     var backgroundColorHex: String = "#3B4252"
     var iconPath: String? = nil
     var action: KeyAction? = nil
+    /// 内建动效键面(可选,旧配置缺键可解码)。语义由渲染器决定,优先于 iconPath/title。
+    var animation: KeyAnimation? = nil
+}
+
+/// 键面内建动效。目前只有一种:LG 显示器输入源切换(Mac DP ↔ PC HDMI1)。
+/// 与 Toggle Monitor 快捷指令配合:键面显示当前输入源,按压后播放信号迁移动效。
+enum KeyAnimation: String, Codable, Hashable, CaseIterable {
+    case monitorInput
+
+    var label: String {
+        switch self {
+        case .monitorInput: return "显示器输入切换(Mac / PC)"
+        }
+    }
 }
 
 /// 场景内的一页(15 键)。场景的第一页之外即「圆点」——内容超过一屏时的延伸页。
