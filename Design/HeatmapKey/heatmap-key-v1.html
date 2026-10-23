@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>键盘热力图键 · 动效原型 v1（OpenDeck 槽位 13）</title>
+<style>
+  :root{
+    --bg:#0f0e0d; --panel:#171615; --panel2:#1e1c1b; --line:rgba(255,255,255,.08);
+    --ink:#f5f3f1; --ink2:rgba(245,243,241,.62); --ink3:rgba(245,243,241,.38);
+    --pink:#f7a6ac; --pink2:#ffb4b8; --warn:#f5ba4c; --key:#1b1918;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:400 13px/1.55 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:34px 28px 70px}
+  header h1{margin:0 0 6px;font-size:19px;font-weight:600;letter-spacing:.2px}
+  header p{margin:0;color:var(--ink2);font-size:12.5px}
+  .tag{display:inline-block;margin-left:8px;padding:1px 7px;border:1px solid var(--line);
+    border-radius:999px;color:var(--ink3);font-size:11px;vertical-align:2px}
+
+  main{display:grid;grid-template-columns:520px 1fr;gap:34px;margin-top:28px}
+  @media (max-width:1000px){main{grid-template-columns:1fr}}
+
+  /* ---------- 舞台 ---------- */
+  .device{position:relative;width:448px;height:448px;border-radius:34px;background:#0a0a0a;
+    padding:0;box-shadow:0 30px 70px -30px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.06),
+      inset 0 1px 0 rgba(255,255,255,.10)}
+  .device canvas{display:block;width:448px;height:448px;border-radius:34px}
+  .device::after{content:"";position:absolute;inset:0;border-radius:34px;pointer-events:none;
+    background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,0) 42%)}
+  .under{display:flex;align-items:flex-end;gap:18px;margin-top:16px}
+  .real{width:112px;height:112px;border-radius:16px;background:#0a0a0a;padding:0;
+    box-shadow:0 10px 26px -14px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.06)}
+  .real canvas{display:block;width:112px;height:112px;border-radius:16px}
+  .under .cap{color:var(--ink3);font-size:11px;line-height:1.4;padding-bottom:6px}
+  .under .cap b{color:var(--ink2);font-weight:500}
+
+  /* ---------- 控制台 ---------- */
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px}
+  .panel h2{margin:0 0 10px;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--ink3);font-weight:600}
+  .row+.row{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+  .states{display:flex;flex-wrap:wrap;gap:7px}
+  button.s{appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--ink2);
+    padding:6px 11px;border-radius:8px;font-size:12px;cursor:pointer;transition:.14s}
+  button.s:hover{color:var(--ink);border-color:rgba(255,255,255,.18)}
+  button.s[aria-pressed="true"]{background:rgba(247,166,172,.14);border-color:rgba(247,166,172,.55);color:#fff}
+  button.s.warn[aria-pressed="true"]{background:rgba(245,186,76,.14);border-color:rgba(245,186,76,.55)}
+  .kv{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  input[type=number]{width:112px;background:#0d0c0b;border:1px solid var(--line);color:var(--ink);
+    border-radius:7px;padding:6px 8px;font:500 13px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .chips{display:flex;gap:6px}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:11px;color:var(--ink3);cursor:pointer}
+  .chip:hover{color:var(--ink)}
+  .player{display:flex;gap:12px;align-items:center}
+  button.p{appearance:none;width:34px;height:34px;border-radius:9px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--ink);cursor:pointer;font-size:13px}
+  button.p:hover{border-color:rgba(255,255,255,.2)}
+  input[type=range]{flex:1;accent-color:var(--pink)}
+  .frames{font:500 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink3);min-width:96px;text-align:right}
+  .note{color:var(--ink2);font-size:12px;min-height:38px}
+  .note b{color:var(--ink);font-weight:600}
+  .hint{color:var(--ink3);font-size:11.5px;margin-top:8px}
+
+  /* ---------- 规格 ---------- */
+  .spec{margin-top:44px;display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  @media (max-width:1000px){.spec{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .card h3{margin:0 0 12px;font-size:12px;letter-spacing:.5px;color:var(--ink2);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:top}
+  th{color:var(--ink3);font-weight:500;font-size:11px;letter-spacing:.3px}
+  td.mono,th.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+  tr:last-child td{border-bottom:none}
+  .sw{display:flex;align-items:center;gap:9px;padding:6px 0}
+  .sw i{width:22px;height:22px;border-radius:6px;display:inline-block;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+  .sw span{color:var(--ink2);font-size:12px}
+  .sw code{color:var(--ink3);font:500 11px ui-monospace,SFMono-Regular,Menlo,monospace}
+  .decide{margin:0;padding-left:16px;color:var(--ink2);font-size:12px}
+  .decide li{margin:7px 0}
+  .decide b{color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>键盘热力图键 · 动效原型<span class="tag">v1 · 112×112</span></h1>
+    <p>OpenDeck 槽位 13（第 3 排中间）· 数值来自 KeyAnalyze 自己的库，状态来自它自己的日志，按下转发到它自己的按钮。</p>
+  </header>
+
+  <main>
+    <section>
+      <div class="device"><canvas id="big" width="896" height="896"></canvas></div>
+      <div class="under">
+        <div class="real"><canvas id="real" width="224" height="224"></canvas></div>
+        <div class="cap"><b>112 × 112</b> 实际像素<br />放大图 4×（448px）<br />设备端 JPEG 下发，静态零刷新</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>状态</h2>
+      <div class="states" id="stateBtns"></div>
+
+      <div class="row">
+        <h2>数值</h2>
+        <div class="kv">
+          <input id="value" type="number" value="8432" min="0" step="1" />
+          <div class="chips" id="chips"></div>
+        </div>
+        <div class="hint">4 位以内全显示；≥ 5 位转 k / m 缩写（112px 里 5 位数字必然掉到 18px 以下）。</div>
+      </div>
+
+      <div class="row">
+        <h2>时间轴（12 fps · 每帧 83.3ms）</h2>
+        <div class="player">
+          <button class="p" id="play">▶</button>
+          <input type="range" id="scrub" min="0" max="1" value="0" step="1" />
+          <div class="frames" id="frameRead">帧 0 / 0</div>
+        </div>
+        <div class="note" id="note" style="margin-top:10px"></div>
+      </div>
+    </section>
+  </main>
+
+  <section class="spec">
+    <div class="card">
+      <h3>状态表（判据 → 键面 → 按下）</h3>
+      <table>
+        <tr><th>态</th><th>判据</th><th>键面</th><th>按下</th></tr>
+        <tr><td>记录中</td><td>进程在 + 日志无未恢复中断</td><td>白色数字 / 粉轨 + 呼吸点</td><td>打开 dashboard 并置前</td></tr>
+        <tr><td>增长</td><td>数值上升（≤15s 一次的 flush）</td><td>变化位滚动 + 粉洗一次</td><td>—</td></tr>
+        <tr><td>中断</td><td>日志最新事件 = <span class="mono">recovery failed</span></td><td>数字灰化 / 暖黄斜纹 / 徽标变黄</td><td>触发「重试统计」</td></tr>
+        <tr><td>重试中</td><td>按下后 2–8s 窗口</td><td>暖黄水位扫过 / 数字压到 25%</td><td>忽略（防连点）</td></tr>
+        <tr><td>恢复</td><td>日志出现 <span class="mono">recovered</span> 或库重新增长</td><td>斜纹退出 + 粉闪 + 补滚差值</td><td>—</td></tr>
+        <tr><td>未运行 / 不可读</td><td>进程不存在 / 库打不开</td><td>「—」+ 灰轨</td><td>启动应用</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>帧表（12 fps 整帧）</h3>
+      <table>
+        <tr><th>事件</th><th class="mono">帧</th><th class="mono">时长</th><th>动作</th></tr>
+        <tr><td>呼吸</td><td class="mono">24 帧循环</td><td class="mono">4.0s</td><td>状态轨右端圆点 opacity .30→.85</td></tr>
+        <tr><td>数字增长</td><td class="mono">4</td><td class="mono">333ms</td><td>变化位向上滚 12px，ease-out</td></tr>
+        <tr><td>增长洗色</td><td class="mono">3</td><td class="mono">250ms</td><td>整键粉 12% 淡出</td></tr>
+        <tr><td>中断进入</td><td class="mono">3</td><td class="mono">250ms</td><td>数字→45% / 斜纹自左展开 / 徽标变黄</td></tr>
+        <tr><td>重试中</td><td class="mono">12 循环</td><td class="mono">1.0s</td><td>18px 水位段扫过</td></tr>
+        <tr><td>恢复成功</td><td class="mono">5</td><td class="mono">417ms</td><td>斜纹右收 + 粉闪 2 帧 + 数字回满</td></tr>
+        <tr><td>重试失败</td><td class="mono">4</td><td class="mono">333ms</td><td>±2px 抖两次（不变红）</td></tr>
+        <tr><td>按下</td><td class="mono">2</td><td class="mono">167ms</td><td>整键 −4% 亮度 + 顶部 8% 扫光</td></tr>
+        <tr><td>午夜翻页</td><td class="mono">4</td><td class="mono">333ms</td><td>旧值下滑淡出 → 0 自上落回</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Token（取自 App 的品牌色）</h3>
+      <div class="sw"><i style="background:#1b1918"></i><span>键面底色</span><code>#1B1918</code></div>
+      <div class="sw"><i style="background:#f7a6ac"></i><span>记录中 / 强调粉</span><code>#F7A6AC → #FFB4B8</code></div>
+      <div class="sw"><i style="background:#f5ba4c"></i><span>中断 / 警示暖黄</span><code>#F5BA4C</code></div>
+      <div class="sw"><i style="background:#ffffff"></i><span>主数字</span><code>#FFFFFF</code></div>
+      <div class="sw"><i style="background:rgba(255,255,255,.45)"></i><span>中断态数字（灰化）</span><code>rgba(255,255,255,.45)</code></div>
+      <h3 style="margin-top:16px">版式网格</h3>
+      <table>
+        <tr><td>安全边</td><td class="mono">12px</td></tr>
+        <tr><td>主数字</td><td class="mono">34px / 600 · 等宽 digit · 基线 y=70</td></tr>
+        <tr><td>状态轨</td><td class="mono">64 × 2，居中，y=92；中断态展开到 6px 斜纹</td></tr>
+        <tr><td>键盘徽标</td><td class="mono">13 × 13 @ (12,12)，常态 45% 透明</td></tr>
+        <tr><td>文字</td><td class="mono">键面上没有第二个字</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>两个刻意的设计决定</h3>
+      <ul class="decide">
+        <li><b>键面不显示「停在 22:30」。</b>112px 键面上 6.5px 的字物理高度约 1.4mm，读不出来；「数据停在几点」交给 App 面板承担，键面只表达「现在能不能信这个数」。</li>
+        <li><b>警示不用红。</b>App 自己就用暖黄警告；红在这块小屏上会变成「出事了」的过度报警，而这里的语义只是「统计暂停，按一下就好」。</li>
+        <li><b>静息零刷新。</b>只有数值变化或状态切换才推帧；常态下键面完全静止，USB 上没有流量。</li>
+        <li><b>转场全部 ≤ 500ms。</b>12fps 是设备实测可用的节拍，所以时长都按整帧写，不出现 260ms 这种非整帧值。</li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<script>
+'use strict';
+
+/* ============================================================
+   1. 数据与格式
+   ============================================================ */
+const PALETTE = {
+  bg: '#1b1918',
+  glow: 'rgba(245,186,76,0.10)',
+  ink: '#ffffff',
+  inkDim: 'rgba(255,255,255,0.45)',
+  inkFaint: 'rgba(255,255,255,0.25)',
+  pink: '#f7a6ac',
+  pink2: '#ffb4b8',
+  warn: '#f5ba4c',
+  railIdle: 'rgba(247,166,172,0.30)',
+  railOff: 'rgba(255,255,255,0.18)',
+};
+
+const FPS = 12;
+
+function formatCount(n) {
+  n = Math.max(0, Math.round(n));
+  if (n < 10000) return String(n);
+  if (n < 1000000) return trimZero((n / 1000).toFixed(1)) + 'k';
+  return trimZero((n / 1000000).toFixed(1)) + 'm';
+}
+function trimZero(s) { return s.replace(/\.0$/, ''); }
+
+/* ============================================================
+   2. 渲染器：把「一帧的场景描述」画到 112×112 逻辑坐标里
+   ============================================================ */
+class KeyRenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.scale = canvas.width / 112;   // 4× / 2× / 1×
+    this.size = 112;
+  }
+
+  /* scene = {numFrom,numTo,roll,alpha,hatch,rail,dotAlpha,flash,shake,sheen,warnBadge,stale} */
+  draw(scene) {
+    const ctx = this.ctx, S = this.size;
+    ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
+    ctx.clearRect(0, 0, S, S);
+    ctx.save();
+    if (scene.shake) ctx.translate(scene.shake, 0);
+
+    /* 底：暖炭黑 + 左上暖光 + 顶部玻璃高光 */
+    ctx.fillStyle = PALETTE.bg;
+    ctx.fillRect(0, 0, S, S);
+    const glow = ctx.createRadialGradient(20, 8, 2, 20, 8, 72);
+    glow.addColorStop(0, PALETTE.glow);
+    glow.addColorStop(1, 'rgba(245,186,76,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, S, S);
+    const sheen = ctx.createLinearGradient(0, 0, 0, 42);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.055)');
+    sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(0, 0, S, 42);
+
+    /* 徽标：极简键盘线稿 */
+    this.drawBadge(ctx, scene.badgeAlpha, scene.warnBadge);
+
+    /* 主数字 */
+    this.drawNumber(ctx, scene);
+
+    /* 状态轨 */
+    this.drawRail(ctx, scene);
+
+    /* 增长粉洗 */
+    if (scene.flash > 0) {
+      ctx.fillStyle = `rgba(247,166,172,${(0.12 * scene.flash).toFixed(3)})`;
+      ctx.fillRect(0, 0, S, S);
+    }
+    /* 按下扫光 */
+    if (scene.sheen > 0) {
+      const g = ctx.createLinearGradient(0, 0, 0, 56);
+      g.addColorStop(0, `rgba(255,255,255,${(0.08 * scene.sheen).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, S, 56);
+    }
+    /* 按下压暗 */
+    if (scene.dim > 0) {
+      ctx.fillStyle = `rgba(0,0,0,${(0.06 * scene.dim).toFixed(3)})`;
+      ctx.fillRect(0, 0, S, S);
+    }
+    ctx.restore();
+  }
+
+  drawBadge(ctx, alpha, warn) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = warn ? PALETTE.warn : PALETTE.warn;
+    ctx.lineWidth = 1.1;
+    ctx.lineJoin = 'round';
+    const x = 12, y = 12, w = 13, h = 10, r = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.stroke();
+    /* 两排键 */
+    ctx.lineWidth = 0.9;
+    ctx.globalAlpha = alpha * 0.85;
+    for (let i = 0; i < 3; i++) {
+      const cw = 2.4, gap = 1.4;
+      const total = 3 * cw + 2 * gap;
+      const sx = x + (w - total) / 2 + i * (cw + gap);
+      ctx.strokeRect(sx, y + 2.6, cw, 2.0);
+      ctx.strokeRect(sx, y + 5.8, cw, 2.0);
+    }
+    ctx.restore();
+  }
+
+  /* 数字：等宽格位逐位绘制，变化位做纵向滚动；长度或单位变化时改为交叉淡入 */
+  drawNumber(ctx, scene) {
+    const from = scene.numFrom, to = scene.numTo, p = scene.roll;
+    const size = to.length >= 5 ? 26 : 34;
+    ctx.save();
+    ctx.font = `600 ${size}px "SF Pro Display", -apple-system, "Helvetica Neue", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const cell = Math.max(...'0123456789'.split('').map(d => ctx.measureText(d).width));
+    const totalW = cell * to.length;
+    const startX = 56 - totalW / 2 + cell / 2;
+    const baseY = 70;
+    const rollDist = size * 0.42;
+
+    ctx.fillStyle = PALETTE.ink;
+    ctx.globalAlpha = scene.alpha;
+
+    /* 长度/单位变了（9999 → 10.0k、8432 → 0）滚动会读成乱码，改用淡换 */
+    const rollable = p > 0 && from.length === to.length;
+    const fading = p > 0 && !rollable;
+
+    if (fading) {
+      ctx.save();
+      ctx.globalAlpha = scene.alpha * (1 - p);
+      ctx.fillText(from, 56, baseY);
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = scene.alpha * p;
+      ctx.fillText(to, 56, baseY);
+      ctx.restore();
+      ctx.restore();
+      return;
+    }
+
+    for (let i = 0; i < to.length; i++) {
+      const cx = startX + i * cell;
+      const cNew = to[i];
+      const cOld = i < from.length ? from[i] : '';
+      if (!rollable || cOld === cNew) {
+        ctx.fillText(cNew, cx, baseY);
+      } else {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(cx - cell / 2, baseY - size * 0.95, cell, size * 1.25);
+        ctx.clip();
+        ctx.fillText(cOld, cx, baseY - rollDist * p);
+        ctx.fillText(cNew, cx, baseY + rollDist * (1 - p));
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  drawRail(ctx, scene) {
+    const x = 24, w = 64, cy = 92;
+    const expand = scene.railHeight || 2;
+    const y = cy - expand / 2;
+    const r = expand / 2;
+
+    const rr = (xx, yy, ww, hh, rad) => {
+      ctx.beginPath();
+      ctx.moveTo(xx + rad, yy);
+      ctx.arcTo(xx + ww, yy, xx + ww, yy + hh, rad);
+      ctx.arcTo(xx + ww, yy + hh, xx, yy + hh, rad);
+      ctx.arcTo(xx, yy + hh, xx, yy, rad);
+      ctx.arcTo(xx, yy, xx + ww, yy, rad);
+      ctx.closePath();
+    };
+
+    ctx.save();
+    if (scene.rail === 'idle') {
+      ctx.fillStyle = PALETTE.railIdle;
+      rr(x, y, w, expand, r); ctx.fill();
+      /* 呼吸点 */
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(247,166,172,${(0.30 + 0.55 * scene.dotAlpha).toFixed(3)})`;
+      ctx.arc(x + w - 1, cy, 1.7, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (scene.rail === 'off') {
+      ctx.fillStyle = PALETTE.railOff;
+      rr(x, y, w, expand, r); ctx.fill();
+    } else if (scene.rail === 'warn') {
+      /* 斜纹：clip 到「已展开宽度」的轨道内再画 45° 细纹（不用 destination-out，避免挖穿底色） */
+      const revealW = Math.max(0, w * (scene.hatch ?? 1));
+      if (revealW > 0.5) {
+        ctx.save();
+        rr(x, y, revealW, expand, Math.min(r, revealW / 2));
+        ctx.clip();
+        ctx.fillStyle = 'rgba(245,186,76,0.22)';
+        ctx.fillRect(x, y, w, expand);
+        ctx.strokeStyle = 'rgba(245,186,76,0.62)';
+        ctx.lineWidth = 1.1;
+        const step = 4;
+        const off = (scene.hatchShift || 0) % step;
+        for (let i = -expand; i < w + expand; i += step) {
+          ctx.beginPath();
+          ctx.moveTo(x + i + off, y + expand);
+          ctx.lineTo(x + i + off + expand, y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    } else if (scene.rail === 'retry') {
+      ctx.fillStyle = 'rgba(245,186,76,0.20)';
+      rr(x, y, w, expand, r); ctx.fill();
+      const segW = 18;
+      const pos = x + (w + segW) * (scene.sweep || 0) - segW;
+      ctx.save();
+      rr(x, y, w, expand, r); ctx.clip();
+      const g = ctx.createLinearGradient(pos, 0, pos + segW, 0);
+      g.addColorStop(0, 'rgba(245,186,76,0.15)');
+      g.addColorStop(0.5, 'rgba(245,186,76,0.95)');
+      g.addColorStop(1, 'rgba(245,186,76,0.15)');
+      ctx.fillStyle = g;
+      ctx.fillRect(pos, y, segW, expand);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   3. 场景（每个场景 = 一段可拖动的帧序列）
+   ============================================================ */
+class Scenarios {
+  constructor() { this.value = 8432; }
+
+  base(over = {}) {
+    return Object.assign({
+      numFrom: formatCount(this.value), numTo: formatCount(this.value), roll: 0,
+      alpha: 1, rail: 'idle', railHeight: 2, hatch: 1, hatchShift: 0,
+      dotAlpha: 0, flash: 0, shake: 0, sheen: 0, dim: 0,
+      badgeAlpha: 0.45, warnBadge: false, sweep: 0,
+    }, over);
+  }
+
+  get(id) {
+    const v = formatCount(this.value);
+    const prev = formatCount(Math.max(0, this.value - 37));
+    const S = {
+      /* 常态：呼吸 24 帧一循环（4s） */
+      idle: { frames: 24, loop: true, note: '<b>记录中</b>：白色数字 + 粉色状态轨，右端呼吸点 4s 一循环。静息时设备完全静止，不推帧。',
+        render: t => this.base({ dotAlpha: 0.5 - 0.5 * Math.cos((t / 24) * Math.PI * 2) }) },
+
+      /* 增长：数字滚 4 帧 + 粉洗 3 帧 */
+      tick: { frames: 4, note: '<b>数字增长</b>：只有变化位向上滚 12px（333ms），整键粉洗 12% 在 3 帧内淡出。',
+        render: t => this.base({ numFrom: prev, numTo: v, roll: easeOut(t / 3), flash: Math.max(0, 1 - t / 2.4) }) },
+
+      /* 中断进入：3 帧 */
+      attention: { frames: 3, note: '<b>中断进入</b>：数字灰化到 45%、暖黄斜纹自左展开、徽标转满亮。保留最后统计值，不显示 0。',
+        render: t => this.base({ alpha: 1 - 0.55 * (t / 2), rail: 'warn', railHeight: 2 + 4 * (t / 2), hatch: t / 2, warnBadge: true, badgeAlpha: 0.45 + 0.55 * (t / 2) }) },
+
+      /* 中断静置：斜纹极慢爬行（8 帧一周期） */
+      warnIdle: { frames: 8, loop: true, note: '<b>中断静置</b>：斜纹以 24px 周期缓慢爬行，数字停在最后已知值。',
+        render: t => this.base({ alpha: 0.45, rail: 'warn', railHeight: 6, warnBadge: true, badgeAlpha: 1, hatch: 1, hatchShift: t * 0.5 }) },
+
+      /* 重试中：水位扫过 12 帧一循环 */
+      retry: { frames: 12, loop: true, note: '<b>重试中</b>：暖黄水位段 1s 扫过一轮，数字压到 25%——告诉你「正在重新连上」，不是「已恢复」。',
+        render: t => this.base({ alpha: 0.25, rail: 'retry', railHeight: 6, warnBadge: true, badgeAlpha: 1, sweep: t / 12 }) },
+
+      /* 恢复：5 帧 */
+      recover: { frames: 5, note: '<b>恢复成功</b>：斜纹向右收、粉闪 2 帧、数字回满并补滚差值。',
+        render: t => this.base({ alpha: 0.45 + 0.55 * (t / 4), rail: t < 3 ? 'warn' : 'idle', railHeight: 6 - 4 * (t / 4), hatch: 1 - t / 4, warnBadge: t < 2, badgeAlpha: 1 - 0.55 * (t / 4), flash: t < 2 ? 1 - t / 2 : 0, numFrom: prev, numTo: v, roll: t < 4 ? 0 : 1 }) },
+
+      /* 失败：4 帧抖两次 */
+      fail: { frames: 4, note: '<b>重试失败</b>：±2px 抖两次即停（333ms），不回红、不长震——失败是常态，不该像事故。',
+        render: t => this.base({ alpha: 0.45, rail: 'warn', railHeight: 6, warnBadge: true, badgeAlpha: 1, shake: [0, 2, -2, 1][Math.min(3, t)] }) },
+
+      /* 按下：2 帧 */
+      press: { frames: 2, note: '<b>按下</b>：整键 −4% 亮度 + 顶部 8% 扫光，167ms 收回。物理手感的短促反馈。',
+        render: t => this.base({ dim: 1 - t / 2, sheen: 1 - t / 2 }) },
+
+      /* 未运行 / 不可读 */
+      off: { frames: 1, note: '<b>未运行</b>：显示「—」与灰色状态轨。按下 = 启动应用。',
+        render: () => this.base({ numTo: '—', rail: 'off', badgeAlpha: 0.28 }) },
+
+      /* 午夜：4 帧 */
+      midnight: { frames: 4, note: '<b>午夜翻页</b>：旧值下滑淡出，0 自上落回，跨零点不会突然跳字。',
+        render: t => this.base({ numFrom: v, numTo: '0', roll: easeOut(t / 3), alpha: t < 2 ? 1 : 1 }) },
+    };
+    return S[id];
+  }
+}
+
+function easeOut(p) { p = Math.min(1, Math.max(0, p)); return 1 - Math.pow(1 - p, 3); }
+
+/* ============================================================
+   4. 原型控制
+   ============================================================ */
+class ProtoApp {
+  constructor() {
+    this.scen = new Scenarios();
+    this.big = new KeyRenderer(document.getElementById('big'));
+    this.real = new KeyRenderer(document.getElementById('real'));
+    this.stateBtns = document.getElementById('stateBtns');
+    this.scrub = document.getElementById('scrub');
+    this.frameRead = document.getElementById('frameRead');
+    this.note = document.getElementById('note');
+    this.playBtn = document.getElementById('play');
+    this.valueInput = document.getElementById('value');
+
+    this.order = [
+      ['idle', '记录中'], ['tick', '数字增长'], ['attention', '中断进入'],
+      ['warnIdle', '中断静置'], ['retry', '重试中'], ['recover', '恢复成功'],
+      ['fail', '重试失败'], ['press', '按下'], ['midnight', '午夜翻页'], ['off', '未运行'],
+    ];
+    this.current = 'idle';
+    this.t = 0;
+    this.playing = true;
+    this.lastTs = 0;
+
+    this.buildButtons();
+    this.buildChips();
+    this.bind();
+    this.select('idle');
+    requestAnimationFrame(ts => this.loop(ts));
+  }
+
+  buildButtons() {
+    this.order.forEach(([id, label]) => {
+      const b = document.createElement('button');
+      b.className = 's' + (id.startsWith('attention') || id === 'warnIdle' || id === 'retry' || id === 'fail' ? ' warn' : '');
+      b.textContent = label;
+      b.dataset.id = id;
+      b.onclick = () => this.select(id);
+      this.stateBtns.appendChild(b);
+    });
+  }
+
+  buildChips() {
+    const wrap = document.getElementById('chips');
+    [268, 1120, 8432, 12437, 128490].forEach(v => {
+      const c = document.createElement('span');
+      c.className = 'chip';
+      c.textContent = formatCount(v);
+      c.onclick = () => { this.valueInput.value = v; this.setValue(v); };
+      wrap.appendChild(c);
+    });
+  }
+
+  bind() {
+    this.scrub.oninput = () => { this.t = Number(this.scrub.value); this.playing = false; this.playBtn.textContent = '▶'; };
+    this.playBtn.onclick = () => {
+      this.playing = !this.playing;
+      this.playBtn.textContent = this.playing ? '❚❚' : '▶';
+    };
+    this.valueInput.oninput = () => this.setValue(Number(this.valueInput.value) || 0);
+  }
+
+  setValue(v) {
+    this.scen.value = v;
+    this.render();
+  }
+
+  select(id) {
+    this.current = id;
+    this.t = 0;
+    this.playing = true;
+    this.playBtn.textContent = '❚❚';
+    const sc = this.scen.get(id);
+    this.scrub.max = Math.max(1, sc.frames - 1);
+    this.scrub.value = 0;
+    this.note.innerHTML = sc.note;
+    [...this.stateBtns.children].forEach(b => b.setAttribute('aria-pressed', b.dataset.id === id));
+    this.render();
+  }
+
+  loop(ts) {
+    if (this.playing) {
+      if (!this.lastTs) this.lastTs = ts;
+      const dt = (ts - this.lastTs) / 1000;
+      if (dt >= 1 / FPS) {
+        this.lastTs = ts;
+        const sc = this.scen.get(this.current);
+        this.t = (this.t + 1) % sc.frames;
+        this.scrub.value = this.t;
+      }
+    } else {
+      this.lastTs = 0;
+    }
+    this.render();
+    requestAnimationFrame(t2 => this.loop(t2));
+  }
+
+  render() {
+    const sc = this.scen.get(this.current);
+    const t = Math.min(this.t, sc.frames - 1);
+    const scene = sc.render(t);
+    this.big.draw(scene);
+    this.real.draw(scene);
+    this.frameRead.textContent = `帧 ${t} / ${sc.frames - 1} · ${Math.round((t + 1) / FPS * 1000)}ms`;
+  }
+}
+
+/* 呼吸/斜纹这类环境动效走连续时间（设备端 6fps 推送，视觉上足够平滑）；
+   转场全部按 12fps 整帧量化。 */
+new ProtoApp();
+</script>
+</body>
+</html>
