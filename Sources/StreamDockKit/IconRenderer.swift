@@ -95,6 +95,11 @@ public enum IconRenderer {
     }
 
     /// CGImage → JPEG:质量 0.9 起步循环下调,仍超限则整体缩放后重试。
+    /// 起点用上一张成功图的质量:键面帧尺寸/复杂度稳定时一步命中,
+    /// 每帧省掉逐档下调的重复全图编码。进程内调用方全在 MainActor
+    /// (DeviceController);StreamDeckHarness 是独立可执行进程,不共享。
+    private nonisolated(unsafe) static var lastGoodQuality: Double = 0.9
+
     public static func jpeg(from image: CGImage, maxBytes: Int = StreamDock293S.maxKeyJPEGBytes) -> Data? {
         var current = image
         for scale in [1.0, 0.8, 0.6] {
@@ -104,9 +109,10 @@ public enum IconRenderer {
                 // 右下角显示,呈现「左/上空隙大」的偏移(2026-10-18 用户实测定位)
                 current = restored
             }
-            var quality = 0.9
+            var quality = min(0.9, max(0.1, Self.lastGoodQuality))
             while quality >= 0.1 {
                 if let data = encode(current, quality: quality), data.count <= maxBytes {
+                    Self.lastGoodQuality = quality
                     return data
                 }
                 quality -= 0.15

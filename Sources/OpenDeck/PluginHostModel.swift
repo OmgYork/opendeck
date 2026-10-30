@@ -46,6 +46,10 @@ final class PluginHostModel {
         /// setImage 未指定 state = 作用于所有状态
         var allStateImage: CGImage?
         var stateImages: [Int: CGImage] = [:]
+        /// 每槽位(setImage 的 state 参数)最近一次载荷,重复帧短路整个下游管线
+        var lastImagePayloads: [String: String] = [:]
+        /// manifest 默认图解码缓存(插件静态资产,进程内不变;键 = instance.state)
+        var manifestDefaultImages: [Int: CGImage] = [:]
         var title: String?
 
         init(contextID: String, pluginUUID: String, actionUUID: String, keyIndex: Int, state: Int) {
@@ -409,7 +413,14 @@ final class PluginHostModel {
     private func applyImage(context: String, image: String?, state: Int?, target: Int) {
         guard let instance = self.instance(context: context) else { return }
         guard target != 2 else { return } // 纯软件图,M2 不维护软件预览
-        if image?.isEmpty ?? true {
+        // 重复帧短路:静态插件反复上屏同一图/全量重画重放时,同载荷的第二帧直接跳过
+        // (解码→合成→JPEG→HID 全免)。动画帧每帧不同,不受影响;设备侧重连/唤醒
+        // 由 keyImageCache 全量重画兜底,不依赖插件重发。
+        let slotKey = state.map { "s\($0)" } ?? "all"
+        let payload = image ?? ""
+        if instance.lastImagePayloads[slotKey] == payload { return }
+        instance.lastImagePayloads[slotKey] = payload
+        if payload.isEmpty {
             // 空串 = 恢复 manifest 默认图
             if let state {
                 instance.stateImages[state] = nil
@@ -706,13 +717,16 @@ final class PluginHostModel {
 
     /// manifest States[state].Image → CGImage(图片常无扩展名,由 SDManifest 探测)
     private func manifestDefaultImage(_ instance: Instance) -> CGImage? {
+        if let cached = instance.manifestDefaultImages[instance.state] { return cached }
         guard let runtime = runtimes[instance.pluginUUID],
               let action = runtime.action(uuid: instance.actionUUID)
         else { return nil }
         let path = instance.state < action.stateImages.count ? action.stateImages[instance.state] : nil
         guard let url = SDManifest.resolveImageURL(pluginRoot: runtime.directoryURL, manifestPath: path) else { return nil }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        guard let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        instance.manifestDefaultImages[instance.state] = decoded
+        return decoded
     }
 
     private func setState(_ instance: Instance, _ state: Int) {
