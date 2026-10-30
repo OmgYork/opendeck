@@ -43,6 +43,11 @@ public final class PluginServer: @unchecked Sendable {
     private var connections: [UUID: Connection] = [:]
     private(set) public var port: UInt16 = 0
 
+    /// 单连接缓冲上限:正常 setImage 帧 ~22KB,32MB 足够宽裕;对端喂超大帧头、
+    /// 无 FIN 续帧或拒收时到顶即熔断断连(插件会被 respawn),防缓冲无界。
+    /// 与 inbox 压缩互补:压缩治慢性增长,熔断兜异常对端。
+    private static let bufferLimitBytes = 32 * 1024 * 1024
+
     public init() {}
 
     public func start() {
@@ -208,6 +213,11 @@ public final class PluginServer: @unchecked Sendable {
                 }
             case 0x0: // 续帧
                 connection.pendingPayload.append(frame.payload)
+                if connection.pendingPayload.count > Self.bufferLimitBytes {
+                    serverLog.error("server: 分片消息超限 \(connection.pendingPayload.count)B,熔断 fd=\(connection.fileDescriptor)")
+                    finish(connection)
+                    return
+                }
                 if frame.isFinal {
                     onMessage?(connection, connection.pendingPayload)
                     connection.pendingPayload.removeAll()
@@ -222,6 +232,19 @@ public final class PluginServer: @unchecked Sendable {
             default:
                 break // pong 等,忽略
             }
+        }
+        // Data 的 removeFirst 只前移游标、append 不回用已消费前缀,底层存储随累计收包量
+        // 只增不减(2026-10-30 内存体检实测吞吐与 footprint 1:1)。消费后显式压缩,只保留
+        // 未完成的帧尾;isEmpty 分支的引用重置同样释放底层存储。
+        if connection.inbox.isEmpty {
+            connection.inbox = Data()
+        } else if connection.inbox.startIndex > 0 {
+            connection.inbox = Data(connection.inbox)
+        }
+        if connection.inbox.count > Self.bufferLimitBytes {
+            // 到这里说明对端在喂超大帧头或无终止的垃圾字节,等不齐完整帧了
+            serverLog.error("server: inbox 超限 \(connection.inbox.count)B,熔断 fd=\(connection.fileDescriptor)")
+            finish(connection)
         }
     }
 
@@ -316,6 +339,11 @@ public final class PluginServer: @unchecked Sendable {
         }
         connection.outbox.append(Data(header))
         connection.outbox.append(payload)
+        if connection.outbox.count > Self.bufferLimitBytes {
+            // 对端拒收(写不出去还继续排队)才可能到顶;finish 幂等,与 close 路径不冲突
+            serverLog.error("server: outbox 超限 \(connection.outbox.count)B,熔断 fd=\(connection.fileDescriptor)")
+            finish(connection)
+        }
     }
 
     private func flush(_ connection: Connection) {
