@@ -7,3 +7,6 @@
 
 # 交接文档基线快照(本地对比用,不入库)
 /.handoff-baseline/
+
+# ZCode 会话方案快照(会话产物,结论已沉淀 HANDOFF §6.x;docs_baseline.py 亦排除 .zcode)
+/.zcode/
