@@ -2,8 +2,9 @@
 
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
-> 最后更新:2026-10-16(ZCode 状态灯真机闭环:file:// fetch 根因修复 + 宿主文件读取桥,60 测全绿,dist 与最新提交一致)
-> **M3 优先级队列已消费完毕**:Property Inspector(✅ §6.9/§6.10)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13,2026-10-16 真机闭环)。M3 剩余:多状态图标、登录自启、屏幕休眠唤醒、逐插件适配(§3 原始清单)
+> **文档分工**:本文件 = 开发史与设计决策(根因/协议/里程碑);给其他 agent 的操作手册见 [AGENT-GUIDE.md](AGENT-GUIDE.md);状态灯接入见 [Scripts/状态灯接入指南.md](Scripts/状态灯接入指南.md);显示器动效设计见 [Design/MonitorInputIcon/README.md](Design/MonitorInputIcon/README.md)。
+> 最后更新:2026-10-22(显示器输入源动效键落地;键面 112×112 事实回填至 §1/§4;58 测全绿)
+> **M3 队列已全部消费**:Property Inspector(✅ §6.9/§6.10)> 多页面(✅ §6.6)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13)> 多状态图标(✅ §6.15)> 登录自启与睡眠唤醒(✅ §6.16)> 状态灯置前(✅ §6.17)> Stats(✅ §6.18)> icon 偏移与 112 定案(✅ §6.19/§6.20)> 鲸鱼娘动画(✅ §6.21)> 显示器输入源动效(✅ §6.22)。**剩余挂账:官方 HTML 插件逐个视觉适配(time 等插件自身视图不渲染)。**
 
 ---
 
@@ -24,7 +25,7 @@
 
 ### 1.1 设备(用户手里这台)
 - MiraBox Stream Dock **293V3**(系统枚举名 `StreamDock[293S]`/`HOTSPOTEKUSB HID DEMO` 有误导性,实机为 15 键):
-  5×3 = **15 键全主键(100×100),没有软键列**
+  5×3 = **15 键全主键(112×112,官方 app 抓包定案,见 §6.20),没有软键列**
 - USB **VID 0x6603 : PID 0x1005**(另批次 0x1006)。⚠️ 社区模块的 HSV-293S(6 列带 3 软键)条目自带
   `TODO: verify these` 存疑标记,对应的是另一批次硬件——**不要**把 6 列布局套用在本机(2026-10-13 已踩坑并修正)
 - 2026-10-13 实拍解码确认:固件键位 id 自**底行**起算(0x01=左下角,0x0f=右上角);
@@ -47,7 +48,7 @@
 | 断开 | `43 4c 45 00 00 44 43` | CLE.."DC" |
 
   - 画键:`BAT` 头后跟 JPEG 原始数据按 1024B 分块(**无 CRT 前缀**),每块补零到 1024,最后 `STP`。
-    JPEG 规格:全键 100×100,RGB,**单张 ≤10240 字节**(超了就降质量重压或缩图)
+    JPEG 规格:全键 **112×112**(本机 293V3;以官方 app 实际下发为准,见 §6.20),RGB,**单张 ≤10240 字节**(超了就降质量重压;降级后必须还原画布尺寸,见 §6.19)
 - **按键上报**:输入报告 data[9]=键 id,data[10]=0 抬起 / 非0 按下
 - **键位映射(逻辑行自顶行;固件 id 自底行起算,2026-10-13 实拍修正)**:
   r0:`0b 0c 0d 0e 0f` r1:`06 07 08 09 0a` r2:`01 02 03 04 05`
@@ -117,7 +118,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 5. macOS 沙箱 app 需 USB entitlement;非沙箱 CLI/菜单栏 app 不需要
 6. 与官方 app 互斥;自研 app 启动时可检测并提示
 7. 键位是顺序映射(行序已按实拍修正)(见 1.2),UI 网格坐标↔键 id 必须经映射表转换
-8. 图标包制作规格是 128×128,但线上键面分辨率由型号决定(293S:100×100/80×80),由**管理器下采样**,别把 128 图直接发设备
+8. 图标包制作规格是 128×128,但线上键面分辨率由型号决定(本机 293V3:**112×112**),由**管理器下采样**,别把 128 图直接发设备;小于键面的图会被固件右下锚定(§6.20)
 9. **CLE 0xff 全清会被固件静默忽略**(IOKit 写成功≠生效):视觉清屏用黑图管线,勿依赖 CLE
 10. **熄屏勿暂停心跳**:无主待机态输入上报可能死透,「按键唤醒」依赖它必然偶发失效;心跳常驻 + 键面黑图才是正解(§6.5)
 
@@ -178,7 +179,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 
 ### 6.7 导航矩阵 UI + 键帽定尺 + 亮度跟随(2026-10-14,M2.5 验收期迭代)
 - **导航三样式**(`NavigationStyle`,⋯菜单切换,即时落盘):经典(芯片栏+页点胶囊)/ A 矩阵·下置(芯片=列头,页点纵列)/ B 矩阵·右缘(转置:场景=行,页点横排,底座旁挂深色轨)。矩阵任一格点按 = 跨场景直达(复用 switchPage 语义);单场景自然退化
-- **键帽定尺 100pt(与设备键面 1:1,用户确认)**:LazyVGrid 弹性列在全屏/大窗把键帽摊大饼;修法 = `GridItem(.fixed(100))` + chassis `.fixedSize(horizontal: true)`(LazyVGrid 容器默认撑满提案,固定轨道只会被居中——底座会比键列宽一大截)+ 画布顶部居中留白
+- **键帽定尺 100pt(UI 设计尺寸,用户确认;设备画布 112,见 §6.20)**:LazyVGrid 弹性列在全屏/大窗把键帽摊大饼;修法 = `GridItem(.fixed(100))` + chassis `.fixedSize(horizontal: true)`(LazyVGrid 容器默认撑满提案,固定轨道只会被居中——底座会比键列宽一大截)+ 画布顶部居中留白
 - **亮度跟随修复(此前从未真正工作)**:本机(macOS 26/AS)**不存在** IODisplayConnect/AppleBacklight 服务,`CoreDisplay_Display_GetUserBrightness` 恒返 1.0 假值;有效读法 = **DisplayServicesGetBrightness**(私有框架,kr=0,仅内屏;外接屏 kr=1000 本就不镜像)。1.5s 轮询 + ≥1% 变化检测;**内屏 0% → 键面涂黑 + 背光归零**(LIG 0 只是背光最暗,非黑屏);0% 涂黑态按任意键 → 点亮至最近有效亮度(暂态解耦,动作照常),15s 无操作重涂黑,内屏变化即重新关联;「滑杆 0% 涂黑」为 ⋯菜单选项(默认关)
 - **诊断基建**:`appendLog` 镜像 oslog(subsystem `opendeck`,查询须 `--level info`)+ 心跳 tick + 按键事件日志——硬件行为问题先开日志复现再断言,勿凭代码推演定案
 - **亮度跟随 × 自动熄屏互斥(2026-10-15 验收反馈)**:两者同开会叠出「内屏 0% 涂黑后看门狗再叠熄屏,晨起调亮被熄屏守卫挡住、永不恢复」的卡死(日志实证)。语义:开启跟随自动归零自动熄屏;开启自动熄屏自动关跟随;启动时归一化遗留同开配置。手动「立即熄屏」不受影响,仍为仅按键唤醒(显式指令显式唤醒)。夜间变暗需求由跟随的 0% 涂黑承担
@@ -264,7 +265,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 ### 6.18 Stats 集成:GPU/CPU/温度上屏(2026-10-18,槽位 6/7/8;含固定导航键+滚轮+镜像 v2 收尾)
 - **需求**:Stats 软件同款指标上屏——GPU 利用率(槽6)、CPU 利用率(槽7)、传感器温度 hottest CPU(槽8)
 - **数据源(全部本机实测打通,零外部依赖)**:①GPU = IOAccelerator 注册表 `PerformanceStatistics["Device Utilization %"]` 直读(多 GPU 取最大);②CPU = mach `host_statistics64` 差分;③温度 = **AppleSMC 现代接口**——经典 selector(5/8/9)在 macOS 26 全部 kIOReturnUnsupported,反汇编 Stats 的 Sensors.framework 定案:**仅 selector 2 存在(分发器),80 字节结构,data8@42=传统功能号(5=读键/8=按索引取键/9=键信息)、data32@44=参数、classic 字段整体后移 3 字节(keyInfo 对齐 12 字节,总长恰 80)**;温度键 = Tp* 全枚举(1762 键中 27 个),4 字节 IEEE754 浮点(实测 58~83°C 合理域),取最大
-- **实现**:StatSampler.swift(SMCTemperatureReader + StatSampler + StatTileRenderer);StatTileRenderer 用 CoreText 直绘(NSAttributedString.draw 在裸 CGContext 上坐标错乱实测),100×100 深底+顶部标签+中央大值,预旋转 180°;保留槽泛化 `reservedSlot(at:)`(导航 nav + 统计 stat 两类),Stats 槽由 2s 采样定时器整帧覆盖(setKeyImage → 设备 + UI 镜像同源),applyKey 先上占位帧
+- **实现**:StatSampler.swift(SMCTemperatureReader + StatSampler + StatTileRenderer);StatTileRenderer 用 CoreText 直绘(NSAttributedString.draw 在裸 CGContext 上坐标错乱实测),100×100 深底+顶部标签+中央大值(§6.20 后已改 112),预旋转 180°;保留槽泛化 `reservedSlot(at:)`(导航 nav + 统计 stat 两类),Stats 槽由 2s 采样定时器整帧覆盖(setKeyImage → 设备 + UI 镜像同源),applyKey 先上占位帧
 - **诊断陷阱(排障耗时实录)**:app 内 SMC 枚举 0 键 vs 脚本 1762 键——根因是移植时用了经典流程(funcID 9 keyInfo 拿 #KEY),而实测打通的现代流程是 funcID 5 读 #KEY + funcID 8 枚举;诊断日志(category stats,notice 级)定位
 - **验收(截图自验)**:GPU 85%/CPU 35%/82° 实时刷新,状态灯蓝▶/Hermes 灰●/autotoggle 待命 同帧镜像;晨起用户验收硬件面
 - **边界**:Stats 槽按压无动作;槽 5/6/7 原配置内容不渲染(保留槽语义);GPU 利用率依赖 IOAccelerator 键存在(缺则 N/A);温度键名按前缀 Tp* 过滤+合理域(15~110°C)过滤,机型相关的键位清单由枚举自适应,无需按机型硬编码
@@ -298,3 +299,23 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **验证**:WKWebView 离屏快照生成 7 状态×4 帧对照图(工具在 /tmp,不入库);真机 UI 镜像实测 working 动画、asking 招手(临时写 state.json 验证后恢复);app CPU 约 3–4%(2 键 5fps)。
 - **边界**:槽 3 Hermes 插件属另一 agent,已备份 `index.html.bak-20261022-whale` 后同步改;对方若重新生成会覆盖,需协调。`whale.js` 以子资源方式加载(宿主 `allowingReadAccessTo` 插件根,实测可行);插件源在仓库 `Scripts/com.zcode.status.sdPlugin/`,部署时两个插件目录都要带 `whale.js`。
 
+### 6.22 显示器输入源动效键面(2026-10-22,槽 1;宿主内建 KeyAnimation 首个实例)
+- **需求**:槽 1 的 `Toggle Monitor` 快捷指令实际是切换 LG 27GP95U 的输入源(Mac DP ↔ PC HDMI1)。键面要回答「现在谁在屏」,按压时把「信号搬家」演出来,而不是画一个电源开关。
+- **事实源**:`~/.cache/lg_input`(`mac` / `pc`,由 `/Users/yorkli/bin/lg-toggle.sh` 经 `m1ddc set input-alt` 写入)。键面、状态文件、按压后的乐观目标三方必须收敛。
+- **数据模型**:`KeyConfig.animation: KeyAnimation?`(目前仅 `.monitorInput`),可选字段、旧配置缺键可解码;语义由渲染器决定,优先于 `iconPath`/`title`。编辑器外观区新增「动效:显示器输入切换」开关,草稿预览用 `AppModel.animationPreviewFrame(for:)` 取与设备同源的静息帧。
+- **宿主挂载**:`AppModel` 持有单例 `MonitorInputAnimator`(全局只有一路输入状态);`applyKey` 时 `attach(index:size:)`,同页其它键/换页时 `detach(ifIndex:)`。动效键整帧由动画驱动,跳过常规「底色+底图+标题」渲染;帧回调统一走 `setKeyImage`(设备与 UI 镜像同源)。按下沿先起动画再照常执行动作(乐观展示)。
+- **状态机**(`MonitorInputAnimator.swift`):按下立即播 12 帧 / 12fps 迁移(1.0s),不等脚本;动画结束后 1.5s 轮询状态文件对账——对上即销账,3s 仍未变则反向播一次回退动画(红色闪灯,不静默撒谎);外部切换(显示器摇杆/其它触发)由轮询检出并跟随。静息每 8s 一次「信号包」呼吸(6 帧 × 6fps),系统「减弱动态效果」开启时自动关闭。换页离开再回来重新读盘。
+- **渲染**(`MonitorInputIcon.swift`):纯 CoreGraphics,112×112,无 AppKit 文字;Mac 冷蓝 `#4DA3FF` / PC 暖橙 `#FFA94D`,用源芯片 + 屏幕内容(Mac 顶部菜单栏 / PC 底部任务栏)+ LED 三重编码;输出预旋转 180°,UI 镜像再转回正立。实测 JPEG ≈3.9KB/帧,远低于 10240 上限。
+- **预览工具链**:`Scripts/RenderMonitorIconFrames.swift` 用生产渲染器导出 112/336/448 三档逐帧 PNG;`Scripts/BuildMonitorIconPreview.py` 组装自包含 `Design/MonitorInputIcon/preview.html`(可播两个方向、静息呼吸、逐帧步进),预览帧 = 上机帧。设计说明见 `Design/MonitorInputIcon/README.md`。
+- **验证**:`swift build` 通过;完整 `swift test` 58 测全绿(动效暂无单测,渲染确定性与硬件验收依赖预览导出);`make-app` 重打包重启后设备正常连接,槽 1 静息帧上屏、UI 镜像与设备同源;改写 `~/.cache/lg_input` 实测 UI 镜像逐帧更新并自动回到 Mac。
+- **边界**:同一时刻只服务一颗键,若给第二颗键也开动效,动画挂到最后挂载的那颗;回退判定依赖状态文件,若手动改显示器输入却没更新 `lg_input`,图标会跟文件而非真实硬件(沿用 `lg-toggle.sh` 契约);这是宿主内建动效,不走插件协议,其他 agent 若要复用应先读本节与设计 README。
+
+
+### 6.23 显示器功能托盘 + 宿主内建 DDC 动作(2026-10-22,独立浮动 deco;`KeyAction.monitor`)
+- **需求**:把 LG OnScreen Control / UltraGear 里能调的显示器设置搬到硬件上,像槽 1 的 toggle monitor 那样一按即变;托盘条目拖到 15 个真实键位即绑定。
+- **前提结论**:LG 应用只是 MCCS/DDC 的一个客户端,PC 侧走 USB→I2C 私有桥(`lpcusbsio.dll` + `LPCCommunicationLayer.dll`),但显示器对 Mac 的 USB-C(DP Alt)链路同样开放同一套 VCP 控制。因此**不逆应用、不依赖 PC**,宿主直连 DDC。调研与全码基线见 `~/projects/lg-osc/`(`FEATURES.md`、`lgddc/baseline.txt`)。
+- **数据模型**:`KeyAction` 新增 `case monitor(MonitorCommand)`;`MonitorCommand`(18 个动作)是唯一事实源,集中声明 VCP 码、运算方式(`step`/`cycle`/`set`/`switchInput`)、分组、短标签、SF Symbol、校准备注与「会闪断」标记。校准新码只改 `MonitorActions.swift` 一张表,不动执行层与渲染层。
+- **执行层**:`MonitorDDC.swift` 用私有 `IOAVServiceCreate/ReadI2C/WriteI2C`(与 m1ddc/MonitorControl 同法)发 DDC 帧,`ActionRunner.run` 的 `.monitor` 分支直调,失败走既有 `report(_:)` 弹窗,不静默。**两个必须记住的协议事实**:①**每个请求要连写两帧**,只写一帧时 IOKit 返回 0 但读回固定乱码(`6e 80 be 00 e6 d2 …`);②读帧校验不含寻址字节、写帧校验含寻址字节(上游 m1ddc 的不对称写法)。读回统一验帧 `head==0x6E / op==0x02 / vcp==请求码`,不符重试 3 次。0xF4(输入源)走 0x50 备用寻址;输入源自动切换与 `~/bin/lg-toggle.sh` 共用 `~/.cache/lg_input` 状态文件。
+- **UI**:`MonitorPaletteView` 是从「矩阵·右缘」挂轨深色胶囊语言里剥出来的**独立浮动面板**(可拖动、可收起,默认显示,工具栏「显示器功能托盘」开关)。条目 `.draggable(MonitorCommand)`(`UTType com.opendeck.monitor-command`),键位 `ZStack` 外层 `.dropDestination`,落下即 `bindMonitor` 写配置 + `applyKey` 上屏;保留槽(6/7/8、14/15)拒绝放置,拖动悬停有白色描边反馈。编辑 sheet 的动作类型新增「显示器（DDC）」,落键后仍可双击改功能。
+- **验证**:`swift build` 通过;`swift test` 63 测全绿(新增 5 测:目录完整性、分组覆盖、`KeyAction.monitor`/`KeyConfig` 编解码往返);DDC 执行路径用同一份源码编出的冒烟程序实测——亮度读 63 → +5 得 68 → −5 回 63、音量读 30、响应时间 0→1→2 循环并已复位 3;**拖拽投放未做机器验证**(合成 CGEvent 起不了 SwiftUI 拖拽会话),需人工拖一次确认。
+- **边界**:0xF8(自适应同步)写入会触发 DP 重协商、掉屏约 18 秒,动作成功后不读回校验;0xF9(黑阶稳定器)本机写入回读恒为 100,标「待校准」不进正式键位;0xAC/0xAE(DP 版本)、0x04/0x05(恢复出厂)只读不写;图像模式/伽马/节能/色温的枚举值随型号变,须逐项校准后才可信(校准方法:`lgddc track` 全码轮询 + 用户在 OSD 里一次改一项)。
