@@ -234,12 +234,12 @@ enum StatTileRenderer {
             }
         }()
         // 深色底 + 顶部微提亮(与键帽拟真语言一致)
-        ctx.setFillColor(Self.color(bgBottom) ?? CGColor(gray: 0.18, alpha: 1))
+        ctx.setFillColor(HexCGColor.opaque(bgBottom) ?? CGColor(gray: 0.18, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
-        ctx.setFillColor(Self.color(bgTop)?.copy(alpha: 0.22) ?? CGColor(gray: 0.25, alpha: 0.2))
+        ctx.setFillColor(HexCGColor.opaque(bgTop)?.copy(alpha: 0.22) ?? CGColor(gray: 0.25, alpha: 0.2))
         ctx.fill(CGRect(x: 0, y: CGFloat(side) - 34 * s, width: CGFloat(side), height: 34 * s))
 
-        let accentColor = Self.color(accent) ?? CGColor(gray: 1, alpha: 1)
+        let accentColor = HexCGColor.opaque(accent) ?? CGColor(gray: 1, alpha: 1)
         // 顶部标签
         let labelFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 13 * s, weight: .semibold).fontName as CFString, 13 * s, nil)
         centered(NSAttributedString(string: kind.label, attributes: [
@@ -274,12 +274,4 @@ enum StatTileRenderer {
         CTLineDraw(line, ctx)
     }
 
-    /// "#RRGGBB" → CGColor(本地解析,不依赖 StreamDockKit 内部工具)
-    static func color(_ hex: String) -> CGColor? {
-        var value: UInt64 = 0
-        guard hex.hasPrefix("#"), Scanner(string: String(hex.dropFirst())).scanHexInt64(&value) else { return nil }
-        return CGColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
-                       green: CGFloat((value >> 8) & 0xFF) / 255,
-                       blue: CGFloat(value & 0xFF) / 255, alpha: 1)
-    }
 }

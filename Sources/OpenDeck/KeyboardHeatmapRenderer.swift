@@ -16,10 +16,10 @@ enum HeatmapLamp {
 
     var color: CGColor? {
         switch self {
-        case .white: StatTileRenderer.color("#FFFFFF")
-        case .red: StatTileRenderer.color("#FF4D4F")
-        case .green: StatTileRenderer.color("#34C759")
-        case .gray: StatTileRenderer.color("#8E8A87")
+        case .white: HexCGColor.opaque("#FFFFFF")
+        case .red: HexCGColor.opaque("#FF4D4F")
+        case .green: HexCGColor.opaque("#34C759")
+        case .gray: HexCGColor.opaque("#8E8A87")
         }
     }
 }
@@ -89,11 +89,11 @@ enum HeatmapRenderer {
         ctx.saveGState()
         if scene.shake != 0 { ctx.translateBy(x: scene.shake, y: 0) }
 
-        if let background = StatTileRenderer.color(HeatmapPalette.background) {
+        if let background = HexCGColor.opaque(HeatmapPalette.background) {
             ctx.setFillColor(background)
             ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
         }
-        if let warm = StatTileRenderer.color(HeatmapPalette.warn) {
+        if let warm = HexCGColor.opaque(HeatmapPalette.warn) {
             let colors = [warm.copy(alpha: 0.10) ?? warm, warm.copy(alpha: 0) ?? warm] as CFArray
             if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
                                   colors: colors, locations: [0, 1]) {
@@ -106,7 +106,7 @@ enum HeatmapRenderer {
             ctx.setFillColor(warm.copy(alpha: 0.06 * scene.wash) ?? warm)
             ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
         }
-        if let white = StatTileRenderer.color("#FFFFFF") {
+        if let white = HexCGColor.opaque("#FFFFFF") {
             let colors = [white.copy(alpha: 0.055) ?? white, white.copy(alpha: 0) ?? white] as CFArray
             if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
                                   colors: colors, locations: [0, 1]) {
@@ -125,11 +125,11 @@ enum HeatmapRenderer {
                        size: scene.promptSize, color: scene.promptColor, flip: flip)
         }
 
-        if scene.flash > 0, let pink = StatTileRenderer.color(HeatmapPalette.pink) {
+        if scene.flash > 0, let pink = HexCGColor.opaque(HeatmapPalette.pink) {
             ctx.setFillColor(pink.copy(alpha: 0.12 * scene.flash) ?? pink)
             ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
         }
-        if scene.sheen > 0, let white = StatTileRenderer.color("#FFFFFF") {
+        if scene.sheen > 0, let white = HexCGColor.opaque("#FFFFFF") {
             let colors = [white.copy(alpha: 0.08 * scene.sheen) ?? white, white.copy(alpha: 0) ?? white] as CFArray
             if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
                                   colors: colors, locations: [0, 1]) {
@@ -140,7 +140,7 @@ enum HeatmapRenderer {
                 ctx.restoreGState()
             }
         }
-        if scene.dim > 0, let black = StatTileRenderer.color("#000000") {
+        if scene.dim > 0, let black = HexCGColor.opaque("#000000") {
             ctx.setFillColor(black.copy(alpha: 0.06 * scene.dim) ?? black)
             ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
         }
@@ -165,7 +165,7 @@ enum HeatmapRenderer {
         ctx.fillPath()
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
-        if let white = StatTileRenderer.color("#FFFFFF"),
+        if let white = HexCGColor.opaque("#FFFFFF"),
            let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
                                      colors: [white.copy(alpha: 0.35) ?? white,
                                               white.copy(alpha: 0) ?? white] as CFArray,
@@ -185,7 +185,7 @@ enum HeatmapRenderer {
                                    size: CGFloat, color: CGColor?, flip: (CGFloat) -> CGFloat) {
         let font = CTFontCreateWithName(NSFont.systemFont(ofSize: size, weight: .semibold).fontName as CFString,
                                         size, nil)
-        guard let ink = color ?? StatTileRenderer.color(HeatmapPalette.warn) else { return }
+        guard let ink = color ?? HexCGColor.opaque(HeatmapPalette.warn) else { return }
         let attr = NSAttributedString(string: text, attributes: [
             .font: font,
             .foregroundColor: NSColor(cgColor: ink) ?? NSColor.systemYellow,

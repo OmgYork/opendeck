@@ -388,7 +388,7 @@ final class KeyboardHeatmapAnimator {
             scene = HeatmapScene(numberFrom: "X", numberTo: "X")
             scene.prompt = "X"; scene.promptAlpha = 1
             scene.promptSize = 34
-            scene.promptColor = StatTileRenderer.color("#8E8A87")
+            scene.promptColor = HexCGColor.opaque("#8E8A87")
             scene.alpha = 0
             scene.lamp = .gray; scene.lampIntensity = 0.55
         }

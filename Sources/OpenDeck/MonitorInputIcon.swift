@@ -679,7 +679,8 @@ enum MonitorInputIconRenderer {
 
 // MARK: - 颜色
 
-/// 独立的极小颜色工具:渲染器不依赖 StreamDockKit / AppKit,便于独立编译成预览工具。
+/// 颜色组件 + 混色运算。hex 解析不在本文件(统一走 HexCGColor,与 stats/热力图同源);
+/// 本文件仍不依赖 AppKit / StreamDockKit,便于单文件编译成预览工具。
 private struct RGBA {
     var r: CGFloat
     var g: CGFloat
@@ -687,13 +688,11 @@ private struct RGBA {
     var a: CGFloat
 
     init(_ hex: String, _ alpha: CGFloat = 1) {
-        var value: UInt64 = 0
-        var text = hex
-        if text.hasPrefix("#") { text.removeFirst() }
-        Scanner(string: text).scanHexInt64(&value)
-        r = CGFloat((value >> 16) & 0xFF) / 255
-        g = CGFloat((value >> 8) & 0xFF) / 255
-        b = CGFloat(value & 0xFF) / 255
+        // 解析统一走 HexCGColor(与 stats 瓷贴、热力图同一份);取不到时落黑,与旧实现一致
+        let components = HexCGColor.parse(hex)?.components ?? []
+        r = components.count >= 3 ? components[0] : 0
+        g = components.count >= 3 ? components[1] : 0
+        b = components.count >= 3 ? components[2] : 0
         a = alpha
     }
 
