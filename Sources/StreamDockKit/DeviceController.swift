@@ -19,7 +19,8 @@ public final class DeviceController {
     /// 诊断日志(主线程)
     public var onLog: ((String) -> Void)?
 
-    private let transport = HIDTransport()
+    /// 传输接缝:生产用 HIDTransport,测试用记录型假实现(状态机因此可测)
+    private let transport: any DeviceTransport
     /// 已画键位缓存(原始未补偿帧):index = row * columns + column;
     /// 设备休眠唤醒/重插、对位调参后据此按当前补偿参数全量重画
     private var keyImageCache: [Int: CGImage] = [:]
@@ -28,7 +29,14 @@ public final class DeviceController {
     private var glassOffsetY = 0
     private var glassZoom = 100
 
-    public init() {
+    /// 生产构造:接真实 HID 传输
+    public convenience init() {
+        self.init(transport: HIDTransport())
+    }
+
+    /// - Parameter transport: 传输实现。注入点用于状态机测试与 harness 诊断
+    public init(transport: any DeviceTransport) {
+        self.transport = transport
         transport.onReport = { [weak self] bytes in
             guard let self else { return }
             if let event = StreamDock293S.parseKeyEvent(fromReport: bytes) {

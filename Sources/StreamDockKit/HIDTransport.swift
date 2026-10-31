@@ -12,7 +12,8 @@
 /// - 共享属性用 `lock` 保护
 ///
 /// 回调闭包在任意线程触发,实现方自行跳线程(如 Task { @MainActor in … })。
-final class HIDTransport: @unchecked Sendable {
+/// 对 DeviceController 只暴露 `DeviceTransport` 那层(见 DeviceTransport.swift)。
+final class HIDTransport: @unchecked Sendable, DeviceTransport {
     private final class CallbackBox {
         weak var transport: HIDTransport?
         init(transport: HIDTransport) { self.transport = transport }
