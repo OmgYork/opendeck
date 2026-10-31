@@ -45,6 +45,8 @@ final class AppModel {
     let system = SystemIntegration()
     /// 日志环:stdout + oslog + 内存环
     let logs = LogRing()
+    /// 按键事件 → 动作分发域
+    let keyRouter: KeyPressRouter
 
     /// animator 回调统一在 init 挂接(接入约定):编辑器 WindowGroup 的 `.onAppear`
     /// 会先于 `.task { start() }` 调 `applyPageToDevice()`,若等到 start() 才接 hook,
@@ -53,6 +55,11 @@ final class AppModel {
         // 先构造全部协调器(捕获 self 的前提是存储属性已全部初始化),再统一挂钩子
         brightness = BrightnessCoordinator(device: device, config: config)
         sceneRouter = SceneRouter(config: config, device: device)
+        keyRouter = KeyPressRouter(
+            device: device, config: config, pluginHost: pluginHost,
+            heatmap: heatmap, monitorInput: monitorInput,
+            brightness: brightness, sceneRouter: sceneRouter
+        )
         system.onLog = { [weak self] line in
             self?.appendLog(line)
         }
@@ -67,6 +74,19 @@ final class AppModel {
         }
         sceneRouter.isEditorWindowVisible = { [weak self] in
             self?.editorWindowVisible ?? true
+        }
+        keyRouter.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
+        keyRouter.onPressedChange = { [weak self] index, down in
+            guard let self else { return }
+            // @Observable 靠属性赋值触发观测,集合原地增删不生效,须整体重赋
+            self.pressedKeyIndices = down
+                ? self.pressedKeyIndices.union([index])
+                : self.pressedKeyIndices.subtracting([index])
+        }
+        keyRouter.onSleepGuard = { [weak self] index in
+            Task { await self?.toggleSleepGuard(at: index) }
         }
         monitorInput.onFrame = { [weak self] image in
             guard let self, let index = self.monitorInput.activeIndex else { return }
@@ -161,59 +181,7 @@ final class AppModel {
             self?.appendLog(line)
         }
         device.onKeyEvent = { [weak self] event in
-            guard let self else { return }
-            let index = event.row * StreamDock293S.columns + event.column
-            self.appendLog("按键 r\(event.row)c\(event.column) \(event.phase == .down ? "按下" : "抬起") 熄屏态=\(self.device.isScreenOff)")
-            // @Observable 靠属性赋值触发观测,集合原地增删不生效,须整体重赋
-            self.pressedKeyIndices = event.phase == .down
-                ? self.pressedKeyIndices.union([index])
-                : self.pressedKeyIndices.subtracting([index])
-            self.brightness.noteDeviceActivity()
-            // 熄屏待机:任意按下沿唤醒,该次按压不产生动作
-            if self.device.isScreenOff {
-                if event.phase == .down { self.device.wakeFromScreenOff() }
-                return
-            }
-            // 键面纯黑(亮度跟随 0% 态):按下沿暂时与内屏解耦——点亮键面至最近有效亮度,
-            // 动作照常触发;内屏亮度下次变化时镜像自动重新关联(涂黑或跟随新值)
-            if event.phase == .down, self.device.keysBlacked {
-                self.device.setKeysBlacked(false)
-                self.setBrightness(self.brightness.lastNonZeroMirroredPercent, userInitiated: false)
-                self.brightness.armPeekReDarken()
-            }
-            // 固定导航键(位置 14/15)的动作是解析后强制的,配置原文在这两格恒空,
-            // 直接读配置会让按键事件无动作(2026-10-18 用户反馈按压无反应)
-            let key = Self.resolvedKeyConfig(at: index, config: config)
-            let action = key.action
-            // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
-            if case .plugin = action {
-                self.pluginHost.handleKey(index: index, phase: event.phase)
-                return
-            }
-            // 热键 = 键盘按键:按下沿 keyDown、抬起沿 keyUp(按住槽位 = 按住该键;单按修饰键如右⌘也走这里)
-            if case .hotkey(let keyCode, let modifiers) = action {
-                Task { await ActionRunner.runHotkey(keyCode: keyCode, modifiers: modifiers, down: event.phase == .down) }
-                return
-            }
-            // 其余动作只在按下沿触发,抬起沿不重复执行
-            guard event.phase == .down, let action else { return }
-            // 热力图键:读数与状态都在 animator 里,按下只转发给它自己的入口
-            if case .keyboardHeatmap = action {
-                self.heatmap.handlePress()
-                return
-            }
-            // 合盖休眠锁:要跑 sudo 并回读,独立异步路径(不阻塞按键回调,也不进 ActionRunner)
-            if case .sleepGuard = action {
-                Task { await self.toggleSleepGuard(at: index) }
-                return
-            }
-            // 设备控制动作(页面/亮度/熄屏)本地消化,不经 ActionRunner
-            if self.handleDeviceAction(action) { return }
-            // 动效键面:先起动画,再照常执行动作(乐观展示,状态文件随后对账)
-            if key.animation == .monitorInput {
-                self.monitorInput.handlePress()
-            }
-            Task { await ActionRunner.run(action) }
+            self?.keyRouter.handle(event)
         }
 
         // 先同步亮度再 start():设备连接校准时控制器会以已存值设置背光
@@ -346,23 +314,6 @@ final class AppModel {
             """
         alert.addButton(withTitle: "好")
         alert.runModal()
-    }
-
-    /// 页面/亮度/熄屏类动作:纯本地状态操作。返回 true 表示已消化
-    private func handleDeviceAction(_ action: KeyAction) -> Bool {
-        switch action {
-        case .previousPage: switchPage(offset: -1)
-        case .nextPage: switchPage(offset: 1)
-        case .previousScene: switchScene(offset: -1)
-        case .nextScene: switchScene(offset: 1)
-        case .gotoPage(let pageID):
-            // 兼容旧配置的动作:跨场景按 Page.id 定位
-            sceneRouter.gotoLegacyPage(pageID)
-        case .screenOff: device.screenOff()
-        case .pageIndicator: break // 纯显示键,按下无操作
-        default: return false
-        }
-        return true
     }
 
     // MARK: - 键面上屏
