@@ -294,6 +294,35 @@ struct DeviceControllerStateMachineTests {
         #expect(fake.imageKeyIds == [expectedId].compactMap { $0 })
     }
 
+    @Test("熄屏期间的涂黑解除只记账不写屏,唤醒时统一重画")
+    func keysBlackedDuringScreenOffDefersToWake() async {
+        let fake = FakeTransport()
+        let controller = DeviceController(transport: fake)
+        controller.start()
+        fake.attach()
+        await settle()
+        guard let image = makeKeyImage() else {
+            Issue.record("测试位图创建失败")
+            return
+        }
+        controller.drawKey(row: 1, column: 3, image: image)
+        controller.screenOff()
+        fake.resetWrites()
+
+        // 场景:熄屏期间内屏亮度回升,BrightnessCoordinator 解除涂黑。
+        // 旧行为在熄屏态发整套重画(背光归零下无意义);现在只解除记账
+        controller.setKeysBlacked(false)
+        #expect(!controller.keysBlacked, "记账应解除")
+        #expect(fake.commands.isEmpty, "熄屏中不应写设备: \(fake.commands.map(fake.label))")
+
+        // 唤醒必须重画:记账已是 false,不能依赖「记账差异」触发——否则键面停在黑帧
+        controller.wakeFromScreenOff()
+        await settle()
+        #expect(!controller.isScreenOff)
+        let expectedId = StreamDock293S.keyId(row: 1, column: 3)
+        #expect(fake.imageKeyIds == [expectedId].compactMap { $0 }, "唤醒后应按缓存重画: \(fake.imageKeyIds)")
+    }
+
     // MARK: - 断连重连
 
     @Test("断连重连:重新校准并按缓存全量重画")

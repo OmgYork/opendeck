@@ -96,8 +96,9 @@ public final class DeviceController {
     ///  酿成「唤醒→按键→又熄屏」死循环,2026-10-14 日志实证;CLE 全清亦被固件静默忽略)
     public func screenOff() {
         guard state == .running, !isScreenOff else { return }
-        isScreenOff = true
+        // 涂黑须在熄屏标志置位前执行:置位后 setKeysBlacked 只记账不写屏(见其守卫)
         setKeysBlacked(true)
+        isScreenOff = true
         transport.sendCommand(StreamDock293S.brightnessCommand(StreamDock293S.brightnessByte(percent: 0)))
         onLog?("熄屏:键面已黑、背光归零(心跳保持,按任意键即时唤醒)")
     }
@@ -107,7 +108,10 @@ public final class DeviceController {
         guard isScreenOff else { return }
         isScreenOff = false
         setBrightness(brightnessPercent)
-        setKeysBlacked(false)
+        // 无条件重画:熄屏期间外部可能已解除涂黑记账(setKeysBlacked 只记账不写屏),
+        // 不能依赖「记账差异」触发重画,否则唤醒后键面停留在黑帧
+        keysBlacked = false
+        redrawAll()
         onLog?("已从熄屏唤醒,键面已恢复")
     }
 
@@ -124,10 +128,13 @@ public final class DeviceController {
     }
 
     /// 键面纯黑覆盖/恢复:熄屏与「亮度跟随 0%」共用。只涂黑可见内容,
-    /// 不触碰状态机与 keyImageCache;恢复 = 按缓存全量重画
+    /// 不触碰状态机与 keyImageCache;恢复 = 按缓存全量重画。
+    /// 熄屏中只记账不写屏(背光已归零,写屏无意义且可能干扰),唤醒时统一重画;
+    /// 此前依赖各调用方自行判断 !isScreenOff,守卫下沉到这里(2026-10-31)
     public func setKeysBlacked(_ black: Bool) {
         guard keysBlacked != black, state == .running else { return }
         keysBlacked = black
+        guard !isScreenOff else { return }
         if black {
             blackoutKeys()
         } else {
