@@ -1,7 +1,5 @@
 import AppKit
 import Observation
-import os
-import ServiceManagement
 import StreamDockKit
 
 /// 应用级模型:粘合驱动层(DeviceController)与配置层(ConfigStore)。
@@ -9,42 +7,26 @@ import StreamDockKit
 @MainActor
 @Observable
 final class AppModel {
-    /// 官方 StreamDock.app 的 bundle id(HID 设备独占,双方共存会互抢导致图标闪烁)
-    static let officialBundleID = "com.mirabox.streamdock"
+    /// 官方 StreamDock.app 的 bundle id(定义在 SystemIntegration)
+    static let officialBundleID = SystemIntegration.officialBundleID
 
     let device = DeviceController()
-    // MARK: - 固定保留槽(位置 14/15 导航 + 位置 6/7/8 Stats)
+    // MARK: - 固定保留槽(策略见 ReservedSlots)
 
-    /// 保留槽语义:导航键强制动作+箭头瓷贴;Stats 槽由采样定时器整帧覆盖,按压无动作
-    enum ReservedSlot {
-        case nav(KeyAction, tile: KeyConfig)
-        case stat(StatKind)
-    }
+    /// 保留槽类型(EditorView 以「== nil」判断用户槽，故保留同名 typealias)
+    typealias ReservedSlot = ReservedSlots.Slot
 
-    /// 末两格(位置 14/15)导航 + 中排前三格(位置 6/7/8)Stats,全页保留,不读配置、不可编辑
+    /// 该格是否为保留槽
     static func reservedSlot(at index: Int) -> ReservedSlot? {
-        switch index {
-        case 13: return .nav(.nextScene, tile: KeyConfig(title: "↔", backgroundColorHex: "#5E81AC", action: .nextScene))
-        case 14: return .nav(.nextPage, tile: KeyConfig(title: "↕", backgroundColorHex: "#B48EAD", action: .nextPage))
-        case 5: return .stat(.gpu)
-        case 6: return .stat(.cpu)
-        case 7: return .stat(.temp)
-        default: return nil
-        }
+        ReservedSlots.slot(at: index)
     }
 
-    /// Stats 槽位(索引):GPU 6 / CPU 7 / 温度 8
-    static let statSlots: [(index: Int, kind: StatKind)] = [
-        (5, .gpu), (6, .cpu), (7, .temp),
-    ]
+    /// Stats 槽位(索引)
+    static let statSlots: [(index: Int, kind: StatKind)] = ReservedSlots.statSlots
 
-    /// 键位最终生效配置:保留槽强制保留瓷贴(Stats 槽在首帧采样前显示占位),其余读用户配置
+    /// 键位最终生效配置:保留槽强制保留瓷贴,其余读用户配置
     static func resolvedKeyConfig(at index: Int, config: ConfigStore) -> KeyConfig {
-        guard let slot = reservedSlot(at: index) else { return config.keyConfig(at: index) }
-        switch slot {
-        case .nav(_, let tile): return tile
-        case .stat(let kind): return KeyConfig(title: kind.label, backgroundColorHex: "#3B4252")
-        }
+        ReservedSlots.keyConfig(at: index, config: config)
     }
 
     let config = ConfigStore()
@@ -59,6 +41,10 @@ final class AppModel {
     let brightness: BrightnessCoordinator
     /// 场景/页面路由域:两级导航、场景与页面增删、按前台应用联动
     let sceneRouter: SceneRouter
+    /// 系统集成域:官方 app 冲突检测、登录项
+    let system = SystemIntegration()
+    /// 日志环:stdout + oslog + 内存环
+    let logs = LogRing()
 
     /// animator 回调统一在 init 挂接(接入约定):编辑器 WindowGroup 的 `.onAppear`
     /// 会先于 `.task { start() }` 调 `applyPageToDevice()`,若等到 start() 才接 hook,
@@ -67,6 +53,9 @@ final class AppModel {
         // 先构造全部协调器(捕获 self 的前提是存储属性已全部初始化),再统一挂钩子
         brightness = BrightnessCoordinator(device: device, config: config)
         sceneRouter = SceneRouter(config: config, device: device)
+        system.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
         brightness.onLog = { [weak self] line in
             self?.appendLog(line)
         }
@@ -98,7 +87,8 @@ final class AppModel {
         }
     }
 
-    /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)
+    /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)。
+    /// 判据在 SystemIntegration;存储留在本类,因为 EditorView/OpenDeckApp 在 body 里读它
     private(set) var officialAppRunning = false
     /// 当前物理按下的键(index 集合)——UI 键帽同步凹陷,验证「按哪颗亮哪颗」
     private(set) var pressedKeyIndices: Set<Int> = []
@@ -106,7 +96,7 @@ final class AppModel {
     /// 首版把全部键面塞进一个字典属性,任一键推图=整网格重渲+逐键磁盘 IO,触控板滚动被打断(§6.15)
     let keyImageSlots: [KeyImageSlot] = (0..<(StreamDock293S.rows * StreamDock293S.columns)).map { _ in KeyImageSlot() }
     /// 最近设备日志(尾部最新),仅供状态栏展示,环形保留一屏即可
-    private(set) var recentLogs: [String] = []
+    var recentLogs: [String] { logs.recentLogs }
     /// 合盖休眠锁状态缓存(nil = 还没读到)。只作渲染用;真实值以 pmset 为准,
     /// 每次切换后由 SleepGuard 的回读结果覆盖,不做乐观翻转。
     private(set) var sleepGuardEnabled: Bool?
@@ -121,7 +111,7 @@ final class AppModel {
     /// 是本 app 的存在意义,进程常驻即业务,断言与进程同生命周期。
     private var activityToken: NSObjectProtocol?
 
-    var latestLog: String? { recentLogs.last }
+    var latestLog: String? { logs.latest }
 
     // MARK: - 生命周期
 
@@ -156,7 +146,7 @@ final class AppModel {
                 return
             }
             // Logger 本身 Sendable;先取值再进 Sendable 回调,避免闭包内触碰 MainActor 隔离的静态属性
-            let log = Self.oslog
+            let log = LogRing.oslog
             workspace.openApplication(at: url, configuration: .init()) { _, error in
                 if let error { log.error("激活 \(bundleID, privacy: .public) 失败:\(error.localizedDescription, privacy: .public)") }
             }
@@ -523,38 +513,26 @@ final class AppModel {
         brightness.setSliderZeroBlacksKeys(on)
     }
 
-    // MARK: - 官方 app 冲突
+    // MARK: - 官方 app 冲突(策略见 SystemIntegration)
 
     func refreshOfficialAppFlag() {
-        officialAppRunning = NSWorkspace.shared.runningApplications.contains {
-            $0.bundleIdentifier == Self.officialBundleID
-        }
+        officialAppRunning = system.isOfficialAppRunning
     }
 
     /// 请求退出官方 StreamDock.app
     func quitOfficialApp() {
-        NSWorkspace.shared.runningApplications
-            .first { $0.bundleIdentifier == Self.officialBundleID }?
-            .terminate()
+        system.terminateOfficialApp()
     }
 
     // MARK: - 登录项
 
     /// 是否已注册开机自启(裸二进制运行时注册会失败,打包成 .app 后有效)
     var isLaunchAtLoginEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
+        system.isLaunchAtLoginEnabled
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            appendLog("登录项设置失败:\(error.localizedDescription)")
-        }
+        system.setLaunchAtLogin(enabled)
     }
 
     // MARK: - 私有
@@ -588,14 +566,8 @@ final class AppModel {
         })
     }
 
+    /// 日志唯一入口:落 stdout + oslog + 环形缓存(实现见 LogRing)
     private func appendLog(_ line: String) {
-        print("📜 \(line)") // 镜像到 stdout:swift run 直跑时可观察(swift run 以 stdout 缓冲行模式输出)
-        Self.oslog.info("\(line, privacy: .public)") // 镜像到 oslog:.app 后台运行时可用 log stream 取证
-        recentLogs.append(line)
-        if recentLogs.count > 12 {
-            recentLogs.removeFirst(recentLogs.count - 12)
-        }
+        logs.append(line)
     }
-
-    private static let oslog = Logger(subsystem: "opendeck", category: "device")
 }
