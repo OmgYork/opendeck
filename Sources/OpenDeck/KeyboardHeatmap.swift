@@ -145,8 +145,8 @@ enum HeatmapProbe {
 
         if let bridge = bridgeState(), bridge.updatedAt.map({ Date().timeIntervalSince($0) < 300 }) ?? false {
             switch bridge.raw {
-            case "attention": return .attention
-            case "running", "starting", "suspended", "pausing", "idle": return .normal
+            case "attention", "idle": return .attention   // idle = 未授权/已暂停/未开始，都不该显示成「正常」
+            case "running", "starting", "suspended", "pausing": return .normal
             default: break
             }
         }

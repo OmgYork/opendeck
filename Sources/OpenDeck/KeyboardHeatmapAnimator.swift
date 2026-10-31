@@ -3,30 +3,33 @@ import CoreGraphics
 import Foundation
 import os
 
-/// 键盘热力图键的状态机与节拍器。
+/// 键盘热力图键的状态机与节拍器（灯带版）。
 ///
 /// 三方事实：库里的「今日合计」、App 自己广播的状态、以及用户按下时的一次请求。
-/// 策略：
-/// 1. 每 10 秒读一次库与状态，只在值/状态变化时上屏（静息零 USB 流量）；
-/// 2. 转场按 12fps 整帧播放（与 MonitorInputAnimator 同一节拍）；
-/// 3. 呼吸点 1 秒一帧（8 帧一循环），代价 60 次/分钟，远低于显示器动效键；
-/// 4. 中断态按下 = 把「重试统计」发回 App；8 秒内没恢复就播失败抖动并留在中断态。
+/// 灯带语义（L1–L5）：
+///   L1 白灯常亮 = 记录中（数值变化只由主内容滚动表达）
+///   L2 红灯常亮 = 中断
+///   L3 红灯闪烁 = 重试中（6 亮 / 6 灭，12fps）
+///   L4 绿灯闪两下 = 恢复成功（3 亮 / 3 灭 ×2，之后回 L1）
+///   L5 灰灯 = 未运行/不可读（主内容显示 X）
 @MainActor
 final class KeyboardHeatmapAnimator {
-    /// 每帧上屏回调（AppModel 负责写设备 + UI 镜像）
     var onFrame: ((CGImage) -> Void)?
     var onLog: ((String) -> Void)?
 
     private(set) var activeIndex: Int?
     private var size = 112
 
-    private var phase: HeatmapPhase = .off
-    private var probePhase: HeatmapPhase = .off
-    private var today: Int64 = 0
+    enum Phase: String {
+        case normal, attention, retrying, recovered, off, unreadable
+    }
+
+    private var phase: Phase = .off
+    private var probePhase: Phase = .off
     private var shownValue: Int64 = 0
 
     private var transition: Transition?
-    private var breatheStep = 0
+    private var blinkTicks = 0
     private var retryDeadline: Date?
 
     private var frameTimer: Timer?
@@ -34,9 +37,10 @@ final class KeyboardHeatmapAnimator {
     private var breatheTimer: Timer?
     private var retryTimer: Timer?
     private var bridgeObserver: NSObjectProtocol?
+    private var activationObservers: [NSObjectProtocol] = []
 
     private struct Transition {
-        enum Kind { case tick, enterAttention, recover, fail, press, midnight }
+        enum Kind { case tick, enterAttention, fail, press, midnight }
         var kind: Kind
         var frame: Int
         var total: Int
@@ -51,10 +55,11 @@ final class KeyboardHeatmapAnimator {
         activeIndex = index
         self.size = size
         transition = nil
+        blinkTicks = 0
         refresh(force: true)
         startPolling()
-        startBreathing()
         observeBridge()
+        observeSystemActivation()
         if transition == nil { renderStatic() }
         onLog?("热力图键：挂载 index=\(index) 相位=\(phase.rawValue) 今日=\(shownValue)")
     }
@@ -71,6 +76,9 @@ final class KeyboardHeatmapAnimator {
             DistributedNotificationCenter.default().removeObserver(bridgeObserver)
             self.bridgeObserver = nil
         }
+        let center = NSWorkspace.shared.notificationCenter
+        activationObservers.forEach { center.removeObserver($0) }
+        activationObservers.removeAll()
     }
 
     // MARK: 按下
@@ -96,27 +104,24 @@ final class KeyboardHeatmapAnimator {
             } else {
                 restartAppFallback()
             }
+        case .retrying, .recovered:
+            onLog?("热力图键：重试/恢复进行中，忽略连点")
         case .off, .unreadable:
             onLog?("热力图键：应用未运行，尝试启动")
             play(.press)
             HeatmapProbe.openApp()
-        case .retrying:
-            onLog?("热力图键：重试进行中，忽略连点")
         }
     }
 
-    /// 桥接是否在线（状态文件新鲜）。没有它就只能退回进程级恢复。
     private var bridgeReady: Bool {
         guard let state = HeatmapProbe.bridgeState(), let at = state.updatedAt else { return false }
         return Date().timeIntervalSince(at) < 300
     }
 
-    /// 无桥接时的兜底：重启 KeyAnalyze。它是官方认可的恢复路径（`.attention` 只有用户重试或重启能退出），
-    /// 代价是最多丢掉一个 flush 周期（15 秒）的未落盘计数。
     private func restartAppFallback() {
         onLog?("热力图键：桥接未安装，改为重启 KeyAnalyze 恢复")
         play(.press)
-        phase = .retrying
+        beginBlinking(.retrying)
         retryDeadline = Date().addingTimeInterval(12)
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: HeatmapStore.bundleID) {
             app.terminate()
@@ -124,7 +129,6 @@ final class KeyboardHeatmapAnimator {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             guard let self else { return }
             HeatmapProbe.openApp()
-            self.startFrameTimer()
             self.startRetryTimer()
             self.renderStatic()
         }
@@ -132,11 +136,16 @@ final class KeyboardHeatmapAnimator {
 
     private func beginRetry() {
         onLog?("热力图键：触发「重试统计」")
-        phase = .retrying
         retryDeadline = Date().addingTimeInterval(8)
         HeatmapProbe.send(command: "retry")
-        startFrameTimer()
+        beginBlinking(.retrying)
         startRetryTimer()
+    }
+
+    private func beginBlinking(_ target: Phase) {
+        phase = target
+        blinkTicks = 0
+        startFrameTimer()
         renderStatic()
     }
 
@@ -161,14 +170,14 @@ final class KeyboardHeatmapAnimator {
             onLog?("热力图键：已恢复统计")
             retryDeadline = nil
             stopRetryTimer()
-            play(.recover)
+            beginBlinking(.recovered)          // L4：绿灯闪两下
             return
         }
         if let deadline = retryDeadline, Date() > deadline {
             onLog?("热力图键：重试未成功，保留中断态")
             retryDeadline = nil
             stopRetryTimer()
-            play(.fail)
+            play(.fail)                        // 晃动保留
         }
     }
 
@@ -177,7 +186,7 @@ final class KeyboardHeatmapAnimator {
     private func refresh(force: Bool = false) {
         guard activeIndex != nil else { return }
         let reading = HeatmapStore.readToday()
-        let truth = HeatmapProbe.phase(reading: reading)
+        let truth = Phase(rawValue: HeatmapProbe.phase(reading: reading).rawValue) ?? .off
 
         var value: Int64 = shownValue
         switch reading {
@@ -190,22 +199,29 @@ final class KeyboardHeatmapAnimator {
 
         let previousTruth = probePhase
         probePhase = truth
-        if phase == .retrying, truth != .normal { phase = .attention } else { phase = truth }
-
-        // 数值变化：正常增长走滚动；跨零点走翻页
-        if value != shownValue {
-            let dayChanged = value < shownValue && shownValue > 0 && Calendar.current.isDate(Date(), inSameDayAs: Date())
-            play(dayChanged && value == 0 ? .midnight : .tick, from: shownValue, to: value)
-            shownValue = value
-        } else if force {
-            renderStatic()
+        if previousTruth != truth {
+            onLog?("热力图键：相位 \(previousTruth.rawValue) → \(truth.rawValue)（今日 \(value)）")
         }
 
-        // 状态变化
-        if truth == .attention, previousTruth == .normal || previousTruth == .off {
-            play(.enterAttention)
-        } else if truth == .normal, previousTruth == .attention, transition?.kind != .recover {
-            play(.recover)
+        // 数值变化
+        if value != shownValue {
+            let crossedMidnight = value < shownValue && shownValue > 0
+            play(crossedMidnight ? .midnight : .tick, from: shownValue, to: value)
+            shownValue = value
+        }
+
+        // 相位流转（重试/恢复过程中不要被轮询打断）
+        if phase != .retrying, phase != .recovered {
+            if truth == .attention, previousTruth != .attention {
+                play(.enterAttention)
+            } else {
+                phase = truth
+                if force, transition == nil { renderStatic() }
+            }
+        } else if truth == .normal, phase == .retrying {
+            // 由 evaluateRetry 负责切到 .recovered
+        } else if force, transition == nil {
+            renderStatic()
         }
     }
 
@@ -215,6 +231,30 @@ final class KeyboardHeatmapAnimator {
             forName: HeatmapProbe.stateNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh(force: true) }
+        }
+    }
+
+    /// 睡眠期间定时器不跑，唤醒/登录后必须主动刷新一次：立刻 + 2 秒后各一次。
+    private func observeSystemActivation() {
+        guard activationObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        let names: [Notification.Name] = [
+            NSWorkspace.didWakeNotification,
+            NSWorkspace.screensDidWakeNotification,
+            NSWorkspace.sessionDidBecomeActiveNotification,
+        ]
+        for name in names {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.activeIndex != nil else { return }
+                    self.onLog?("热力图键：系统唤醒/会话激活 → 立即刷新")
+                    self.refresh(force: true)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                        self?.refresh(force: true)
+                    }
+                }
+            }
+            activationObservers.append(token)
         }
     }
 
@@ -228,34 +268,18 @@ final class KeyboardHeatmapAnimator {
         pollTimer = timer
     }
 
-    private func startBreathing() {
-        guard breatheTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.transition == nil, self.phase == .normal || self.phase == .attention else { return }
-                self.breatheStep = (self.breatheStep + 1) % 8
-                self.renderStatic()
-            }
-        }
-        timer.tolerance = 0.3
-        RunLoop.main.add(timer, forMode: .common)
-        breatheTimer = timer
-    }
-
     // MARK: 转场
 
     private func play(_ kind: Transition.Kind, from: Int64? = nil, to: Int64? = nil) {
         let total: Int
         switch kind {
-        case .tick: total = 4
+        case .tick: total = 8
         case .enterAttention: total = 3
-        case .recover: total = 5
         case .fail: total = 4
         case .press: total = 2
         case .midnight: total = 4
         }
-        transition = Transition(kind: kind, frame: 0,
-                                total: total,
+        transition = Transition(kind: kind, frame: 0, total: total,
                                 fromValue: from ?? shownValue,
                                 toValue: to ?? shownValue)
         startFrameTimer()
@@ -277,53 +301,81 @@ final class KeyboardHeatmapAnimator {
     }
 
     private func advanceFrame() {
-        guard var current = transition else {
-            if phase != .retrying { stopFrameTimer() }
+        if var current = transition {
+            current.frame += 1
+            if current.frame >= current.total {
+                transition = nil
+                if current.kind == .enterAttention { phase = .attention }
+                if phase != .retrying, phase != .recovered { stopFrameTimer() }
+                renderStatic()
+                return
+            }
+            transition = current
+            render()
             return
         }
-        current.frame += 1
-        if current.frame >= current.total {
-            transition = nil
-            if phase != .retrying { stopFrameTimer() }
+        // 无转场时的持续节拍：重试红闪、恢复绿闪
+        switch phase {
+        case .retrying:
+            blinkTicks += 1
             renderStatic()
-            return
+        case .recovered:
+            blinkTicks += 1
+            if blinkTicks >= 12 {                 // 两次闪烁结束 → 回白灯
+                blinkTicks = 0
+                phase = .normal
+                stopFrameTimer()
+            }
+            renderStatic()
+        default:
+            stopFrameTimer()
         }
-        transition = current
-        render()
     }
 
     private func finishTransitionIfNeeded() {
         transition = nil
-        if phase != .retrying { stopFrameTimer() }
+        if phase != .retrying, phase != .recovered { stopFrameTimer() }
         renderStatic()
     }
 
     // MARK: 渲染
 
-    private func renderStatic() {
-        let breathe = 0.5 - 0.5 * cos(Double(breatheStep) / 8.0 * 2 * .pi)
+    private func phaseLook() -> HeatmapScene {
         var scene = HeatmapScene(numberFrom: displayText, numberTo: displayText)
-        scene.dotBrightness = CGFloat(breathe)
         switch phase {
         case .normal:
-            scene.alpha = 1; scene.rail = .idle; scene.badgeAlpha = 0.45
+            scene.lamp = .white
+            scene.lampIntensity = 0.92
         case .attention:
-            scene.alpha = 0.45; scene.rail = .warn; scene.railHeight = 6
-            scene.hatch = 1; scene.badgeAlpha = 1; scene.warnBadge = true
+            scene.alpha = 0                           // 数字退场
+            scene.prompt = "已中断"; scene.promptAlpha = 1
+            scene.lamp = .red; scene.lampIntensity = 0.95
         case .retrying:
-            scene.alpha = 0.25; scene.rail = .retry; scene.railHeight = 6
-            scene.badgeAlpha = 1; scene.warnBadge = true
-            scene.sweep = CGFloat(Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1.0))
+            scene.alpha = 0
+            scene.prompt = "重试中"; scene.promptAlpha = 0.8
+            scene.lamp = .red
+            scene.lampIntensity = (blinkTicks % 12) < 6 ? 0.95 : 0    // L3：6 亮 / 6 灭
+        case .recovered:
+            scene.lamp = .green
+            scene.lampIntensity = (blinkTicks % 6) < 3 ? 0.95 : 0     // L4：3 亮 / 3 灭 ×2
         case .off, .unreadable:
-            scene = HeatmapScene(numberFrom: "—", numberTo: "—")
-            scene.rail = .off; scene.badgeAlpha = 0.28
+            scene = HeatmapScene(numberFrom: "X", numberTo: "X")
+            scene.prompt = "X"; scene.promptAlpha = 1
+            scene.promptSize = 34
+            scene.promptColor = StatTileRenderer.color("#8E8A87")
+            scene.alpha = 0
+            scene.lamp = .gray; scene.lampIntensity = 0.55
         }
-        emit(scene)
+        return scene
+    }
+
+    private func renderStatic() {
+        emit(phaseLook())
     }
 
     private var displayText: String {
         switch phase {
-        case .off, .unreadable: return "—"
+        case .off, .unreadable: return "X"
         default: return HeatmapFormat.count(shownValue)
         }
     }
@@ -338,46 +390,28 @@ final class KeyboardHeatmapAnimator {
         switch t.kind {
         case .tick:
             scene.roll = eased
-            scene.roll = eased
-            scene.alpha = 1
-            scene.rail = .idle
+            scene.lamp = .white; scene.lampIntensity = 0.92
             scene.flash = max(0, 1 - CGFloat(t.frame) / 2.4)
         case .enterAttention:
-            scene.alpha = 1 - 0.55 * p
-            scene.rail = .warn
-            scene.railHeight = 2 + 4 * p
-            scene.hatch = p
-            scene.badgeAlpha = 0.45 + 0.55 * p
-            scene.warnBadge = true
+            scene.alpha = 1 - p                       // 数字淡出
+            scene.prompt = "已中断"
+            scene.promptAlpha = p                     // 文字原位淡入
+            scene.lamp = .red
+            scene.lampIntensity = 0.92 + 0.03 * p
             scene.numberFrom = displayText
             scene.numberTo = displayText
-        case .recover:
-            scene.alpha = 0.45 + 0.55 * p
-            scene.rail = t.frame < 3 ? .warn : .idle
-            scene.railHeight = 6 - 4 * p
-            scene.hatch = 1 - p
-            scene.badgeAlpha = 1 - 0.55 * p
-            scene.warnBadge = t.frame < 2
-            scene.flash = t.frame < 2 ? 1 - p : 0
-            scene.roll = eased
         case .fail:
-            scene.alpha = 0.45
-            scene.rail = .warn
-            scene.railHeight = 6
-            scene.hatch = 1
-            scene.badgeAlpha = 1
-            scene.warnBadge = true
+            scene.alpha = 0
+            scene.prompt = "已中断"; scene.promptAlpha = 1
+            scene.lamp = .red; scene.lampIntensity = 0.95
             scene.shake = [0, 2, -2, 1][min(3, t.frame)]
-            scene.numberFrom = displayText
-            scene.numberTo = displayText
         case .press:
+            scene = phaseLook()
             scene.dim = 1 - p
             scene.sheen = 1 - p
-            scene.rail = phase == .normal ? .idle : (phase == .attention ? .warn : .off)
         case .midnight:
             scene.roll = eased
-            scene.alpha = 1
-            scene.rail = .idle
+            scene.lamp = .white; scene.lampIntensity = 0.92
         }
         emit(scene)
     }
@@ -387,15 +421,11 @@ final class KeyboardHeatmapAnimator {
         onFrame?(image)
     }
 
-    /// 编辑器预览：当前相位下的静息帧
+    /// 编辑器预览：当前相位的静息帧
     func previewImage(size: Int) -> CGImage? {
-        var scene = HeatmapScene(numberFrom: displayText, numberTo: displayText)
-        switch phase {
-        case .normal: scene.rail = .idle; scene.dotBrightness = 0.6
-        case .attention: scene.alpha = 0.45; scene.rail = .warn; scene.railHeight = 6; scene.warnBadge = true; scene.badgeAlpha = 1
-        case .retrying: scene.alpha = 0.25; scene.rail = .retry; scene.railHeight = 6; scene.warnBadge = true; scene.badgeAlpha = 1
-        case .off, .unreadable: scene = HeatmapScene(numberFrom: "—", numberTo: "—"); scene.rail = .off
-        }
+        var scene = phaseLook()
+        if phase == .retrying { scene.lampIntensity = 0.95 }
+        if phase == .recovered { scene.lampIntensity = 0.95 }
         return HeatmapRenderer.image(scene: scene, side: size)
     }
 
