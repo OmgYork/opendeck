@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>热力图键 · 两元件 + 状态轨编号</title>
+<style>
+  :root{--bg:#0f0e0d;--ink:#f5f3f1;--ink2:rgba(245,243,241,.62);--ink3:rgba(245,243,241,.38);--warn:#f5ba4c;--red:#ff4d4f;--pink:#f7a6ac}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 13px/1.6 -apple-system,"PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased;padding:28px 28px 60px}
+  h1{margin:0 0 4px;font-size:17px;font-weight:600}
+  h2{margin:30px 0 10px;font-size:13px;color:var(--ink2);font-weight:600;letter-spacing:.3px}
+  p.sub{margin:0;color:var(--ink2);font-size:12.5px}
+  .stage{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap;margin-top:14px}
+  .tile{width:448px;height:448px;border-radius:30px;background:#0a0a0a;box-shadow:0 0 0 1px rgba(255,255,255,.07)}
+  .tile canvas{display:block;width:448px;height:448px;border-radius:30px}
+  table{width:100%;max-width:1120px;border-collapse:collapse;font-size:12px;margin-top:10px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+  th{color:var(--ink3);font-weight:500;font-size:11px}
+  td b{font-weight:600}
+  .rid{font:700 13px ui-monospace,Menlo,monospace;color:var(--warn)}
+  .rid.red{color:var(--red)}
+  .rid.gray{color:rgba(255,255,255,.5)}
+  .rails{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;max-width:1120px}
+  .railcard{background:#171615;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px}
+  .railcard h3{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ink2)}
+  .railcard h3 span{font-family:ui-monospace,Menlo,monospace;margin-right:8px}
+  .railcard canvas{display:block;width:100%;height:auto;border-radius:8px;background:#1b1918}
+  .railcard p{margin:8px 0 0;color:var(--ink3);font-size:11.5px;line-height:1.5}
+  .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:1px;margin-right:4px}
+</style>
+</head>
+<body>
+  <h1>两元件 + 状态轨编号</h1>
+  <p class="sub">删除 badge（键盘线稿 / 应用图标）· 整键 6% 暖黄底噪在所有状态常驻</p>
+
+  <h2>元件（只剩两个）</h2>
+  <div class="stage">
+    <div class="tile"><canvas id="hero" width="112" height="112" style="image-rendering:auto"></canvas></div>
+    <table style="max-width:620px">
+      <tr><th style="width:56px">编号</th><th style="width:120px">名称</th><th style="width:110px">代码名</th><th>几何 / 说明</th></tr>
+      <tr><td><span class="rid">①</span></td><td><b>状态轨</b></td><td><code>rail</code></td><td>x 24–88（宽 64），中心 y=20；常态厚 2，中断/重试厚 6。形态见下表 R1–R5。</td></tr>
+      <tr><td><span class="rid">②</span></td><td><b>主内容</b></td><td><code>content</code></td><td>中心 (56, 58)；数值 34px 或文字提示 28px，共用同一光学中线。</td></tr>
+    </table>
+  </div>
+
+  <h2>状态轨 R1–R5（以后直接说编号）</h2>
+  <div class="rails">
+    <div class="railcard"><h3><span class="rid">R1</span>记录中</h3><canvas class="r" data-kind="R1" width="1344" height="240"></canvas>
+      <p>粉色细线 2px + 右端呼吸点（8 秒一周期，不透明度 .30→.85）。</p></div>
+    <div class="railcard"><h3><span class="rid">R2</span>中断</h3><canvas class="r" data-kind="R2" width="1344" height="240"></canvas>
+      <p>红色斜纹带 6px，静止。<b>进场 3 帧</b>：高度 2→6、斜纹自左展开。</p></div>
+    <div class="railcard"><h3><span class="rid red">R3</span>重试中</h3><canvas class="r" data-kind="R3" width="1344" height="240"></canvas>
+      <p>红底 6px + 暖黄水位段（18px）1 秒扫过一轮。</p></div>
+    <div class="railcard"><h3><span class="rid">R4</span>恢复过渡</h3><canvas class="r" data-kind="R4" width="1344" height="240"></canvas>
+      <p>斜纹自左向右收（5 帧），高度 6→2，末 2 帧整键粉闪一次；结束后回到 R1。</p></div>
+    <div class="railcard"><h3><span class="rid gray">R5</span>未运行 / 不可读</h3><canvas class="r" data-kind="R5" width="1344" height="240"></canvas>
+      <p>灰色细线 2px，无呼吸点。主内容显示「—」。</p></div>
+    <div class="railcard"><h3><span class="rid">+</span>增长时</h3><canvas class="r" data-kind="R1" width="1344" height="240"></canvas>
+      <p>轨道形态不变；整键粉闪 12%，3 帧淡出。只有 ② 主内容在滚。</p></div>
+  </div>
+
+<script>
+'use strict';
+const C = { bg:'#1b1918', ink:'#ffffff', warn:'#f5ba4c', red:'#ff4d4f', pink:'#f7a6ac' };
+const G = { rail:{x:24,w:64,cy:20,h:2,hBig:6}, content:{cx:56,cy:58} };
+const WASH = 0.06;   // 全状态常驻
+
+function paintBase(ctx, S, k){        // k = 设计坐标 → 画布倍数
+  ctx.fillStyle = C.bg; ctx.fillRect(0,0,S,S);
+  let g = ctx.createRadialGradient(20*k, 8*k, 2, 20*k, 8*k, 72*k);
+  g.addColorStop(0,'rgba(245,186,76,.10)'); g.addColorStop(1,'rgba(245,186,76,0)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,S,S);
+  g = ctx.createLinearGradient(0, 0, 0, 42*k);
+  g.addColorStop(0,'rgba(255,255,255,.055)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, S, 42*k);
+  ctx.fillStyle = `rgba(245,186,76,${WASH})`;        // 底噪：所有状态
+  ctx.fillRect(0,0,S,S);
+}
+
+function railShape(ctx, kind, k, y0){   // y0 = 画布上用于摆放轨道的偏移（放大视图用）
+  const {x,w,cy,h,hBig} = G.rail;
+  const red = kind==='R2'||kind==='R3'||kind==='R4';
+  const height = (kind==='R2'||kind==='R3'||kind==='R4') ? hBig : h;
+  const X = x*k, W = w*k, H = height*k, Y = (cy - height/2)*k + y0;
+  const rr = rad => { ctx.beginPath(); ctx.moveTo(X+rad,Y);
+    ctx.arcTo(X+W,Y,X+W,Y+H,rad); ctx.arcTo(X+W,Y+H,X,Y+H,rad);
+    ctx.arcTo(X,Y+H,X,Y,rad); ctx.arcTo(X,Y,X+W,Y,rad); ctx.closePath(); };
+
+  if (kind==='R1'){ ctx.fillStyle='rgba(247,166,172,.30)'; rr(H/2); ctx.fill();
+    ctx.beginPath(); ctx.fillStyle='rgba(247,166,172,.62)';
+    ctx.arc(X+W-1*k, Y+H/2, 1.7*k, 0, Math.PI*2); ctx.fill(); }
+  else if (kind==='R5'){ ctx.fillStyle='rgba(255,255,255,.18)'; rr(H/2); ctx.fill(); }
+  else if (kind==='R2'||kind==='R4'){
+    // R4 表示"正在收"：只在左 55% 宽度内绘制，右侧自然留空（不做遮罩，避免盖住底噪）
+    const limit = kind==='R4' ? W*0.55 : W;
+    ctx.save();
+    rr(H/2); ctx.clip();
+    ctx.beginPath(); ctx.rect(X, Y-2*k, limit, H+4*k); ctx.clip();
+    ctx.fillStyle='rgba(255,77,79,.22)'; ctx.fillRect(X,Y,limit,H);
+    ctx.strokeStyle='rgba(255,77,79,.72)'; ctx.lineWidth=1.1*k;
+    const step=4*k;
+    for(let i=-H;i<limit+H;i+=step){
+      ctx.beginPath(); ctx.moveTo(X+i,Y+H); ctx.lineTo(X+i+H,Y); ctx.stroke(); }
+    ctx.restore(); }
+  else if (kind==='R3'){ ctx.fillStyle='rgba(255,77,79,.20)'; rr(H/2); ctx.fill();
+    rr(H/2); ctx.save(); ctx.clip();
+    const seg=18*k, pos=X+(W+seg)*0.42-seg;
+    const g=ctx.createLinearGradient(pos,0,pos+seg,0);
+    g.addColorStop(0,'rgba(245,186,76,.10)'); g.addColorStop(.5,'rgba(245,186,76,.95)');
+    g.addColorStop(1,'rgba(245,186,76,.10)');
+    ctx.fillStyle=g; ctx.fillRect(pos,Y,seg,H); ctx.restore(); }
+}
+
+function contentText(ctx, kind, k){
+  const {cx,cy} = G.content, Y=cy*k, X=cx*k;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  if (kind==='R1') { ctx.fillStyle=C.ink; ctx.font=`600 ${34*k}px "SF Pro Display",-apple-system,sans-serif`;
+    ctx.fillText('8432', X, Y); }
+  else if (kind==='R2'||kind==='R4') { ctx.fillStyle=C.warn; ctx.font=`600 ${28*k}px "SF Pro Text","PingFang SC",sans-serif`;
+    ctx.fillText('已中断', X, Y); }
+  else if (kind==='R3') { ctx.fillStyle=C.warn; ctx.globalAlpha=.8; ctx.font=`600 ${28*k}px "SF Pro Text","PingFang SC",sans-serif`;
+    ctx.fillText('重试中', X, Y); ctx.globalAlpha=1; }
+  else { ctx.fillStyle='rgba(255,255,255,.45)'; ctx.font=`600 ${34*k}px "SF Pro Display",-apple-system,sans-serif`;
+    ctx.fillText('—', X, Y); }
+}
+
+// 整键（4×）
+const hero = document.getElementById('hero'), hx = hero.getContext('2d', { willReadFrequently: true });
+paintBase(hx, 112, 1);
+railShape(hx, 'R1', 1, 0);
+contentText(hx, 'R1', 1);
+
+// 自检：顶部应有轨、底部应为空（这是这个文件最容易错的坐标方向）
+(() => {
+  const SCALE = 1;                                     // hero 是 112×112 原生
+  const px = hx.getImageData(0, 0, hero.width, hero.height);
+  const cov = (x, y, w, h) => {
+    let hit = 0, tot = 0;
+    for (let dy = 0; dy < h*SCALE; dy++) {
+      for (let dx = 0; dx < w*SCALE; dx++) {
+        const X = Math.round(x*SCALE) + dx, Y = Math.round(y*SCALE) + dy;
+        const i = (Y*hero.width + X) * 4;
+        const diff = Math.abs(px.data[i]-27) + Math.abs(px.data[i+1]-25) + Math.abs(px.data[i+2]-24);
+        tot++; if (diff > 40) hit++;
+      }
+    }
+    return hit/tot*100;
+  };
+  const top = cov(24,16,64,8), bottom = cov(24,88,64,8);
+  const el = document.createElement('p');
+  el.style.cssText = 'color:#9ad7a4;font:11.5px ui-monospace,Menlo,monospace;margin-top:10px';
+  el.textContent = `自检：顶部带(y16–24) 覆盖 ${top.toFixed(1)}% · 底部带(y88–96) 覆盖 ${bottom.toFixed(1)}% → ${top > 60 && bottom < 5 ? '✓ 轨道在顶部' : '✗ 方向错了'}`;
+  document.querySelector('.stage').appendChild(el);
+})();
+
+// 轨道放大图：只截 y 8..34 这一条（26 设计像素），放大 12×
+document.querySelectorAll('canvas.r').forEach(cv => {
+  const kind = cv.dataset.kind;
+  const k = 1344 / 112;                 // 横向 12×
+  const ctx = cv.getContext('2d');
+  const S = 112;
+  ctx.setTransform(k, 0, 0, k, 0, -8*k);   // 垂直偏移：只显示 y 8..34
+  paintBase(ctx, S, 1);
+  railShape(ctx, kind, 1, 0);
+  // 放大图不画文字（文字在 y=58，不在可视区）
+});
+</script>
+</body>
+</html>

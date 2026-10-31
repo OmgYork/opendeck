@@ -80,6 +80,24 @@
   .decide{margin:0;padding-left:16px;color:var(--ink2);font-size:12px}
   .decide li{margin:7px 0}
   .decide b{color:var(--ink);font-weight:600}
+
+  /* 状态表 ↔ 磁贴联动（新增，其余样式不动） */
+  .stateRow{cursor:pointer}
+  .stateRow:hover td{background:rgba(255,255,255,.05)}
+  .stateRow.sel td{background:rgba(245,186,76,.10)}
+  .stateRow.sel td:first-child{box-shadow:inset 2px 0 0 var(--warn)}
+  .stateView{display:flex;gap:14px;align-items:flex-start;margin-top:14px;
+    padding-top:14px;border-top:1px dashed var(--line)}
+  #stateTile{width:148px;height:148px;border-radius:14px;flex:0 0 auto;
+    box-shadow:0 0 0 1px rgba(255,255,255,.07)}
+  .stateMeta{flex:1;min-width:0}
+  .stateMeta .nm{font-size:13px;font-weight:600;color:var(--ink)}
+  .stateMeta .fr{font:500 11px/1.6 ui-monospace,Menlo,monospace;color:var(--ink3);margin:2px 0 6px}
+  .stateMeta .nt{font-size:11.5px;line-height:1.55;color:var(--ink2);margin:0}
+  .stateMeta .rp{margin-top:8px;font:500 11px -apple-system;color:var(--ink2);
+    background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:7px;
+    padding:3px 10px;cursor:pointer}
+  .stateMeta .rp:hover{background:rgba(255,255,255,.10)}
 </style>
 </head>
 <body>
@@ -126,15 +144,25 @@
   <section class="spec">
     <div class="card">
       <h3>状态表（判据 → 键面 → 按下）</h3>
-      <table>
+      <table id="stateRows">
         <tr><th>态</th><th>判据</th><th>键面</th><th>按下</th></tr>
-        <tr><td>记录中</td><td>进程在 + 日志无未恢复中断</td><td>白色数字 / 粉轨 + 呼吸点</td><td>打开 dashboard 并置前</td></tr>
-        <tr><td>增长</td><td>数值上升（≤15s 一次的 flush）</td><td>变化位滚动 + 粉洗一次</td><td>—</td></tr>
-        <tr><td>中断</td><td>日志最新事件 = <span class="mono">recovery failed</span></td><td>数字灰化 / 暖黄斜纹 / 徽标变黄</td><td>触发「重试统计」</td></tr>
-        <tr><td>重试中</td><td>按下后 2–8s 窗口</td><td>暖黄水位扫过 / 数字压到 25%</td><td>忽略（防连点）</td></tr>
-        <tr><td>恢复</td><td>日志出现 <span class="mono">recovered</span> 或库重新增长</td><td>斜纹退出 + 粉闪 + 补滚差值</td><td>—</td></tr>
-        <tr><td>未运行 / 不可读</td><td>进程不存在 / 库打不开</td><td>「—」+ 灰轨</td><td>启动应用</td></tr>
+        <tr class="stateRow" data-state="idle"><td>记录中</td><td>进程在 + 日志无未恢复中断</td><td>白色数字 / 粉轨 + 呼吸点</td><td>打开 dashboard 并置前</td></tr>
+        <tr class="stateRow" data-state="tick"><td>增长</td><td>数值上升（≤15s 一次的 flush）</td><td>变化位滚动 + 粉洗一次</td><td>—</td></tr>
+        <tr class="stateRow" data-state="warnIdle"><td>中断</td><td>日志最新事件 = <span class="mono">recovery failed</span></td><td>数字灰化 / 暖黄斜纹 / 徽标变黄</td><td>触发「重试统计」</td></tr>
+        <tr class="stateRow" data-state="retry"><td>重试中</td><td>按下后 2–8s 窗口</td><td>暖黄水位扫过 / 数字压到 25%</td><td>忽略（防连点）</td></tr>
+        <tr class="stateRow" data-state="recover"><td>恢复</td><td>日志出现 <span class="mono">recovered</span> 或库重新增长</td><td>斜纹退出 + 粉闪 + 补滚差值</td><td>—</td></tr>
+        <tr class="stateRow" data-state="off"><td>未运行 / 不可读</td><td>进程不存在 / 库打不开</td><td>「—」+ 灰轨</td><td>启动应用</td></tr>
       </table>
+
+      <div class="stateView">
+        <canvas id="stateTile" width="224" height="224"></canvas>
+        <div class="stateMeta">
+          <div class="nm" id="stateName">记录中</div>
+          <div class="fr" id="stateFrame">帧 0 / 23</div>
+          <p class="nt" id="stateNote"></p>
+          <button class="rp" id="stateReplay">▶ 重播</button>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -601,6 +629,55 @@ class ProtoApp {
 
 /* 呼吸/斜纹这类环境动效走连续时间（设备端 6fps 推送，视觉上足够平滑）；
    转场全部按 12fps 整帧量化。 */
+
+/* ============================================================
+   5. 状态表 ↔ 磁贴联动
+   点左侧任意一行，右下角磁贴立刻切到该态并播放它的动效；
+   循环态（记录中 / 中断静置 / 重试中）自动循环，一次性转场播完停在末帧。
+   ============================================================ */
+class StateTableView {
+  constructor() {
+    this.scen = new Scenarios();
+    this.renderer = new KeyRenderer(document.getElementById('stateTile'));
+    this.rows = [...document.querySelectorAll('#stateRows tr[data-state]')];
+    this.nameEl = document.getElementById('stateName');
+    this.frameEl = document.getElementById('stateFrame');
+    this.noteEl = document.getElementById('stateNote');
+    this.current = 'idle';
+    this.t = 0;
+    this.lastTs = 0;
+    this.rows.forEach(tr => tr.addEventListener('click', () => this.select(tr.dataset.state)));
+    document.getElementById('stateReplay').addEventListener('click', () => { this.t = 0; });
+    this.select('idle');
+    requestAnimationFrame(ts => this.loop(ts));
+  }
+
+  select(id) {
+    this.current = id;
+    this.t = 0;
+    this.rows.forEach(tr => tr.classList.toggle('sel', tr.dataset.state === id));
+    const sc = this.scen.get(id);
+    const row = this.rows.find(tr => tr.dataset.state === id);
+    this.nameEl.textContent = row ? row.querySelector('td').textContent : id;
+    this.noteEl.innerHTML = sc.note;
+  }
+
+  loop(ts) {
+    if (!this.lastTs) this.lastTs = ts;
+    if ((ts - this.lastTs) / 1000 >= 1 / FPS) {
+      this.lastTs = ts;
+      const sc = this.scen.get(this.current);
+      this.t = sc.loop ? (this.t + 1) % sc.frames : Math.min(this.t + 1, sc.frames - 1);
+    }
+    const sc = this.scen.get(this.current);
+    const t = Math.min(this.t, sc.frames - 1);
+    this.renderer.draw(sc.render(t));
+    this.frameEl.textContent = `帧 ${t} / ${sc.frames - 1} · ${Math.round((t + 1) / FPS * 1000)}ms`;
+    requestAnimationFrame(t2 => this.loop(t2));
+  }
+}
+new StateTableView();
+
 new ProtoApp();
 </script>
 </body>

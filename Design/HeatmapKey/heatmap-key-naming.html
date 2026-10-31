@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>热力图键 · 元件命名 + 数字增长帧序</title>
+<style>
+  :root{
+    --bg:#0f0e0d; --panel:#171615; --line:rgba(255,255,255,.08);
+    --ink:#f5f3f1; --ink2:rgba(245,243,241,.62); --ink3:rgba(245,243,241,.38);
+    --pink:#f7a6ac; --warn:#f5ba4c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:400 13px/1.55 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;padding:30px 28px 64px}
+  h1{margin:0 0 4px;font-size:18px;font-weight:600}
+  h2{margin:34px 0 12px;font-size:13px;color:var(--ink2);font-weight:600;letter-spacing:.4px}
+  p.sub{margin:0;color:var(--ink2);font-size:12.5px}
+  .stage{display:flex;gap:44px;flex-wrap:wrap;margin-top:14px}
+  .tilewrap{position:relative;width:448px;height:448px;border-radius:30px;background:#0a0a0a;
+    box-shadow:0 24px 60px -30px #000, 0 0 0 1px rgba(255,255,255,.07)}
+  .tilewrap canvas{display:block;width:448px;height:448px;border-radius:30px}
+  .cap{margin-top:10px;color:var(--ink3);font-size:11.5px}
+  .num{position:absolute;width:20px;height:20px;border-radius:50%;background:#f5ba4c;color:#1b1918;
+    font:700 11px/20px -apple-system;text-align:center;box-shadow:0 0 0 3px rgba(15,14,13,.85);pointer-events:none}
+  table{width:100%;max-width:1100px;border-collapse:collapse;font-size:12px;margin-top:8px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+  th{color:var(--ink3);font-weight:500;font-size:11px}
+  td b{color:var(--warn);font-weight:600}
+  td code{font:500 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink2)}
+  .strip{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
+  .f{text-align:center}
+  .f canvas{display:block;width:168px;height:168px;border-radius:12px;background:#1b1918;
+    box-shadow:0 0 0 1px rgba(255,255,255,.06)}
+  .f span{display:block;margin-top:5px;color:var(--ink3);font:500 10.5px ui-monospace,Menlo,monospace}
+  .note{max-width:1000px;color:var(--ink2);font-size:12.5px;line-height:1.75;margin-top:10px}
+  .note b{color:var(--ink)}
+  .note ul{margin:6px 0 0;padding-left:18px}
+</style>
+</head>
+<body>
+  <h1>元件命名 + 数字增长的帧序</h1>
+  <p class="sub">左：常态（编号 ①②④⑤⑦）· 右：中断态（编号 ①③④⑥）· 下面：数字增长的 8 帧拆解</p>
+
+  <h2>一、元件命名</h2>
+  <div class="stage">
+    <div>
+      <div class="tilewrap">
+        <canvas id="t-normal" width="896" height="896"></canvas>
+        <div class="num" style="left:58px;top:52px">1</div>
+        <div class="num" style="left:206px;top:186px">2</div>
+        <div class="num" style="left:196px;top:334px">4</div>
+        <div class="num" style="left:352px;top:334px">5</div>
+        <div class="num" style="left:18px;top:400px">7</div>
+      </div>
+      <div class="cap">常态：① 徽标 · ② 主数值 · ④ 状态轨 · ⑤ 呼吸点 · ⑦ 安全边</div>
+    </div>
+    <div>
+      <div class="tilewrap">
+        <canvas id="t-attention" width="896" height="896"></canvas>
+        <div class="num" style="left:58px;top:52px">1</div>
+        <div class="num" style="left:196px;top:186px">3</div>
+        <div class="num" style="left:196px;top:334px">4</div>
+        <div class="num" style="left:18px;top:400px">6</div>
+      </div>
+      <div class="cap">中断态：① 徽标（满亮）· ③ 主提示 · ④ 状态轨（斜纹）· ⑥ 底噪</div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th style="width:34px">编号</th><th style="width:150px">名称</th><th style="width:130px">代码里的名字</th><th style="width:190px">位置 / 尺寸</th><th>说明</th></tr>
+    <tr><td>①</td><td><b>徽标</b>（键盘徽标）</td><td><code>Badge</code></td><td>左上 (12,12)，13×13</td><td>极简键盘线稿。常态 45% 透明、暖黄；中断态满亮。是「这是键盘统计」的身份锚点。</td></tr>
+    <tr><td>②</td><td><b>主数值</b></td><td><code>Value</code></td><td>水平居中，字身中心 y=50，34px（≥5 位 26px）</td><td>今日按键数，等宽数字。只有「记录中」才出现。</td></tr>
+    <tr><td>③</td><td><b>主提示</b></td><td><code>Prompt</code></td><td>同主数值的位置，28px</td><td>中断态用它**替换**主数值（「已中断」），不再是灰化数字。</td></tr>
+    <tr><td>④</td><td><b>状态轨</b></td><td><code>Rail</code></td><td>底部居中，64 宽，中心 y=92；常态 2px、中断/重试 6px</td><td>你说的「横条」。三种形态：粉色细线（记录中）／暖黄斜纹（中断）／暖黄水位扫过（重试中）／灰线（未运行）。</td></tr>
+    <tr><td>⑤</td><td><b>呼吸点</b></td><td><code>Dot</code></td><td>状态轨右端，直径 3.4</td><td>只在记录中出现，8 秒一循环的明暗呼吸，表示「在听」。</td></tr>
+    <tr><td>⑥</td><td><b>底噪</b></td><td><code>Wash</code></td><td>整键铺满，暖黄 6%</td><td>只在中断态出现。余光扫到就知道状态变了，不靠看字。</td></tr>
+    <tr><td>⑦</td><td><b>安全边</b></td><td><code>SafeArea</code></td><td>四周 12px</td><td>所有元件不越界；键面被设备外壳压边，靠边的元素会被吃掉。</td></tr>
+  </table>
+
+  <h2>二、数字增长：8 帧（原 4 帧 → 现 8 帧，12fps / 667ms）</h2>
+  <div class="strip" id="strip"></div>
+  <div class="note">
+    <b>为什么原来生硬</b>：4 帧里只有 3 次位移，滚动距离 12px → 每步 4px，肉眼读成「跳了三下」。
+    <ul>
+      <li>时长 4 帧（333ms）→ <b>8 帧（667ms）</b>，位移步长从 4px 降到 1.7px，滚动变连续。</li>
+      <li>只滚<b>变化的位</b>，未变的数字静止（下面拆解里 8432 → 8437 只有末位在动）。</li>
+      <li>缓动用 ease-out 三次方，起步快、收尾慢，像机械里程表而不是滑块。</li>
+      <li>长度或单位变化（9999→10.0k、当天归零）不做滚动，改 4 帧交叉淡换，避免读成乱码。</li>
+    </ul>
+  </div>
+
+<script>
+'use strict';
+const C = { bg:'#1b1918', ink:'#ffffff', warn:'#f5ba4c', pink:'#f7a6ac' };
+
+class Tile {
+  constructor(canvas){ this.cv = canvas; this.ctx = canvas.getContext('2d'); this.s = canvas.width/112; }
+  draw(opts){
+    const o = Object.assign({value:'8432', from:null, roll:0, mode:'normal', wash:0, rail:'idle', railH:2, dot:.6, badge:.45}, opts);
+    const ctx = this.ctx, S = 112, flip = y => S - y;
+    ctx.setTransform(this.s,0,0,this.s,0,0);
+    ctx.clearRect(0,0,S,S);
+    ctx.fillStyle = C.bg; ctx.fillRect(0,0,S,S);
+    let g = ctx.createRadialGradient(20, flip(8), 2, 20, flip(8), 72);
+    g.addColorStop(0,'rgba(245,186,76,.10)'); g.addColorStop(1,'rgba(245,186,76,0)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,S,S);
+    g = ctx.createLinearGradient(0, flip(0), 0, flip(42));
+    g.addColorStop(0,'rgba(255,255,255,.055)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=g; ctx.fillRect(0, flip(42), S, 42);
+    if (o.wash > 0) { ctx.fillStyle = `rgba(245,186,76,${o.wash})`; ctx.fillRect(0,0,S,S); }
+
+    this.badge(o.badge);
+
+    if (o.mode === 'attention') {
+      ctx.save(); ctx.globalAlpha=1; ctx.fillStyle=C.warn;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font='600 28px "SF Pro Text","PingFang SC",-apple-system,sans-serif';
+      ctx.fillText('已中断', 56, flip(50)); ctx.restore();
+    } else {
+      this.roll(o.from ?? o.value, o.value, o.roll);
+    }
+    this.rail(o.rail, o.railH, o.dot);
+  }
+
+  roll(from, to, p){
+    const ctx = this.ctx;
+    const size = to.length >= 5 ? 26 : 34;
+    ctx.save(); ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+    ctx.font = `600 ${size}px "SF Pro Display", -apple-system, sans-serif`;
+    const cell = Math.max(...'0123456789'.split('').map(d => ctx.measureText(d).width));
+    const totalW = cell * to.length;
+    const startX = 56 - totalW/2;
+    const baseY = 112 - 70;
+    const dist = size * 0.42;
+    for (let i=0;i<to.length;i++){
+      const cx = startX + i*cell + cell/2;
+      const nc = to[i], oc = i < from.length ? from[i] : '';
+      if (p <= 0 || oc === nc) { this.glyph(nc, cx, baseY, C.ink, 1); continue; }
+      ctx.save();
+      ctx.beginPath(); ctx.rect(cx - cell/2, baseY - size*0.95, cell, size*1.25); ctx.clip();
+      this.glyph(oc, cx, baseY + dist*p, C.ink, 1);
+      this.glyph(nc, cx, baseY - dist*(1-p), C.ink, 1);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  glyph(ch, cx, y, color, alpha){
+    const ctx = this.ctx;
+    ctx.save(); ctx.globalAlpha=alpha; ctx.fillStyle=color; ctx.textAlign='center';
+    ctx.fillText(ch, cx, y); ctx.restore();
+  }
+
+  badge(alpha){
+    const ctx = this.ctx, flip = y => 112 - y;
+    const x=12, top=12, w=13, h=10, r=2.2;
+    ctx.save(); ctx.globalAlpha=alpha; ctx.strokeStyle=C.warn; ctx.lineWidth=1.1;
+    const p=new Path2D();
+    p.moveTo(x+r, flip(top)); p.lineTo(x+w-r, flip(top));
+    p.quadraticCurveTo(x+w, flip(top), x+w, flip(top+r));
+    p.lineTo(x+w, flip(top+h-r)); p.quadraticCurveTo(x+w, flip(top+h), x+w-r, flip(top+h));
+    p.lineTo(x+r, flip(top+h)); p.quadraticCurveTo(x, flip(top+h), x, flip(top+h-r));
+    p.lineTo(x, flip(top+r)); p.quadraticCurveTo(x, flip(top), x+r, flip(top));
+    ctx.stroke(p);
+    ctx.globalAlpha = alpha*.85; ctx.lineWidth=.9;
+    const cw=2.4, gap=1.4, tot=3*cw+2*gap;
+    for (let i=0;i<3;i++){ const sx=x+(w-tot)/2+i*(cw+gap);
+      ctx.strokeRect(sx, flip(top+4.6), cw, 2); ctx.strokeRect(sx, flip(top+7.8), cw, 2); }
+    ctx.restore();
+  }
+
+  rail(kind, h, dot){
+    const ctx=this.ctx, flip=y=>112-y, x=24, w=64, cy=92, y=flip(cy+h/2);
+    const rr=(rx,ry,rw,rh,rad)=>{ ctx.beginPath(); ctx.moveTo(rx+rad,ry);
+      ctx.arcTo(rx+rw,ry,rx+rw,ry+rh,rad); ctx.arcTo(rx+rw,ry+rh,rx,ry+rh,rad);
+      ctx.arcTo(rx,ry+rh,rx,ry,rad); ctx.arcTo(rx,ry,rx+rw,ry,rad); ctx.closePath(); };
+    ctx.save();
+    if (kind==='idle'){ ctx.fillStyle='rgba(247,166,172,.30)'; rr(x,y,w,h,h/2); ctx.fill();
+      ctx.beginPath(); ctx.fillStyle=`rgba(247,166,172,${.30+.55*dot})`;
+      ctx.arc(x+w-1, flip(cy), 1.7, 0, Math.PI*2); ctx.fill(); }
+    else if (kind==='warn'){ rr(x,y,w,h,h/2); ctx.save(); ctx.clip();
+      ctx.fillStyle='rgba(245,186,76,.22)'; ctx.fillRect(x,y,w,h);
+      ctx.strokeStyle='rgba(245,186,76,.62)'; ctx.lineWidth=1.1;
+      for(let i=-h;i<w+h;i+=4){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
+      ctx.restore(); }
+    else if (kind==='retry'){ ctx.fillStyle='rgba(245,186,76,.20)'; rr(x,y,w,h,h/2); ctx.fill();
+      rr(x,y,w,h,h/2); ctx.save(); ctx.clip();
+      const seg=18, pos=x+(w+seg)*dot-seg;
+      const g=ctx.createLinearGradient(pos,0,pos+seg,0);
+      g.addColorStop(0,'rgba(245,186,76,.15)'); g.addColorStop(.5,'rgba(245,186,76,.95)');
+      g.addColorStop(1,'rgba(245,186,76,.15)');
+      ctx.fillStyle=g; ctx.fillRect(pos,y,seg,h); ctx.restore(); }
+    ctx.restore();
+  }
+}
+
+new Tile(document.getElementById('t-normal')).draw({});
+new Tile(document.getElementById('t-attention')).draw({mode:'attention', wash:.06, rail:'warn', railH:6, badge:1, value:'已中断'});
+
+// 8 帧拆解：8432 → 8437
+const strip = document.getElementById('strip');
+const easeOut = p => 1 - Math.pow(1-p, 3);
+for (let i=0;i<8;i++){
+  const wrap = document.createElement('div'); wrap.className='f';
+  const cv = document.createElement('canvas'); cv.width=336; cv.height=336;
+  wrap.appendChild(cv);
+  const label = document.createElement('span');
+  label.textContent = `帧 ${i} · ${Math.round(i/12*1000)}ms`;
+  wrap.appendChild(label);
+  strip.appendChild(wrap);
+  new Tile(cv).draw({ from:'8432', value:'8437', roll: easeOut(i/7) });
+}
+</script>
+</body>
+</html>

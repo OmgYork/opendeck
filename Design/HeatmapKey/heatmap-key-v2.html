@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>热力图键 · v2 布局（轨在上 / 内容居中 / 应用图标在下）</title>
+<style>
+  :root{--bg:#0f0e0d;--ink:#f5f3f1;--ink2:rgba(245,243,241,.62);--ink3:rgba(245,243,241,.38);--warn:#f5ba4c;--red:#ff4d4f;--pink:#f7a6ac}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 13px/1.55 -apple-system,"PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased;padding:28px 28px 56px}
+  h1{margin:0 0 4px;font-size:17px;font-weight:600}
+  p.sub{margin:0 0 20px;color:var(--ink2);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;max-width:1240px}
+  @media (max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}}
+  .card{background:#171615;border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:12px}
+  .card h2{margin:0 0 9px;font-size:12px;color:var(--ink2);font-weight:600}
+  .card h2 b{color:var(--red)}
+  canvas{display:block;width:100%;height:auto;border-radius:12px;background:#1b1918}
+  .cap{margin:9px 0 0;color:var(--ink3);font-size:11.5px;line-height:1.5;min-height:46px}
+  .cap b{color:var(--ink2)}
+  table{width:100%;max-width:1100px;border-collapse:collapse;font-size:12px;margin-top:22px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.06)}
+  th{color:var(--ink3);font-weight:500;font-size:11px}
+  td code{font:500 11px ui-monospace,Menlo,monospace;color:var(--ink2)}
+</style>
+</head>
+<body>
+  <h1>v2 布局</h1>
+  <p class="sub">状态轨移到顶部 · 主内容居中 · 底部换成 KeyAnalyze 图标 · 中断态状态轨改红</p>
+
+  <div class="grid">
+    <div class="card"><h2>记录中</h2><canvas id="c-normal" width="700" height="700"></canvas>
+      <p class="cap"><b>粉色细轨</b>在上，右端呼吸点；中间是今日数值；下面是应用图标（证明"这个数属于谁"）。</p></div>
+    <div class="card"><h2><b>中断</b>（E 方案）</h2><canvas id="c-att" width="700" height="700"></canvas>
+      <p class="cap">数字换成<b>已中断</b>，整键 <b>6% 暖黄底噪</b>，状态轨变<b>红色斜纹</b>。</p></div>
+    <div class="card"><h2>重试中</h2><canvas id="c-retry" width="700" height="700"></canvas>
+      <p class="cap">文案换<b>重试中</b>；红色轨上跑一道暖黄水位，表示"正在重新连"。</p></div>
+    <div class="card"><h2>未运行</h2><canvas id="c-off" width="700" height="700"></canvas>
+      <p class="cap">没有数值：<b>—</b> + 灰色轨 + 图标压暗。按下 = 启动应用。</p></div>
+  </div>
+
+  <table>
+    <tr><th style="width:120px">元件</th><th style="width:150px">几何（112 坐标）</th><th>说明</th></tr>
+    <tr><td><b>状态轨</b> <code>rail</code></td><td>x 24–88，中心 y=20；厚 2（中断 6）</td><td>记录中=粉、中断=红斜纹、重试中=红底暖黄水位、未运行=灰</td></tr>
+    <tr><td><b>主内容</b> <code>content</code></td><td>中心 (56, 58)</td><td>数值 34px 或 文字 28px，共用同一光学中线</td></tr>
+    <tr><td><b>应用图标</b> <code>appIcon</code></td><td>16×16，中心 (56, 90)</td><td>取 /Applications/KeyAnalyze.app 的图标；未安装时退化为键盘线稿</td></tr>
+  </table>
+
+<script>
+'use strict';
+const C = { bg:'#1b1918', ink:'#ffffff', warn:'#f5ba4c', red:'#ff4d4f', pink:'#f7a6ac' };
+const G = {
+  rail:{x:24, w:64, cy:20, h:2, hBig:6},
+  content:{cx:56, cy:58},
+  icon:{cx:56, cy:90, size:16},
+};
+const iconImg = new Image(); iconImg.src = 'ka-icon.png';
+let iconReady = false; iconImg.onload = () => { iconReady = true; drawAll(); };
+
+class Tile {
+  constructor(canvas){ this.cv=canvas; this.ctx=canvas.getContext('2d'); this.s=canvas.width/112; }
+  draw(kind){
+    const ctx=this.ctx, S=112, flip=y=>S-y;
+    ctx.setTransform(this.s,0,0,this.s,0,0); ctx.clearRect(0,0,S,S);
+    ctx.fillStyle=C.bg; ctx.fillRect(0,0,S,S);
+    let g=ctx.createRadialGradient(20,flip(8),2,20,flip(8),72);
+    g.addColorStop(0,'rgba(245,186,76,.10)'); g.addColorStop(1,'rgba(245,186,76,0)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,S,S);
+    g=ctx.createLinearGradient(0,flip(0),0,flip(42));
+    g.addColorStop(0,'rgba(255,255,255,.055)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=g; ctx.fillRect(0,flip(42),S,42);
+
+    const attention = kind==='att'||kind==='retry';
+    if (attention) { ctx.fillStyle='rgba(245,186,76,.06)'; ctx.fillRect(0,0,S,S); }  // 底噪
+
+    // 顶部状态轨
+    if (kind==='normal') this.rail('pink', G.rail.h, .62);
+    else if (kind==='att') this.rail('redHatch', G.rail.hBig);
+    else if (kind==='retry') this.rail('redSweep', G.rail.hBig);
+    else this.rail('gray', G.rail.h);
+
+    // 主内容
+    if (kind==='normal') this.text('8432', 34, C.ink, 1);
+    else if (kind==='att') this.text('已中断', 28, C.warn, 1);
+    else if (kind==='retry') this.text('重试中', 28, C.warn, .8);
+    else this.text('—', 34, 'rgba(255,255,255,.45)', 1);
+
+    // 应用图标
+    this.appIcon(kind==='off' ? .35 : .9);
+  }
+
+  rail(kind, h, dot){
+    const ctx=this.ctx, flip=y=>112-y, {x,w,cy}=G.rail;
+    const y=flip(cy+h/2), rr=rad=>{ ctx.beginPath(); ctx.moveTo(x+rad,y);
+      ctx.arcTo(x+w,y,x+w,y+h,rad); ctx.arcTo(x+w,y+h,x,y+h,rad);
+      ctx.arcTo(x,y+h,x,y,rad); ctx.arcTo(x,y,x+w,y,rad); ctx.closePath(); };
+    ctx.save();
+    if (kind==='pink'){ ctx.fillStyle='rgba(247,166,172,.30)'; rr(h/2); ctx.fill();
+      ctx.beginPath(); ctx.fillStyle=`rgba(247,166,172,${.30+.55*(dot??.6)})`;
+      ctx.arc(x+w-1, flip(cy), 1.7, 0, Math.PI*2); ctx.fill(); }
+    else if (kind==='gray'){ ctx.fillStyle='rgba(255,255,255,.18)'; rr(h/2); ctx.fill(); }
+    else if (kind==='redHatch'){ rr(h/2); ctx.save(); ctx.clip();
+      ctx.fillStyle='rgba(255,77,79,.22)'; ctx.fillRect(x,y,w,h);
+      ctx.strokeStyle='rgba(255,77,79,.72)'; ctx.lineWidth=1.1;
+      for(let i=-h;i<w+h;i+=4){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
+      ctx.restore(); }
+    else if (kind==='redSweep'){ ctx.fillStyle='rgba(255,77,79,.20)'; rr(h/2); ctx.fill();
+      rr(h/2); ctx.save(); ctx.clip();
+      const seg=18, pos=x+(w+seg)*.45-seg;
+      const g=ctx.createLinearGradient(pos,0,pos+seg,0);
+      g.addColorStop(0,'rgba(245,186,76,.10)'); g.addColorStop(.5,'rgba(245,186,76,.95)');
+      g.addColorStop(1,'rgba(245,186,76,.10)');
+      ctx.fillStyle=g; ctx.fillRect(pos,y,seg,h); ctx.restore(); }
+    ctx.restore();
+  }
+
+  text(str, size, color, alpha){
+    const ctx=this.ctx, {cx,cy}=G.content;
+    ctx.save(); ctx.globalAlpha=alpha; ctx.fillStyle=color;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font=`600 ${size}px "SF Pro Display","PingFang SC",-apple-system,sans-serif`;
+    ctx.fillText(str, cx, 112-cy); ctx.restore();
+  }
+
+  appIcon(alpha){
+    const ctx=this.ctx, {cx,cy,size}=G.icon, s=size/2;
+    ctx.save(); ctx.globalAlpha=alpha;
+    if (iconReady) {
+      ctx.drawImage(iconImg, cx-s, 112-cy-s, size, size);
+    } else {
+      ctx.strokeStyle=C.warn; ctx.lineWidth=1.2;
+      ctx.beginPath(); ctx.roundRect(cx-s, 112-cy-s, size, size, 3); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+const tiles = [['c-normal','normal'],['c-att','att'],['c-retry','retry'],['c-off','off']];
+const instances = tiles.map(([id,kind]) => ({ t: new Tile(document.getElementById(id)), kind }));
+function drawAll(){ instances.forEach(({t,kind}) => t.draw(kind)); }
+drawAll();
+</script>
+</body>
+</html>

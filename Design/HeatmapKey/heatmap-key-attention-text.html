@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>热力图键 · 中断态文字方案</title>
+<style>
+  :root{
+    --bg:#0f0e0d; --panel:#171615; --line:rgba(255,255,255,.08);
+    --ink:#f5f3f1; --ink2:rgba(245,243,241,.62); --ink3:rgba(245,243,241,.38);
+    --pink:#f7a6ac; --warn:#f5ba4c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:400 13px/1.55 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;padding:30px 28px 60px}
+  h1{margin:0 0 6px;font-size:18px;font-weight:600}
+  p.sub{margin:0 0 22px;color:var(--ink2);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;max-width:1380px}
+  @media (max-width:1200px){.grid{grid-template-columns:repeat(3,1fr)}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .card h2{margin:0 0 10px;font-size:12px;color:var(--ink2);font-weight:600;letter-spacing:.3px}
+  .card h2 b{color:var(--warn);font-weight:600}
+  canvas{display:block;width:100%;height:auto;border-radius:12px;background:#1b1918;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+  .why{margin:10px 0 0;color:var(--ink3);font-size:11.5px;line-height:1.5;min-height:52px}
+  .why b{color:var(--ink2);font-weight:600}
+  .rowline{margin-top:26px;display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap}
+  .real{text-align:center}
+  .real canvas{width:112px;height:112px;border-radius:14px}
+  .real span{display:block;margin-top:6px;color:var(--ink3);font-size:11px}
+  .note{margin-top:26px;max-width:940px;color:var(--ink2);font-size:12.5px;line-height:1.7}
+  .note b{color:var(--ink)}
+  .note ul{margin:8px 0 0;padding-left:18px}
+</style>
+</head>
+<body>
+  <h1>中断态：数字换成文字</h1>
+  <p class="sub">112×112 键面 · 放大 2.5× 显示 · 四个变体，常态图放最右边做变化量对比</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>A · <b>已中断</b> 单行大字</h2>
+      <canvas id="a" width="700" height="700"></canvas>
+      <p class="why">最直白。<b>三个字</b>在一臂距离可读，字高约 6mm；信息量最少，动效上只做斜纹带进场。</p>
+    </div>
+    <div class="card">
+      <h2>B · <b>监听中断</b> 单行</h2>
+      <canvas id="b" width="700" height="700"></canvas>
+      <p class="why">说清<b>是什么断了</b>。四个字压到 19px，远看略小但语义完整。</p>
+    </div>
+    <div class="card">
+      <h2>C · <b>两行</b>统计 / 已中断</h2>
+      <canvas id="c" width="700" height="700"></canvas>
+      <p class="why">信息最全，但<b>两行字</b>在小屏上会显得挤，且和常态的"一个大数字"结构不一致。</p>
+    </div>
+    <div class="card">
+      <h2>E · A + <b>整键 6% 暖黄底噪</b></h2>
+      <canvas id="e" width="700" height="700"></canvas>
+      <p class="why">文字告诉你看什么，<b>底噪</b>负责余光扫到就知道变了。正常态是中性炭黑，中断态整颗偏暖。</p>
+    </div>
+    <div class="card">
+      <h2>D · 已中断 + <b>按一下重试</b></h2>
+      <canvas id="d" width="700" height="700"></canvas>
+      <p class="why">顺带把<b>操作提示</b>写上去。代价：第二行只有 8px（物理约 1.8mm），能不能读清要实机看。</p>
+    </div>
+  </div>
+
+  <div class="rowline">
+    <div class="real"><canvas id="real-a" width="224" height="224"></canvas><span>A · 实际尺寸 112px</span></div>
+    <div class="real"><canvas id="real-normal" width="224" height="224"></canvas><span>常态（对比用）</span></div>
+    <div class="real"><canvas id="real-press" width="224" height="224"></canvas><span>重试中</span></div>
+  </div>
+
+  <div class="note">
+    <b>共同的改动</b>
+    <ul>
+      <li>数字整块撤掉，不再是"灰化的数字"——中断和正常在<b>内容形态</b>上就不同，不用靠亮度去分辨。</li>
+      <li>文字用<b>暖黄</b>，与 App 自己的警告同色；底部斜纹带保留，作为"停住"的质感，不再承担主要提示。</li>
+      <li>键盘徽标提到满亮，作为第三个冗余信号（颜色 + 文字 + 纹样三重编码）。</li>
+    </ul>
+  </div>
+
+<script>
+'use strict';
+const C = {
+  bg:'#1b1918', ink:'#ffffff', warn:'#f5ba4c', pink:'#f7a6ac',
+  inkDim:'rgba(255,255,255,.45)', ink2:'rgba(255,255,255,.62)'
+};
+
+class Tile {
+  constructor(canvas){ this.cv = canvas; this.ctx = canvas.getContext('2d'); this.s = canvas.width / 112; }
+  draw(kind){
+    const ctx = this.ctx, S = 112, flip = y => S - y;
+    ctx.setTransform(this.s,0,0,this.s,0,0);
+    ctx.clearRect(0,0,S,S);
+
+    // 底 + 暖光 + 顶部高光
+    ctx.fillStyle = C.bg; ctx.fillRect(0,0,S,S);
+    let g = ctx.createRadialGradient(20, flip(8), 2, 20, flip(8), 72);
+    g.addColorStop(0,'rgba(245,186,76,0.10)'); g.addColorStop(1,'rgba(245,186,76,0)');
+    ctx.fillStyle = g; ctx.fillRect(0,0,S,S);
+    g = ctx.createLinearGradient(0, flip(0), 0, flip(42));
+    g.addColorStop(0,'rgba(255,255,255,.055)'); g.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, flip(42), S, 42);
+
+    this.badge(kind === 'normal' ? 0.45 : 1);
+
+    if (kind === 'normal') {
+      this.number('8432', 34, C.ink, 1);
+      this.rail('idle', 2);
+    } else if (kind === 'retry') {
+      this.number('8432', 34, C.ink, 0.25);
+      this.rail('retry', 6, 0.45);
+    } else if (kind === 'e') {
+      this.wash();
+      this.text('已中断', 28, C.warn, 50, 1);
+      this.rail('warn', 6);
+    } else if (kind === 'a') {
+      this.text('已中断', 28, C.warn, 50, 1);
+      this.rail('warn', 6);
+    } else if (kind === 'b') {
+      this.text('监听中断', 19, C.warn, 50, 1);
+      this.rail('warn', 6);
+    } else if (kind === 'c') {
+      this.text('统计', 17, C.ink2, 44, 0.85);
+      this.text('已中断', 20, C.warn, 62, 1);
+      this.rail('warn', 6);
+    } else if (kind === 'd') {
+      this.text('已中断', 26, C.warn, 46, 1);
+      this.text('按一下重试', 8, C.ink2, 66, 0.85);
+      this.rail('warn', 6);
+    }
+  }
+
+  wash(){
+    const ctx = this.ctx;
+    ctx.save(); ctx.fillStyle = 'rgba(245,186,76,0.06)';
+    ctx.fillRect(0,0,112,112); ctx.restore();
+  }
+
+  badge(alpha){
+    const ctx = this.ctx, flip = y => 112 - y;
+    const x=12, top=12, w=13, h=10, r=2.2;
+    ctx.save(); ctx.globalAlpha = alpha; ctx.strokeStyle = C.warn; ctx.lineWidth = 1.1;
+    const p = new Path2D();
+    p.moveTo(x+r, flip(top)); p.lineTo(x+w-r, flip(top));
+    p.quadraticCurveTo(x+w, flip(top), x+w, flip(top+r));
+    p.lineTo(x+w, flip(top+h-r)); p.quadraticCurveTo(x+w, flip(top+h), x+w-r, flip(top+h));
+    p.lineTo(x+r, flip(top+h)); p.quadraticCurveTo(x, flip(top+h), x, flip(top+h-r));
+    p.lineTo(x, flip(top+r)); p.quadraticCurveTo(x, flip(top), x+r, flip(top));
+    ctx.stroke(p);
+    ctx.globalAlpha = alpha * 0.85; ctx.lineWidth = 0.9;
+    const cw=2.4, gap=1.4, total=3*cw+2*gap;
+    for (let i=0;i<3;i++){
+      const sx = x + (w-total)/2 + i*(cw+gap);
+      ctx.strokeRect(sx, flip(top+4.6), cw, 2.0);
+      ctx.strokeRect(sx, flip(top+7.8), cw, 2.0);
+    }
+    ctx.restore();
+  }
+
+  number(text, size, color, alpha){
+    const ctx = this.ctx;
+    ctx.save(); ctx.globalAlpha = alpha;
+    ctx.fillStyle = color; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    ctx.font = `600 ${size}px "SF Pro Display", -apple-system, sans-serif`;
+    ctx.fillText(text, 56, 112 - 70);
+    ctx.restore();
+  }
+
+  /** cyTop: 文本框中心在设计稿里的 y（自上往下），便于和数字基线对齐 */
+  text(str, size, color, cyTop, alpha){
+    const ctx = this.ctx;
+    ctx.save(); ctx.globalAlpha = alpha;
+    ctx.fillStyle = color; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font = `600 ${size}px "SF Pro Text", "PingFang SC", -apple-system, sans-serif`;
+    ctx.fillText(str, 56, 112 - cyTop);
+    ctx.restore();
+  }
+
+  rail(kind, height, sweep){
+    const ctx = this.ctx, flip = y => 112 - y;
+    const x=24, w=64, cy=92, y = flip(cy + height/2);
+    const rr = (rx, ry, rw, rh, rad) => {
+      ctx.beginPath();
+      ctx.moveTo(rx+rad, ry); ctx.arcTo(rx+rw, ry, rx+rw, ry+rh, rad);
+      ctx.arcTo(rx+rw, ry+rh, rx, ry+rh, rad); ctx.arcTo(rx, ry+rh, rx, ry, rad);
+      ctx.arcTo(rx, ry, rx+rw, ry, rad); ctx.closePath();
+    };
+    ctx.save();
+    if (kind === 'idle') {
+      ctx.fillStyle = 'rgba(247,166,172,.30)'; rr(x,y,w,height,height/2); ctx.fill();
+      ctx.beginPath(); ctx.fillStyle = 'rgba(247,166,172,.62)';
+      ctx.arc(x+w-1, flip(cy), 1.7, 0, Math.PI*2); ctx.fill();
+    } else if (kind === 'warn') {
+      rr(x,y,w,height,height/2); ctx.save(); ctx.clip();
+      ctx.fillStyle='rgba(245,186,76,.22)'; ctx.fillRect(x,y,w,height);
+      ctx.strokeStyle='rgba(245,186,76,.62)'; ctx.lineWidth=1.1;
+      for (let i=-height;i<w+height;i+=4){
+        ctx.beginPath();
+        ctx.moveTo(x+i, y+height); ctx.lineTo(x+i+height, y); ctx.stroke();
+      }
+      ctx.restore();
+    } else if (kind === 'retry') {
+      ctx.fillStyle='rgba(245,186,76,.20)'; rr(x,y,w,height,height/2); ctx.fill();
+      rr(x,y,w,height,height/2); ctx.save(); ctx.clip();
+      const seg=18, pos = x + (w+seg)*(sweep||0) - seg;
+      const g = ctx.createLinearGradient(pos,0,pos+seg,0);
+      g.addColorStop(0,'rgba(245,186,76,.15)'); g.addColorStop(.5,'rgba(245,186,76,.95)');
+      g.addColorStop(1,'rgba(245,186,76,.15)');
+      ctx.fillStyle=g; ctx.fillRect(pos,y,seg,height); ctx.restore();
+    }
+    ctx.restore();
+  }
+}
+
+const variants = { a:'a', b:'b', c:'c', d:'d', e:'e' };
+for (const [id, kind] of Object.entries(variants)) new Tile(document.getElementById(id)).draw(kind);
+new Tile(document.getElementById('real-a')).draw('a');
+new Tile(document.getElementById('real-normal')).draw('normal');
+new Tile(document.getElementById('real-press')).draw('retry');
+</script>
+</body>
+</html>

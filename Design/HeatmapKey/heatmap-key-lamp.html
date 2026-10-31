@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>热力图键 · 灯带版（L1–L5）</title>
+<style>
+  :root{--bg:#0f0e0d;--ink:#f5f3f1;--ink2:rgba(245,243,241,.62);--ink3:rgba(245,243,241,.38);
+        --warn:#f5ba4c;--red:#ff4d4f;--green:#34c759}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:400 13px/1.6 -apple-system,"PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased;padding:28px 28px 60px}
+  h1{margin:0 0 4px;font-size:17px;font-weight:600}
+  h2{margin:26px 0 10px;font-size:12.5px;color:var(--ink2);font-weight:600;letter-spacing:.3px}
+  p.sub{margin:0;color:var(--ink2);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;max-width:1360px}
+  @media (max-width:1200px){.grid{grid-template-columns:repeat(3,1fr)}}
+  .card{background:#171615;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:11px}
+  .card h3{margin:0 0 8px;font-size:11.5px;font-weight:600;color:var(--ink2)}
+  .card h3 b{font-family:ui-monospace,Menlo,monospace;margin-right:6px;font-size:12px}
+  .card canvas{display:block;width:100%;height:auto;border-radius:10px;background:#1b1918}
+  .card p{margin:8px 0 0;color:var(--ink3);font-size:11px;line-height:1.45;min-height:44px}
+  table{width:100%;max-width:1100px;border-collapse:collapse;font-size:12px;margin-top:8px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+  th{color:var(--ink3);font-weight:500;font-size:11px}
+  td code{font:500 11px ui-monospace,Menlo,monospace;color:var(--ink2)}
+  .rd{color:var(--red)} .gr{color:var(--green)} .gy{color:rgba(255,255,255,.5)}
+  #check{margin-top:12px;font:11.5px ui-monospace,Menlo,monospace;color:#9ad7a4;white-space:pre}
+</style>
+</head>
+<body>
+  <h1>灯带版：状态轨 = 一条灯</h1>
+  <p class="sub">统一 8px 粗 · 常态白灯 · 中断红灯 · 重试红闪 · 恢复绿闪两下 → 白灯 · 未运行灰灯 + 「X」</p>
+
+  <h2>L1–L5</h2>
+  <div class="grid">
+    <div class="card"><h3><b>L1</b>白灯（记录中）</h3><canvas class="t" data-k="L1" width="112" height="112"></canvas>
+      <p>常亮。数值变化只由主内容的滚动动画表达，灯不带节奏。</p></div>
+    <div class="card"><h3><b class="rd">L2</b>红灯常亮（中断）</h3><canvas class="t" data-k="L2" width="112" height="112"></canvas>
+      <p>无斜纹、无呼吸，就是一条红灯。主内容变「已中断」。</p></div>
+    <div class="card"><h3><b class="rd">L3</b>红灯闪烁（重试中）</h3><canvas class="t" data-k="L3" width="112" height="112"></canvas>
+      <p>亮 6 帧 / 灭 6 帧（12fps，1 秒一轮）。主内容「重试中」。</p></div>
+    <div class="card"><h3><b class="gr">L4</b>绿灯闪两下（恢复成功）</h3><canvas class="t" data-k="L4" width="112" height="112"></canvas>
+      <p>亮 3 / 灭 3 ×2（1 秒），然后回 L1 白灯。主内容同步换回数字。</p></div>
+    <div class="card"><h3><b class="gy">L5</b>灰灯（未运行）</h3><canvas class="t" data-k="L5" width="112" height="112"></canvas>
+      <p>低亮度灰灯，主内容显示灰色「X」。</p></div>
+  </div>
+
+  <h2>规格</h2>
+  <table>
+    <tr><th style="width:60px">编号</th><th style="width:150px">灯态</th><th style="width:190px">颜色 / 强度</th><th style="width:170px">节拍</th><th>主内容</th></tr>
+    <tr><td><b>L1</b></td><td>白灯常亮</td><td><code>#FFFFFF</code> 92% + 外发光</td><td>静止</td><td>数字（<b>C1</b>）</td></tr>
+    <tr><td><b class="rd">L2</b></td><td>红灯常亮</td><td><code>#FF4D4F</code> 95%</td><td>静止</td><td>已中断（<b>C2</b>）</td></tr>
+    <tr><td><b class="rd">L3</b></td><td>红灯闪烁</td><td><code>#FF4D4F</code>，0↔95%</td><td>6 帧亮 / 6 帧灭（1s）</td><td>重试中（<b>C3</b>）</td></tr>
+    <tr><td><b class="gr">L4</b></td><td>绿灯闪两下</td><td><code>#34C759</code>，0↔95%</td><td>3 亮 / 3 灭，重复 2 次（1s）</td><td>数字（<b>C1</b>）</td></tr>
+    <tr><td><b class="gy">L5</b></td><td>灰灯</td><td><code>#8E8A87</code> 55%</td><td>静止</td><td>X（<b>C4</b>，灰色）</td></tr>
+  </table>
+
+  <h2>动效预览（L3 红闪 / L4 绿闪）</h2>
+  <div class="grid" style="grid-template-columns:repeat(2,1fr);max-width:560px">
+    <div class="card"><h3><b class="rd">L3</b> 红闪 · 12 帧</h3><canvas id="animL3" width="112" height="112"></canvas><p>循环播放</p></div>
+    <div class="card"><h3><b class="gr">L4</b> 绿闪两下 · 12 帧</h3><canvas id="animL4" width="112" height="112"></canvas><p>播完停在白灯</p></div>
+  </div>
+
+  <h2>几何</h2>
+  <table>
+    <tr><th style="width:120px">元件</th><th>参数</th></tr>
+    <tr><td><b>① 状态轨</b> <code>rail</code></td><td>x 24–88（宽 64），中心 y=20，<b>厚度统一 8</b>，圆角 4；外发光半径 7，发光颜色 = 灯色</td></tr>
+    <tr><td><b>② 主内容</b> <code>content</code></td><td>中心 (56, 58)；数值 34px / 文字 28px / 「X」34px 灰色</td></tr>
+  </table>
+  <div id="check"></div>
+
+<script>
+'use strict';
+const C = { bg:'#1b1918', ink:'#ffffff', warn:'#f5ba4c', red:'#ff4d4f', green:'#34c759', gray:'#8e8a87' };
+const G = { rail:{x:24, w:64, cy:20, h:8}, content:{cx:56, cy:58} };
+const WASH = 0.06;
+
+function base(ctx, S){
+  ctx.fillStyle = C.bg; ctx.fillRect(0,0,S,S);
+  let g = ctx.createRadialGradient(20, 8, 2, 20, 8, 72);
+  g.addColorStop(0,'rgba(245,186,76,.10)'); g.addColorStop(1,'rgba(245,186,76,0)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,S,S);
+  g = ctx.createLinearGradient(0,0,0,42);
+  g.addColorStop(0,'rgba(255,255,255,.055)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,S,42);
+  ctx.fillStyle = `rgba(245,186,76,${WASH})`; ctx.fillRect(0,0,S,S);
+}
+
+/** 灯：圆角条 + 外发光 + 顶部高光，intensity 0…1 */
+function lamp(ctx, color, intensity, blur){
+  if (intensity <= 0.01) return;
+  const {x, w, cy, h} = G.rail, y = cy - h/2;
+  ctx.save();
+  ctx.globalAlpha = intensity;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur ?? 7;
+  ctx.shadowOffsetY = 0;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, h/2); ctx.fill();
+  ctx.shadowBlur = 0;
+  // 灯管上沿高光，做出"发光体"的厚度
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, 'rgba(255,255,255,.35)');
+  g.addColorStop(.45, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, h/2); ctx.fill();
+  ctx.restore();
+}
+
+function content(ctx, kind){
+  const {cx, cy} = G.content;
+  ctx.save(); ctx.textAlign='center'; ctx.textBaseline='middle';
+  if (kind === 'C2') { ctx.fillStyle=C.warn; ctx.font='600 28px "SF Pro Text","PingFang SC",sans-serif'; ctx.fillText('已中断', cx, cy); }
+  else if (kind === 'C3') { ctx.globalAlpha=.8; ctx.fillStyle=C.warn; ctx.font='600 28px "SF Pro Text","PingFang SC",sans-serif'; ctx.fillText('重试中', cx, cy); }
+  else if (kind === 'C4') { ctx.fillStyle=C.gray; ctx.font='600 34px "SF Pro Display",-apple-system,sans-serif'; ctx.fillText('X', cx, cy); }
+  else { ctx.fillStyle=C.ink; ctx.font='600 34px "SF Pro Display",-apple-system,sans-serif'; ctx.fillText('8432', cx, cy); }
+  ctx.restore();
+}
+
+function draw(ctx, state, blinkOn){
+  base(ctx, 112);
+  switch(state){
+    case 'L1': lamp(ctx, C.ink, 0.92); content(ctx, 'C1'); break;
+    case 'L2': lamp(ctx, C.red, 0.95); content(ctx, 'C2'); break;
+    case 'L3': lamp(ctx, C.red, blinkOn ? 0.95 : 0); content(ctx, 'C3'); break;
+    case 'L4': lamp(ctx, C.green, blinkOn ? 0.95 : 0); content(ctx, 'C1'); break;
+    case 'L5': lamp(ctx, C.gray, 0.55, 4); content(ctx, 'C4'); break;
+  }
+}
+
+document.querySelectorAll('canvas.t').forEach(cv => {
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  draw(ctx, cv.dataset.k, true);
+});
+
+// 动效预览
+const a3 = document.getElementById('animL3').getContext('2d');
+const a4 = document.getElementById('animL4').getContext('2d');
+let f = 0;
+setInterval(() => {
+  f = (f + 1) % 24;
+  draw(a3, 'L3', f % 12 < 6);                       // 亮6/灭6
+  const g = f % 12;                                  // 绿闪：3 亮 / 3 灭 ×2
+  draw(a4, g < 12 ? 'L4' : 'L1', (g % 6) < 3);
+}, 83);
+
+// 自检：灯在顶部（y16–24），底部无元件
+(function(){
+  const cv = document.querySelector('canvas.t'), ctx = cv.getContext('2d', { willReadFrequently: true });
+  const band = (x,y,w,h) => {
+    const d = ctx.getImageData(x,y,w,h).data;
+    let hit=0, tot=0;
+    for (let i=0;i<d.length;i+=4){
+      const diff = Math.abs(d[i]-27)+Math.abs(d[i+1]-25)+Math.abs(d[i+2]-24);
+      tot++; if (diff > 40) hit++;
+    }
+    return hit/tot*100;
+  };
+  const top = band(24,16,64,8), bottom = band(24,88,64,8);
+  document.getElementById('check').textContent =
+    `自检：灯带(y16–24) 覆盖 ${top.toFixed(1)}% · 底部(y88–96) 覆盖 ${bottom.toFixed(1)}% → ` +
+    (top > 60 && bottom < 5 ? '✓ 灯在顶部，8px 厚度' : '✗ 方向或厚度不对');
+})();
+</script>
+</body>
+</html>
