@@ -268,7 +268,7 @@ final class AppModel {
         SceneRouter.installedApps()
     }
 
-    // MARK: - 设备控制动作
+    // MARK: - 合盖休眠锁(设备控制动作的分发已移至 KeyPressRouter)
 
     /// 翻转合盖休眠锁:执行 → 回读 → 更新缓存并重画该键。
     /// 失败不静默:键面回落到真实状态,状态栏留日志,并提示一次授权问题。
