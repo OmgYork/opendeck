@@ -38,7 +38,9 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
             forMainFrameOnly: true
         ))
         configuration.userContentController.addUserScript(WKUserScript(
-            source: Self.bootstrapScript(port: port, pluginUUID: pluginUUID, infoJSON: infoJSON),
+            source: WebviewBootstrap.script(for: .plugin(
+                port: port, pluginUUID: pluginUUID, infoJSON: infoJSON
+            )),
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true
         ))
@@ -244,26 +246,6 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
         }
         RunLoop.main.add(timer, forMode: .common)
         pulseTimer = timer
-    }
-
-    /// 4 参引导:部分 HTML 插件的全局函数由异步脚本定义,轮询就绪后调用,10s 上限放弃
-    private static func bootstrapScript(port: UInt16, pluginUUID: String, infoJSON: String) -> String {
-        """
-        (function() {
-            var app = \(infoJSON);
-            var tries = 0;
-            var timer = setInterval(function() {
-                tries += 1;
-                if (typeof window.connectElgatoStreamDeckSocket === 'function') {
-                    clearInterval(timer);
-                    window.connectElgatoStreamDeckSocket(
-                        '\(port)', '\(pluginUUID)', 'registerPlugin', JSON.stringify(app));
-                } else if (tries > 200) {
-                    clearInterval(timer);
-                }
-            }, 50);
-        })();
-        """
     }
 
     // MARK: - WKNavigationDelegate

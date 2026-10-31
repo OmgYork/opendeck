@@ -20,25 +20,10 @@ struct PropertyInspectorView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        // 引导注入:部分 PI 的全局函数由异步脚本定义,轮询就绪后调用,10s 上限放弃
-        let bootstrap = """
-        (function() {
-            var app = \(appJSON);
-            var info = \(actionInfoJSON);
-            var tries = 0;
-            var timer = setInterval(function() {
-                tries += 1;
-                if (typeof window.connectElgatoStreamDeckSocket === 'function') {
-                    clearInterval(timer);
-                    window.connectElgatoStreamDeckSocket(
-                        \(port), '\(contextID)', 'registerPropertyInspector',
-                        JSON.stringify(app), JSON.stringify(info));
-                } else if (tries > 200) {
-                    clearInterval(timer);
-                }
-            }, 50);
-        })();
-        """
+        // 引导注入:与 HTML 插件页共用同一套轮询骨架(见 WebviewBootstrap)
+        let bootstrap = WebviewBootstrap.script(for: .propertyInspector(
+            port: port, contextID: contextID, appJSON: appJSON, actionInfoJSON: actionInfoJSON
+        ))
         configuration.userContentController.addUserScript(WKUserScript(
             source: bootstrap, injectionTime: .atDocumentEnd, forMainFrameOnly: true
         ))
