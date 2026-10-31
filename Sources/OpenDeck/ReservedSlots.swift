@@ -26,7 +26,8 @@ enum ReservedSlots {
         }
     }
 
-    /// Stats 槽位(索引):GPU 6 / CPU 7 / 温度 8
+    /// Stats 槽位(0-based index):5 = GPU、6 = CPU、7 = 温度
+    /// 面板上第 6/7/8 颗是 1-based 说法,代码里一律用 0-based,勿混淆
     static let statSlots: [(index: Int, kind: StatKind)] = [
         (5, .gpu), (6, .cpu), (7, .temp),
     ]

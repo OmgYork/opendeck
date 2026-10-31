@@ -34,7 +34,6 @@ final class KeyboardHeatmapAnimator {
 
     private var frameTimer: Timer?
     private var pollTimer: Timer?
-    private var breatheTimer: Timer?
     private var retryTimer: Timer?
     private var bridgeObserver: NSObjectProtocol?
     private var activationObservers: [NSObjectProtocol] = []
@@ -71,7 +70,6 @@ final class KeyboardHeatmapAnimator {
         stopFrameTimer()
         stopRetryTimer()
         pollTimer?.invalidate(); pollTimer = nil
-        breatheTimer?.invalidate(); breatheTimer = nil
         if let bridgeObserver {
             DistributedNotificationCenter.default().removeObserver(bridgeObserver)
             self.bridgeObserver = nil

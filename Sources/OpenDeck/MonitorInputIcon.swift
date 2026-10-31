@@ -26,7 +26,7 @@ nonisolated enum MonitorInputSource: String, Codable, Hashable, CaseIterable {
 
     var opposite: MonitorInputSource { self == .mac ? .pc : .mac }
 
-    /// 状态文件 ~/.cache/lg_input 的取值("mac" / "pc",带换行)
+    /// 状态文件 `~/.cache/lg_input` 的取值("mac" / "pc",带换行);路径见 MonitorInputStateFile
     static func parse(_ text: String) -> MonitorInputSource? {
         switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "mac": return .mac
@@ -62,7 +62,6 @@ enum MonitorIconFrame: Equatable {
 /// 无文字:所有语义由形状、位置、颜色与运动承载(小键面上文字会先糊成一团)。
 enum MonitorInputIconRenderer {
     static let designSize: CGFloat = 112
-    nonisolated static let stateFilePath = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/lg_input")
 
     /// - Parameter prerotated: 设备以 180° 显示,下发帧需预旋转;预览导出一律传 false。
     static func image(size: Int, frame: MonitorIconFrame, prerotated: Bool = true) -> CGImage? {

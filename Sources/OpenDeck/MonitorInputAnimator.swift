@@ -11,7 +11,6 @@ import Foundation
 /// 3. 动画结束后轮询状态文件:对上 = 确认;超时没变 = 播一次回退动画(红色闪灯)。
 @MainActor
 final class MonitorInputAnimator {
-    nonisolated static let stateFilePath = MonitorInputIconRenderer.stateFilePath
 
     /// 每帧上屏回调(AppModel 负责写设备 + UI 镜像)
     var onFrame: ((CGImage) -> Void)?
@@ -293,7 +292,7 @@ final class MonitorInputAnimator {
     }
 
     nonisolated private static func readState() -> MonitorInputSource? {
-        guard let text = try? String(contentsOfFile: stateFilePath, encoding: .utf8) else { return nil }
+        guard let text = try? String(contentsOfFile: MonitorInputStateFile.path, encoding: .utf8) else { return nil }
         return MonitorInputSource.parse(text)
     }
 }

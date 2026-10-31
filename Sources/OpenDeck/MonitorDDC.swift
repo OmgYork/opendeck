@@ -45,8 +45,6 @@ nonisolated enum MonitorDDC {
     private static let addrDefault: UInt8 = 0x51
     private static let addrAlternate: UInt8 = 0x50
     private static let ddcWaitMicros: UInt32 = 10_000
-    /// 输入源状态文件（与 ~/bin/lg-toggle.sh 共用，保证两条路径不打架）
-    static let inputStatePath = NSString(string: "~/.cache/lg_input").expandingTildeInPath
 
     // MARK: 对外
 
@@ -108,14 +106,9 @@ nonisolated enum MonitorDDC {
         }
     }
 
-    /// 只读当前值（托盘/键面显示用）
-    static func currentValue(of command: MonitorCommand) -> Int? {
-        try? read(code: command.spec.code).current
-    }
-
     /// 当前输入源（nil = 状态文件缺失/未知）
     static func currentInputIsMac() -> Bool {
-        guard let text = try? String(contentsOfFile: inputStatePath, encoding: .utf8) else { return true }
+        guard let text = try? String(contentsOfFile: MonitorInputStateFile.path, encoding: .utf8) else { return true }
         return text.trimmingCharacters(in: .whitespacesAndNewlines) == "mac"
     }
 
@@ -160,21 +153,6 @@ nonisolated enum MonitorDDC {
         )
     }
 
-    /// 调试用：发一次读请求并原样返回 12 字节回复（不做帧校验）
-    static func rawRead(code: UInt8) -> [UInt8] {
-        guard let service = try? openExternalService() else { return [] }
-        let addr = address(for: code)
-        var request: [UInt8] = [0x82, 0x01, code, 0]
-        request[3] = 0x6E ^ request[0] ^ request[1] ^ request[2]
-        usleep(ddcWaitMicros)
-        var writeBuffer = request
-        _ = IOAVServiceWriteI2C(service, chipAddress, UInt32(addr), &writeBuffer, 4)
-        usleep(ddcWaitMicros)
-        var reply = [UInt8](repeating: 0, count: 12)
-        _ = IOAVServiceReadI2C(service, chipAddress, UInt32(addr), &reply, 12)
-        return reply
-    }
-
     static func write(code: UInt8, value: Int) throws {
         let service = try openExternalService()
         let addr = address(for: code)
@@ -202,7 +180,7 @@ nonisolated enum MonitorDDC {
     }
 
     private static func recordInput(isMac: Bool) {
-        let path = inputStatePath
+        let path = MonitorInputStateFile.path
         try? FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
