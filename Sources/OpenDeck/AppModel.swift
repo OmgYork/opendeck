@@ -53,6 +53,20 @@ final class AppModel {
     let pluginHost = PluginHostModel()
     /// 内建动效键面:显示器输入源(Mac ↔ PC)。全局只有一路输入状态,故单实例。
     let monitorInput = MonitorInputAnimator()
+    /// 内建读数键面:键盘热力图(KeyAnalyze)。同样是单实例,只服务当前页那一颗。
+    let heatmap = KeyboardHeatmapAnimator()
+
+    /// 回调必须在 init 里接上：编辑器 WindowGroup 的 `.onAppear` 会先于 `.task { start() }`
+    /// 调 `applyPageToDevice()`，若等到 start() 才接 hook，首次 attach 的帧会被丢掉。
+    init() {
+        heatmap.onFrame = { [weak self] image in
+            guard let self, let index = self.heatmap.activeIndex else { return }
+            self.setKeyImage(index: index, image: image)
+        }
+        heatmap.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
+    }
 
     /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)
     private(set) var officialAppRunning = false
@@ -63,6 +77,11 @@ final class AppModel {
     let keyImageSlots: [KeyImageSlot] = (0..<(StreamDock293S.rows * StreamDock293S.columns)).map { _ in KeyImageSlot() }
     /// 最近设备日志(尾部最新),仅供状态栏展示,环形保留一屏即可
     private(set) var recentLogs: [String] = []
+    /// 合盖休眠锁状态缓存(nil = 还没读到)。只作渲染用;真实值以 pmset 为准,
+    /// 每次切换后由 SleepGuard 的回读结果覆盖,不做乐观翻转。
+    private(set) var sleepGuardEnabled: Bool?
+    /// 「缺授权」提示每会话只弹一次:反复按键不该反复打断
+    private var didWarnSleepGuard = false
 
     private var started = false
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
@@ -132,6 +151,13 @@ final class AppModel {
         monitorInput.onLog = { [weak self] line in
             self?.appendLog(line)
         }
+        heatmap.onFrame = { [weak self] image in
+            guard let self, let index = self.heatmap.activeIndex else { return }
+            self.setKeyImage(index: index, image: image)
+        }
+        heatmap.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
 
         device.onLog = { [weak self] line in
             self?.appendLog(line)
@@ -168,6 +194,16 @@ final class AppModel {
             }
             // 其余动作只在按下沿触发,抬起沿不重复执行
             guard event.phase == .down, let action else { return }
+            // 热力图键:读数与状态都在 animator 里,按下只转发给它自己的入口
+            if case .keyboardHeatmap = action {
+                self.heatmap.handlePress()
+                return
+            }
+            // 合盖休眠锁:要跑 sudo 并回读,独立异步路径(不阻塞按键回调,也不进 ActionRunner)
+            if case .sleepGuard = action {
+                Task { await self.toggleSleepGuard(at: index) }
+                return
+            }
             // 设备控制动作(页面/亮度/熄屏)本地消化,不经 ActionRunner
             if self.handleDeviceAction(action) { return }
             // 动效键面:先起动画,再照常执行动作(乐观展示,状态文件随后对账)
@@ -193,6 +229,8 @@ final class AppModel {
             appendLog("亮度跟随开启中,自动熄屏已关闭(两者互斥)")
         }
         startScreenOffWatchdog()
+        // 合盖休眠锁:读真实状态并回显到绑定键(nil 期间键面显示「⋯」)
+        refreshSleepGuardState()
     }
 
     /// 应用退出时收割插件进程并释放设备,挂到 applicationWillTerminate
@@ -325,6 +363,52 @@ final class AppModel {
 
     // MARK: - 设备控制动作
 
+    /// 翻转合盖休眠锁:执行 → 回读 → 更新缓存并重画该键。
+    /// 失败不静默:键面回落到真实状态,状态栏留日志,并提示一次授权问题。
+    private func toggleSleepGuard(at index: Int) async {
+        switch await SleepGuard.toggle() {
+        case .success(let enabled):
+            sleepGuardEnabled = enabled
+            appendLog("合盖休眠锁 → \(enabled ? "开(合盖不睡)" : "关(合盖休眠)")")
+            applyKey(at: index)
+        case .failure(let error):
+            sleepGuardEnabled = await SleepGuard.currentState()
+            appendLog("合盖休眠锁切换失败:\(error.localizedDescription)")
+            applyKey(at: index)
+            presentSleepGuardAlertOnce(message: error.localizedDescription)
+        }
+    }
+
+    /// 启动时读一次真实状态(异步,不拖慢设备连接),只重画绑了这个动作的键
+    private func refreshSleepGuardState() {
+        Task { [weak self] in
+            let state = await SleepGuard.currentState()
+            guard let self else { return }
+            self.sleepGuardEnabled = state
+            for index in 0..<(StreamDock293S.rows * StreamDock293S.columns) {
+                if case .sleepGuard = Self.resolvedKeyConfig(at: index, config: self.config).action {
+                    self.applyKey(at: index)
+                }
+            }
+        }
+    }
+
+    private func presentSleepGuardAlertOnce(message: String) {
+        guard !didWarnSleepGuard else { return }
+        didWarnSleepGuard = true
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "合盖休眠锁不可用"
+        alert.informativeText = """
+            \(message)
+
+            需要一次性安装免密规则(只放行 pmset disablesleep 的 0/1 两个取值):
+            \(SleepGuard.sudoersPath)
+            """
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+    }
+
     /// 页面/亮度/熄屏类动作:纯本地状态操作。返回 true 表示已消化
     private func handleDeviceAction(_ action: KeyAction) -> Bool {
         switch action {
@@ -370,6 +454,12 @@ final class AppModel {
             if let image { setKeyImage(index: index, image: image) }
             return
         }
+        // 热力图键:整帧由读数键的 animator 驱动,同样跳过常规渲染
+        if case .keyboardHeatmap = key.action {
+            heatmap.attach(index: index, size: StreamDock293S.keySize(column: column))
+            return
+        }
+        heatmap.detach(ifIndex: index)
         // 内建动效键:整帧由动画驱动,跳过常规「底色 + 底图 + 标题」渲染
         if key.animation == .monitorInput {
             monitorInput.attach(index: index, size: StreamDock293S.keySize(column: column))
@@ -379,11 +469,26 @@ final class AppModel {
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
         let title: String?
         let iconPath: String?
+        var backgroundHex = key.backgroundColorHex
         if case .pageIndicator = key.action {
             if let info = config.currentPagePositionInScene {
                 title = "\(info.position + 1)/\(info.count)"
             } else {
                 title = nil
+            }
+            iconPath = nil
+        } else if case .sleepGuard = key.action {
+            // 合盖休眠锁:键面即状态。绿=已禁止合盖休眠,灰=正常休眠,蓝灰=尚未读到
+            switch sleepGuardEnabled {
+            case true:
+                title = "睡眠锁 ON"
+                backgroundHex = "#2E7D32"
+            case false:
+                title = "睡眠锁 OFF"
+                backgroundHex = "#3B4252"
+            case nil:
+                title = "睡眠锁 ⋯"
+                backgroundHex = "#4C566A"
             }
             iconPath = nil
         } else {
@@ -392,7 +497,7 @@ final class AppModel {
         }
         guard let image = IconRenderer.render(
             size: StreamDock293S.keySize(column: column),
-            backgroundColorHex: key.backgroundColorHex,
+            backgroundColorHex: backgroundHex,
             title: title,
             iconPath: iconPath,
             symbolName: key.action?.defaultIconSymbol
@@ -409,6 +514,9 @@ final class AppModel {
 
     /// 编辑器实时预览:动效键的静息帧(已预旋转,KeycapView 会转回正立)
     func animationPreviewFrame(for key: KeyConfig) -> CGImage? {
+        if case .keyboardHeatmap = key.action {
+            return heatmap.previewImage(size: StreamDock293S.keySize(column: 0))
+        }
         guard key.animation == .monitorInput else { return nil }
         return monitorInput.previewImage(size: StreamDock293S.keySize(column: 0))
     }

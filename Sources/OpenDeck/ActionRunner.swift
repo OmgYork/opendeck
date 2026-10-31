@@ -206,8 +206,8 @@ enum ActionRunner {
             if case .failed(let message) = outcome {
                 report(ActionError.processFailed(command: "DDC \(command.rawValue)", exitCode: -1, stderr: message))
             }
-        case .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff:
-            break // 插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction,均不经此分发
+        case .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff, .sleepGuard, .keyboardHeatmap:
+            break // 插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction;热力图键走 KeyboardHeatmapAnimator
         }
     }
 

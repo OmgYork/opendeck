@@ -21,11 +21,17 @@ enum KeyAction: Codable, Hashable {
     case gotoPage(pageID: UUID)         // 前往指定页(按 Page.id 稳定引用;选择器已移除,兼容旧配置)
     case pageIndicator                  // 页面指示键:动态显示 "N/M"
     case screenOff                      // 熄屏(任意按键唤醒)
+    /// 合盖休眠锁(pmset -a disablesleep):按下即读当前态取反。
+    /// 需要 /etc/sudoers.d/pmset-disablesleep 免密放行；执行与回读见 SleepGuard。
+    case sleepGuard
     /// 插件动作:pluginID = .sdPlugin 目录名去后缀(= manifest UUID),contextID = 实例身份
     /// (分配时生成的 UUID,持久化于此,跨重启稳定;settings 存 pluginSettings/<pluginID>.json)
     case plugin(pluginID: String, actionUUID: String, contextID: String)
     /// 显示器 DDC/CI 动作(亮度/对比度/锐度/响应时间/输入源…):由 ActionRunner 直连显示器执行
     case monitor(MonitorCommand)
+    /// 键盘热力图键:读数来自 KeyAnalyze 自己的库,状态来自它自己的桥接/日志,
+    /// 按下转发给它自己的入口(打开 dashboard / 重试统计)。见 KeyboardHeatmap*.swift
+    case keyboardHeatmap
 }
 
 struct KeyConfig: Codable, Hashable {

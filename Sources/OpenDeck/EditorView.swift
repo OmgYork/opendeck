@@ -744,7 +744,9 @@ private struct KeyEditView: View {
         case .gotoPage: break // 旧动作类型不再提供编辑,重新保存即清除
         case .pageIndicator: kind = .pageIndicator
         case .screenOff: kind = .screenOff
+        case .sleepGuard: kind = .sleepGuard
         case .monitor(let command): kind = .monitor; monitorCommand = command
+        case .keyboardHeatmap: kind = .heatmap
         case nil: break
         }
         _kind = State(initialValue: kind)
@@ -990,6 +992,12 @@ private struct KeyEditView: View {
             }
         case .plugin:
             pluginActionForm
+        case .heatmap:
+            LabeledContent("说明") {
+                Text("键面显示 KeyAnalyze 的今日按键数：常态按下打开 dashboard，中断态按下触发它的「重试统计」。数据与状态都取自该应用自身，不自建统计。")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .monitor:
             LabeledContent("功能") {
                 Picker("", selection: $monitorCommand) {
@@ -1023,6 +1031,11 @@ private struct KeyEditView: View {
             LabeledContent("说明") { Text("键面实时显示当前页码(N/M),随页面切换自动刷新").foregroundStyle(.secondary) }
         case .screenOff:
             LabeledContent("说明") { Text("面板黑屏待机,按任意键唤醒(该次按压不触发动作)").foregroundStyle(.secondary) }
+        case .sleepGuard:
+            LabeledContent("说明") {
+                Text("切换合盖是否休眠(pmset disablesleep)。键面实时回显:绿=合盖不睡,灰=正常休眠。需要 sudoers 免密规则;缺授权时按键会弹一次提示。")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1143,6 +1156,8 @@ private struct KeyEditView: View {
             assembledPluginAction
         case .monitor:
             .monitor(monitorCommand)
+        case .heatmap:
+            .keyboardHeatmap
         case .previousPage:
             .previousPage
         case .nextPage:
@@ -1155,6 +1170,8 @@ private struct KeyEditView: View {
             .pageIndicator
         case .screenOff:
             .screenOff
+        case .sleepGuard:
+            .sleepGuard
         }
     }
 
@@ -1207,8 +1224,10 @@ enum ActionKind: Hashable, CaseIterable {
     case nextScene
     case pageIndicator
     case screenOff
+    case sleepGuard
     case plugin
     case monitor
+    case heatmap
 
     var label: String {
         switch self {
@@ -1226,8 +1245,10 @@ enum ActionKind: Hashable, CaseIterable {
         case .nextScene: "下一场景"
         case .pageIndicator: "页面指示"
         case .screenOff: "熄屏"
+        case .sleepGuard: "合盖休眠锁"
         case .plugin: "插件动作"
         case .monitor: "显示器（DDC）"
+        case .heatmap: "键盘热力图（读取 KeyAnalyze）"
         }
     }
 }

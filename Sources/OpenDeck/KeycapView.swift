@@ -204,8 +204,10 @@ enum ActionStyle {
         case .gotoPage: "number.square"
         case .pageIndicator: "rectangle.split.2x2"
         case .screenOff: "moon.zzz"
+        case .sleepGuard: "moon.zzz.fill"
         case .plugin: "puzzlepiece.extension"
         case .monitor(let command): command.symbol
+        case .keyboardHeatmap: "square.grid.3x3.fill"
         }
     }
 
@@ -225,8 +227,10 @@ enum ActionStyle {
         case .gotoPage: "前往页面"
         case .pageIndicator: "页面指示"
         case .screenOff: "熄屏"
+        case .sleepGuard: "合盖休眠锁"
         case .plugin: "插件"
         case .monitor(let command): command.title
+        case .keyboardHeatmap: "键盘热力图"
         }
     }
 }
