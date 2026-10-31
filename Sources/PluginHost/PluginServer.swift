@@ -118,7 +118,7 @@ public final class PluginServer: @unchecked Sendable {
             }
         }
         guard bindResult == 0, listen(descriptor, 8) == 0 else {
-            onError!("监听失败 errno=\(errno)")
+            onError?("监听失败 errno=\(errno)")
             Darwin.close(descriptor)
             return
         }
@@ -128,7 +128,7 @@ public final class PluginServer: @unchecked Sendable {
         guard getsockname(descriptor, withUnsafeMutablePointer(to: &boundAddress) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
         }, &length) == 0 else {
-            onError!("getsockname 失败")
+            onError?("getsockname 失败")
             Darwin.close(descriptor)
             return
         }
@@ -264,7 +264,7 @@ public final class PluginServer: @unchecked Sendable {
                   .trimmingCharacters(in: .whitespaces) as String?,
               !clientKey.isEmpty
         else {
-            onError!("非法 WebSocket 升级请求")
+            onError?("非法 WebSocket 升级请求")
             finish(connection)
             return
         }
@@ -303,10 +303,22 @@ public final class PluginServer: @unchecked Sendable {
             offset = 4
         } else if length == 127 {
             guard data.count >= 10 else { return nil }
-            length = 0
+            // 64 位长度逐字节累积:普通 << 在溢出时直接 trap 整个宿主进程,必须用
+            // 报溢出的安全算术;合法帧(最大 ~22KB)也远小于缓冲上限,超限即敌意
+            // 帧头,当场熔断断连——不能只返回 nil 等收齐:对端只发 10 字节帧头时
+            // inbox 永远不涨,32MB 熔断永远够不着
+            var accumulated = 0
             for byte in bytes[2..<10] {
-                length = length << 8 | Int(byte)
+                let (shifted, shiftOverflow) = accumulated.multipliedReportingOverflow(by: 256)
+                let (added, addOverflow) = shifted.addingReportingOverflow(Int(byte))
+                guard !shiftOverflow, !addOverflow, added <= Self.bufferLimitBytes else {
+                    serverLog.error("server: 64 位帧长度超限/溢出,熔断 fd=\(connection.fileDescriptor)")
+                    finish(connection)
+                    return nil
+                }
+                accumulated = added
             }
+            length = accumulated
             offset = 10
         }
         var maskKey: [UInt8] = []

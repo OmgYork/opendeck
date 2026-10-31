@@ -21,7 +21,8 @@ enum HeatmapStoreError: Error, Equatable {
     case queryFailed(String)
 }
 
-enum HeatmapStore {
+/// nonisolated:读库是同步 SQLite(busy_timeout 400ms),只允许从后台线程调用
+nonisolated enum HeatmapStore {
     static let bundleID = "com.gouqinglin.keyanalyze"
 
     static var databaseURL: URL {
@@ -81,7 +82,9 @@ struct HeatmapBridgeState {
     var updatedAt: Date?
 }
 
-enum HeatmapProbe {
+/// nonisolated:桥接 JSON 读盘与 OSLog 扫描都是阻塞 IO,只允许从后台线程调用
+/// (openApp/send 走 DistributedNotification/NSWorkspace,线程安全,主线程调用亦可)
+nonisolated enum HeatmapProbe {
     /// 与 KeyAnalyze fork 里的 Bridge 常量一致
     static let stateNotification = Notification.Name("com.gouqinglin.keyanalyze.bridge.state")
     static let commandNotification = Notification.Name("com.gouqinglin.keyanalyze.bridge.cmd")
@@ -113,11 +116,11 @@ enum HeatmapProbe {
     /// `Event tap recovery failed` = 进了 .attention；`... recovered` = 自愈了。
     ///
     /// 代价控制：OSLogStore 查询会阻塞调用线程，所以结果缓存 60 秒、窗口只取 6 小时；
-    /// 装了桥接的版本根本不会走到这里。
-    private static var lifecycleCache: (at: Date, failed: Date?, recovered: Date?)?
+    /// 装了桥接的版本根本不会走到这里。缓存用锁包:采样可能从不同后台任务并发进来。
+    private static let lifecycleCache = OSAllocatedUnfairLock<(at: Date, failed: Date?, recovered: Date?)?>(initialState: nil)
 
     static func latestLifecycleEvent(since: Date) -> (failed: Date?, recovered: Date?) {
-        if let cache = lifecycleCache, Date().timeIntervalSince(cache.at) < 60 {
+        if let cache = lifecycleCache.withLock({ $0 }), Date().timeIntervalSince(cache.at) < 60 {
             return (cache.failed, cache.recovered)
         }
         let window = max(since, Date().addingTimeInterval(-6 * 3600))
@@ -134,7 +137,8 @@ enum HeatmapProbe {
             if message.contains("Event tap recovery failed") { failed = entry.date }
             if message.contains("Event tap was interrupted and recovered") { recovered = entry.date }
         }
-        lifecycleCache = (Date(), failed, recovered)
+        let snapshot = (at: Date(), failed: failed, recovered: recovered)
+        lifecycleCache.withLock { $0 = snapshot }
         return (failed, recovered)
     }
 

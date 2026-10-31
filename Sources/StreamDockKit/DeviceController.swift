@@ -248,7 +248,7 @@ public final class DeviceController {
 
     /// 诊断:追踪每个实际写入的报文(harness 与参考实现的字节流 diff 用)
     public func enableWriteTrace(_ trace: @escaping @Sendable ([UInt8]) -> Void) {
-        transport.onWrite = trace
+        transport.setWriteTrace(trace)
     }
 
     /// 唤醒屏幕并按缓存全量重画(设备自行休眠/重插后的恢复手段)

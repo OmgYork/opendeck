@@ -66,6 +66,22 @@ nonisolated enum ActionExecutor {
         "shift": .maskShift,
     ]
 
+    /// 修饰键作为主键(单按右⌘等)时:keyCode → (功能位, 设备相关位)。
+    /// 设备位取值 HIToolbox/Events.h 的 NX_DEVICExxxKEYMASK:注入修饰键 keyDown/keyUp
+    /// 只设功能位(如 .maskCommand)不够,区分左右键的接收方(Raycast/BTT 等)读设备位
+    /// 判断是哪颗物理键。fn 无设备位,只有 kCGEventFlagMaskSecondaryFn 功能位。
+    static let modifierKeyMasks: [Int: (mask: CGEventFlags, deviceBits: CGEventFlags)] = [
+        54: (.maskCommand, CGEventFlags(rawValue: 0x10)),     // 右⌘ NX_DEVICERCMDKEYMASK
+        55: (.maskCommand, CGEventFlags(rawValue: 0x08)),     // 左⌘ NX_DEVICELCMDKEYMASK
+        56: (.maskShift, CGEventFlags(rawValue: 0x02)),       // 左⇧ NX_DEVICELSHIFTKEYMASK
+        58: (.maskAlternate, CGEventFlags(rawValue: 0x20)),   // 左⌥ NX_DEVICELALTKEYMASK
+        59: (.maskControl, CGEventFlags(rawValue: 0x01)),     // 左⌃ NX_DEVICELCTLKEYMASK
+        60: (.maskShift, CGEventFlags(rawValue: 0x04)),       // 右⇧ NX_DEVICERSHIFTKEYMASK
+        61: (.maskAlternate, CGEventFlags(rawValue: 0x40)),   // 右⌥ NX_DEVICERALTKEYMASK
+        62: (.maskControl, CGEventFlags(rawValue: 0x2000)),   // 右⌃ NX_DEVICERCTLKEYMASK
+        63: (.maskSecondaryFn, []),                           // fn 仅功能位
+    ]
+
     /// 媒体键名 → NX 系统键码(与 IOKit hidsystem 的 NX_KEYTYPE 常量一致)
     static let mediaKeyCodes: [String: Int] = [
         "playPause": 16,
@@ -134,20 +150,30 @@ nonisolated enum ActionExecutor {
         return nil
     }
 
-    /// 合成全局快捷键的按下+抬起(CGEvent 注入,效果等同真实键盘输入)
+    /// 按相位注入单个键盘事件(热键动作语义:按住槽位 = 按住该键,由 AppModel 两沿分别调用)。
+    /// flags 以当前系统合成状态为基底(保留用户物理按住的其他修饰位,最接近真实键盘),
+    /// 再叠加/摘除本键的修饰位;修饰键作主键时同时维护设备相关位。
     @concurrent
-    static func postHotkey(keyCode: Int, modifiers: [String]) async -> ActionError? {
-        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: true),
-              let up = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: false)
+    static func postKeyEvent(keyCode: Int, modifiers: [String], down: Bool) async -> ActionError? {
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: down)
         else {
-            return .eventCreationFailed("快捷键(keyCode=\(keyCode))")
+            return .eventCreationFailed("按键事件(keyCode=\(keyCode), down=\(down))")
         }
-        let flags = modifierFlags(for: modifiers)
-        down.flags = flags
-        up.flags = flags
+        var flags = CGEventSource.flagsState(.combinedSessionState)
+        if let modifier = modifierKeyMasks[keyCode] {
+            if down {
+                flags.insert(modifier.mask)
+                flags.insert(modifier.deviceBits)
+            } else {
+                flags.remove(modifier.mask)
+                flags.remove(modifier.deviceBits)
+            }
+        } else {
+            flags.formUnion(modifierFlags(for: modifiers))
+        }
+        event.flags = flags
         // cghidEventTap:HID 层注入,前台任意 App 均可收到
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        event.post(tap: .cghidEventTap)
         return nil
     }
 
@@ -196,18 +222,33 @@ enum ActionRunner {
                 arguments: ["-e", script],
                 label: "AppleScript"
             ) { report(error) }
-        case .hotkey(let keyCode, let modifiers):
-            await runHotkey(keyCode: keyCode, modifiers: modifiers)
         case .mediaKey(let name):
             postMediaKey(named: name)
         case .monitor(let command):
-            let outcome = MonitorDDC.apply(command)
+            let outcome = await MonitorDDC.apply(command)
             logger.info("monitor \(command.rawValue, privacy: .public) → \(String(describing: outcome), privacy: .public)")
             if case .failed(let message) = outcome {
                 report(ActionError.processFailed(command: "DDC \(command.rawValue)", exitCode: -1, stderr: message))
             }
-        case .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff, .sleepGuard, .keyboardHeatmap:
-            break // 插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction;热力图键走 KeyboardHeatmapAnimator
+        case .hotkey, .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff, .sleepGuard, .keyboardHeatmap:
+            break // 热键由 AppModel 两沿直调 runHotkey(按住槽位=按住该键);插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction;热力图键走 KeyboardHeatmapAnimator
+        }
+    }
+
+    /// 热键 = 键盘按键:AppModel 在设备按下/抬起两沿分别调用(快速点按即一次完整的 tap)
+    static func runHotkey(keyCode: Int, modifiers: [String], down: Bool) async {
+        // 注入全局键盘事件前必须确认辅助功能授权;未授权时系统会静默丢弃事件
+        guard AXIsProcessTrusted() else {
+            report(.accessibilityPermissionRequired)
+            return
+        }
+        // 虚拟键码合法范围兜底:防手改配置传负数/超大值,在 UInt32 转换时崩溃
+        guard (0...255).contains(keyCode) else {
+            report(.invalidHotkeyCode(keyCode))
+            return
+        }
+        if let error = await ActionExecutor.postKeyEvent(keyCode: keyCode, modifiers: modifiers, down: down) {
+            report(error)
         }
     }
 
@@ -230,22 +271,6 @@ enum ActionRunner {
             return
         }
         NSWorkspace.shared.open(url)
-    }
-
-    private static func runHotkey(keyCode: Int, modifiers: [String]) async {
-        // 注入全局键盘事件前必须确认辅助功能授权;未授权时系统会静默丢弃事件
-        guard AXIsProcessTrusted() else {
-            report(.accessibilityPermissionRequired)
-            return
-        }
-        // 虚拟键码合法范围兜底:防手改配置传负数/超大值,在 UInt32 转换时崩溃
-        guard (0...255).contains(keyCode) else {
-            report(.invalidHotkeyCode(keyCode))
-            return
-        }
-        if let error = await ActionExecutor.postHotkey(keyCode: keyCode, modifiers: modifiers) {
-            report(error)
-        }
     }
 
     private static func postMediaKey(named name: String) {

@@ -48,6 +48,38 @@ struct PluginServerTests {
         Darwin.close(client)
     }
 
+    @Test("64 位超长帧头:熔断断连,不崩宿主进程")
+    func maliciousFrameLengthBreaksConnectionNotProcess() async throws {
+        let server = PluginServer()
+        final class Box: @unchecked Sendable {
+            var closed = false
+        }
+        let box = OSAllocatedUnfairLock(initialState: Box())
+        server.onClose = { _ in box.withLock { $0.closed = true } }
+        server.onError = { message in Issue.record("server error: \(message)") }
+
+        server.start()
+        for _ in 0..<150 where server.port == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(server.port != 0, "监听未就绪")
+
+        let client = try await connectAndHandshake(port: server.port)
+        // 恶意帧:text + masked + len=127,后随 8 字节 0xFF(2^64-1,普通 << 会整型溢出 trap)
+        try sendAll(client, Data([0x81, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]))
+
+        // 能走到这里本身就证明没 trap;再等熔断把连接摘掉
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if box.withLock({ $0.closed }) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(box.withLock { $0.closed }, "超长帧头应熔断断连(onClose 未触发)")
+
+        server.stop()
+        Darwin.close(client)
+    }
+
     // MARK: - 极简 RFC6455 客户端(测试专用)
 
     private func connectAndHandshake(port: UInt16) async throws -> Int32 {

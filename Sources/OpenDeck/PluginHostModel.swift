@@ -934,21 +934,33 @@ final class PluginHostModel {
 
     // MARK: - 插件管理器支撑
 
-    func installPlugin(from url: URL) throws -> SDManifest {
-        let manifest = try registry.install(from: url)
+    /// 安装走后台:ditto 解包/整目录拷贝是秒级磁盘 IO,不能占主线程(registry 有锁,Sendable)
+    func installPlugin(from url: URL) async throws -> SDManifest {
+        let registry = self.registry
+        let manifest = try await Task.detached(priority: .userInitiated) {
+            try registry.install(from: url)
+        }.value
         reloadInstalledPlugins()
         return manifest
     }
 
-    func importFromOfficialApp() -> [(name: String, error: String?)] {
-        let results = registry.importFromOfficialDirectory()
+    func importFromOfficialApp() async -> [(name: String, error: String?)] {
+        let registry = self.registry
+        let results = await Task.detached(priority: .userInitiated) {
+            registry.importFromOfficialDirectory()
+        }.value
         reloadInstalledPlugins()
         return results
     }
 
-    func uninstallPlugin(id: String) throws {
+    func uninstallPlugin(id: String) async throws {
         guard let installed = installedPlugins.first(where: { $0.manifest.pluginUUID == id }) else { return }
-        try registry.uninstall(directoryName: installed.manifest.directoryName)
+        let directoryName = installed.manifest.directoryName
+        let registry = self.registry
+        // 目录删除是磁盘 IO,后台执行;下面的运行时对象(webview/进程)清理必须留主线程
+        try await Task.detached(priority: .userInitiated) {
+            try registry.uninstall(directoryName: directoryName)
+        }.value
         settingsStore.removeDocument(pluginUUID: id)
         if let runtime = runtimes[id] {
             runtime.process?.terminate()

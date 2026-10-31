@@ -138,7 +138,7 @@ struct PluginManagerSheet: View {
         Task {
             defer { busyMessage = nil }
             do {
-                let manifest = try host.installPlugin(from: url)
+                let manifest = try await host.installPlugin(from: url)
                 importSummary = "已安装 \(manifest.name) v\(manifest.version)"
             } catch {
                 importSummary = "安装失败:\(String(describing: error))"
@@ -150,7 +150,7 @@ struct PluginManagerSheet: View {
         busyMessage = "正在从官方 StreamDock 导入插件…"
         Task {
             defer { busyMessage = nil }
-            let results = host.importFromOfficialApp()
+            let results = await host.importFromOfficialApp()
             if results.isEmpty {
                 importSummary = "官方目录没有可导入的 Node 插件"
             } else {
@@ -163,11 +163,15 @@ struct PluginManagerSheet: View {
     }
 
     private func uninstall(_ plugin: InstalledPlugin) {
-        do {
-            try host.uninstallPlugin(id: plugin.manifest.pluginUUID)
-            importSummary = "已卸载 \(plugin.manifest.name)"
-        } catch {
-            importSummary = "卸载失败:\(String(describing: error))"
+        busyMessage = "正在卸载…"
+        Task {
+            defer { busyMessage = nil }
+            do {
+                try await host.uninstallPlugin(id: plugin.manifest.pluginUUID)
+                importSummary = "已卸载 \(plugin.manifest.name)"
+            } catch {
+                importSummary = "卸载失败:\(String(describing: error))"
+            }
         }
     }
 }

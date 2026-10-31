@@ -12,19 +12,19 @@ import IOKit
 // 0xF4（LG 输入源）走备用寻址 0x50，其余走 0x51。
 
 @_silgen_name("IOAVServiceCreate")
-private func IOAVServiceCreate(_ allocator: CFAllocator?) -> CFTypeRef?
+nonisolated private func IOAVServiceCreate(_ allocator: CFAllocator?) -> CFTypeRef?
 
 @_silgen_name("IOAVServiceCreateWithService")
-private func IOAVServiceCreateWithService(_ allocator: CFAllocator?, _ service: io_service_t) -> CFTypeRef?
+nonisolated private func IOAVServiceCreateWithService(_ allocator: CFAllocator?, _ service: io_service_t) -> CFTypeRef?
 
 @_silgen_name("IOAVServiceReadI2C")
-private func IOAVServiceReadI2C(
+nonisolated private func IOAVServiceReadI2C(
     _ service: CFTypeRef, _ chipAddress: UInt32, _ offset: UInt32,
     _ buffer: UnsafeMutableRawPointer, _ size: UInt32
 ) -> kern_return_t
 
 @_silgen_name("IOAVServiceWriteI2C")
-private func IOAVServiceWriteI2C(
+nonisolated private func IOAVServiceWriteI2C(
     _ service: CFTypeRef, _ chipAddress: UInt32, _ dataAddress: UInt32,
     _ buffer: UnsafeMutableRawPointer, _ size: UInt32
 ) -> kern_return_t
@@ -35,7 +35,10 @@ enum MonitorOutcome: Sendable {
     case failed(String)
 }
 
-enum MonitorDDC {
+/// nonisolated:一次动作是「读→算→写→读回」链,含 3 次重试 × 双写 × usleep(10–60ms),
+/// 最重数百毫秒——绝不能落主线程(按键回调/UI/animator 会整体停摆),全链在并发池执行
+/// (模式同 SleepGuard/ActionExecutor)。
+nonisolated enum MonitorDDC {
     /// DDC 芯片地址（I2C 七位地址 << 1，m1ddc 同值）
     private static let chipAddress: UInt32 = 0x37
     /// 默认寻址字节 / LG 0xF4 备用寻址字节
@@ -47,8 +50,9 @@ enum MonitorDDC {
 
     // MARK: 对外
 
-    /// 执行一条语义动作：读当前值 → 算目标值 → 写 → 读回校验
-    static func apply(_ command: MonitorCommand) -> MonitorOutcome {
+    /// 执行一条语义动作：读当前值 → 算目标值 → 写 → 读回校验（并发池执行,勿在主线程同步等）
+    @concurrent
+    static func apply(_ command: MonitorCommand) async -> MonitorOutcome {
         let spec = command.spec
         do {
             switch spec.op {

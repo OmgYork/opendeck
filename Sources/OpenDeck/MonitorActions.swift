@@ -16,7 +16,7 @@ import UniformTypeIdentifiers
 //   pending   = 私有码语义未知，仍未接线
 
 /// 托盘分组（顺序即渲染顺序；composite 置顶）
-enum MonitorGroup: String, CaseIterable, Identifiable {
+nonisolated enum MonitorGroup: String, CaseIterable, Identifiable, Sendable {
     case composite
     case picture
     case game
@@ -36,9 +36,9 @@ enum MonitorGroup: String, CaseIterable, Identifiable {
     }
 }
 
-/// 单条动作的 DDC 语义
-struct MonitorSpec {
-    enum Op {
+/// 单条动作的 DDC 语义(纯值,无隔离要求)
+nonisolated struct MonitorSpec: Sendable {
+    nonisolated enum Op: Sendable {
         /// 相对调节：当前值 + delta，钳制在 0…max
         case step(Int)
         /// 直接写固定值
@@ -57,7 +57,7 @@ struct MonitorSpec {
     var disruptive: Bool = false
 }
 
-enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Sendable {
+nonisolated enum MonitorCommand: String, Codable, Hashable, CaseIterable, Identifiable, Sendable {
     // 画面 · 亮度 / 对比 / 锐度
     case brightnessDown
     case brightnessUp

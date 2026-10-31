@@ -10,6 +10,17 @@ VERSION="0.1.0"
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
 
+# 构建溯源:记录被编译的源码状态,让 dist/OpenDeck.app 能回答"我是哪个 commit"。
+# 只看 mirabox 子树——父仓库是 ShortcutGeneral,它的改动与本 app 无关,不该误报 dirty。
+BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+if [ -n "$(git status --porcelain --untracked-files=no -- . 2>/dev/null)" ]; then
+  BUILD_STATE="dirty"            # 已跟踪文件有未提交改动:二进制无法对应任何 commit
+elif [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then
+  BUILD_STATE="dirty+untracked"  # 源码与 HEAD 一致,但目录里有未入库文件
+else
+  BUILD_STATE="clean"
+fi
+
 echo "▸ 1/5 编译 release"
 swift build -c release
 
@@ -31,6 +42,7 @@ sips -z 1024 1024 "$ICON_PNG" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
 iconutil -c icns "$ICONSET" -o "$DIST/AppIcon.icns"
 
 echo "▸ 3/5 组装 .app"
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/OpenDeck "$APP/Contents/MacOS/$APP_NAME"
@@ -49,6 +61,9 @@ cat > "$APP/Contents/Info.plist" << PLIST
     <key>CFBundlePackageType</key>         <string>APPL</string>
     <key>CFBundleShortVersionString</key>  <string>$VERSION</string>
     <key>CFBundleVersion</key>             <string>1</string>
+    <key>OpenDeckBuildCommit</key>         <string>$BUILD_COMMIT</string>
+    <key>OpenDeckBuildState</key>          <string>$BUILD_STATE</string>
+    <key>OpenDeckBuildTime</key>           <string>$BUILD_TIME</string>
     <key>LSMinimumSystemVersion</key>      <string>26.0</string>
     <key>LSApplicationCategoryType</key>   <string>public.app-category.utilities</string>
     <key>NSPrincipalClass</key>            <string>NSApplication</string>

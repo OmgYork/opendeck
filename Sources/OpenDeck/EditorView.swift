@@ -1237,7 +1237,7 @@ enum ActionKind: Hashable, CaseIterable {
         case .runShortcut: "运行快捷指令"
         case .shellScript: "Shell 脚本"
         case .appleScript: "AppleScript"
-        case .hotkey: "全局热键"
+        case .hotkey: "键盘按键（热键）"
         case .mediaKey: "媒体控制"
         case .previousPage: "上一页"
         case .nextPage: "下一页"
@@ -1438,6 +1438,11 @@ private struct ModalSwipeSuppression: ViewModifier {
 private final class HotkeyCaptureMonitor {
     private var token: Any?
 
+    /// solo 候选:已按下、尚未伴随主键或其他修饰键的修饰键码(单按修饰键录制的判定状态)
+    private var soloModifiers: Set<Int> = []
+    /// 本轮出现过第二个修饰键或任何主键:之后的修饰键「按下再松开」不再视为单键录制
+    private var soloSequenceBroken = false
+
     var onCapture: ((Int, [String]) -> Void)?
     var onCancel: (() -> Void)?
     var onModifiersChanged: ((String) -> Void)?
@@ -1455,6 +1460,8 @@ private final class HotkeyCaptureMonitor {
             NSEvent.removeMonitor(token)
         }
         token = nil
+        soloModifiers = []
+        soloSequenceBroken = false
     }
 
     /// 返回 nil 表示吞掉该事件(录制期间按键不应再触发输入框/快捷键)
@@ -1462,6 +1469,7 @@ private final class HotkeyCaptureMonitor {
         switch event.type {
         case .flagsChanged:
             onModifiersChanged?(HotkeySymbols.modifierPreview(for: event.modifierFlags))
+            trackSoloModifier(event)
             return nil
         case .keyDown:
             // ⎋ 语义 = 取消录制:⎋ 本身几乎不会被设为热键,还能避免顺带关闭 Sheet
@@ -1476,6 +1484,28 @@ private final class HotkeyCaptureMonitor {
             return nil
         default:
             return event
+        }
+    }
+
+    /// 单按修饰键录制:修饰键「单独按下 → 松开」(期间无任何主键、无第二个修饰键)
+    /// 即录制为该键本身(如右⌘ = hotkey(54, []),让槽位可以模拟单颗修饰键)。
+    /// 修饰键按下/抬起只有 flagsChanged 事件:keyCode 指明是哪颗键,
+    /// 该键的功能位在 modifierFlags 里置位 = 按下、清位 = 松开。
+    private func trackSoloModifier(_ event: NSEvent) {
+        let code = Int(event.keyCode)
+        guard let mask = HotkeySymbols.modifierMasksByKeyCode[code] else { return } // 非修饰键(如大写锁定)不参与
+        if event.modifierFlags.contains(mask) {
+            if !soloModifiers.isEmpty { soloSequenceBroken = true } // 组合键积累中,不是单按
+            soloModifiers.insert(code)
+        } else {
+            // 松开时恰好是全程单独按住的这一颗 → 录制为单键
+            if soloModifiers == [code], !soloSequenceBroken {
+                end()
+                onCapture?(code, [])
+                return
+            }
+            soloModifiers.remove(code)
+            if soloModifiers.isEmpty { soloSequenceBroken = false } // 全部松开,下一轮重新判定
         }
     }
 }
@@ -1519,7 +1549,7 @@ private struct HotkeyCaptureField: View {
     private var display: some View {
         if recording {
             Label(
-                livePreview.isEmpty ? "请按下组合键,⎋ 取消" : "\(livePreview) …",
+                livePreview.isEmpty ? "按下组合键,或单独按下再松开修饰键;⎋ 取消" : "\(livePreview) … 松开修饰键即录制",
                 systemImage: "record.circle"
             )
             .foregroundStyle(.orange)
@@ -1572,6 +1602,20 @@ enum HotkeySymbols {
         118: "F4", 119: "End", 120: "F2", 122: "F1",
         115: "Home", 116: "PageUp", 121: "PageDown",
         123: "←", 124: "→", 125: "↓", 126: "↑",
+        // 修饰键(kVK_RightCommand…kVK_Function):可单独绑定为热键主键(如右⌘触发器)
+        54: "右⌘", 55: "左⌘", 56: "左⇧", 58: "左⌥", 59: "左⌃",
+        60: "右⇧", 61: "右⌥", 62: "右⌃", 63: "fn",
+    ]
+
+    /// 修饰键键码 → modifierFlags 里的功能位(左右同位)。
+    /// flagsChanged 事件的 keyCode 指明是哪颗物理键,该位在 modifierFlags 里置位 = 按下。
+    /// 大写锁定(57)等锁存键不在表内,不参与单键录制。
+    static let modifierMasksByKeyCode: [Int: NSEvent.ModifierFlags] = [
+        54: .command, 55: .command,
+        56: .shift, 60: .shift,
+        58: .option, 61: .option,
+        59: .control, 62: .control,
+        63: .function,
     ]
 
     static func displayString(keyCode: Int, modifiers: [String]) -> String {

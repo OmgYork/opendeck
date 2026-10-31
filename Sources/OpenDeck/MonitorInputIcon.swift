@@ -5,7 +5,7 @@ import Foundation
 
 /// 显示器输入源。动效的母题是「信号在两个源之间搬家」,不是显示器开关:
 /// 槽位 1 的 Toggle Monitor 实际切换 LG 27GP95U 的 DP(Mac)↔ HDMI1(PC)。
-enum MonitorInputSource: String, Codable, Hashable, CaseIterable {
+nonisolated enum MonitorInputSource: String, Codable, Hashable, CaseIterable {
     case mac
     case pc
 
@@ -62,7 +62,7 @@ enum MonitorIconFrame: Equatable {
 /// 无文字:所有语义由形状、位置、颜色与运动承载(小键面上文字会先糊成一团)。
 enum MonitorInputIconRenderer {
     static let designSize: CGFloat = 112
-    static let stateFilePath = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/lg_input")
+    nonisolated static let stateFilePath = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/lg_input")
 
     /// - Parameter prerotated: 设备以 180° 显示,下发帧需预旋转;预览导出一律传 false。
     static func image(size: Int, frame: MonitorIconFrame, prerotated: Bool = true) -> CGImage? {

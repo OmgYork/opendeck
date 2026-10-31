@@ -11,7 +11,7 @@ import Foundation
 /// 3. 动画结束后轮询状态文件:对上 = 确认;超时没变 = 播一次回退动画(红色闪灯)。
 @MainActor
 final class MonitorInputAnimator {
-    static let stateFilePath = MonitorInputIconRenderer.stateFilePath
+    nonisolated static let stateFilePath = MonitorInputIconRenderer.stateFilePath
 
     /// 每帧上屏回调(AppModel 负责写设备 + UI 镜像)
     var onFrame: ((CGImage) -> Void)?
@@ -181,8 +181,25 @@ final class MonitorInputAnimator {
         pollTimer = timer
     }
 
+    /// 轮询代数:后台读盘完成时若已有更新一轮在读,旧结果丢弃(乱序应用会误判外部切换)
+    private var pollGeneration = 0
+
     private func pollState() {
-        guard activeIndex != nil, let disk = Self.readState() else { return }
+        guard activeIndex != nil else { return }
+        pollGeneration += 1
+        let generation = pollGeneration
+        // 状态文件读取放后台:虽是小文件,但每 1.5s 一次的同步 IO 不该占主线程
+        Task.detached(priority: .utility) { [weak self] in
+            let disk = Self.readState()
+            await MainActor.run { [weak self] in
+                guard let self, self.pollGeneration == generation else { return }
+                self.applyDiskState(disk)
+            }
+        }
+    }
+
+    private func applyDiskState(_ disk: MonitorInputSource?) {
+        guard let disk else { return }
 
         if let pending {
             if disk == pending.target {
@@ -275,7 +292,7 @@ final class MonitorInputAnimator {
         onFrame?(image)
     }
 
-    private static func readState() -> MonitorInputSource? {
+    nonisolated private static func readState() -> MonitorInputSource? {
         guard let text = try? String(contentsOfFile: stateFilePath, encoding: .utf8) else { return nil }
         return MonitorInputSource.parse(text)
     }

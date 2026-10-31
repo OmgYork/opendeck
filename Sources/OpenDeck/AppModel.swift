@@ -55,16 +55,29 @@ final class AppModel {
     let monitorInput = MonitorInputAnimator()
     /// 内建读数键面:键盘热力图(KeyAnalyze)。同样是单实例,只服务当前页那一颗。
     let heatmap = KeyboardHeatmapAnimator()
+    /// Stats 瓷贴节拍器(CPU/GPU/温度,三颗保留槽整帧刷新)
+    let statTiles = StatTileAnimator()
 
-    /// 回调必须在 init 里接上：编辑器 WindowGroup 的 `.onAppear` 会先于 `.task { start() }`
-    /// 调 `applyPageToDevice()`，若等到 start() 才接 hook，首次 attach 的帧会被丢掉。
+    /// animator 回调统一在 init 挂接(接入约定):编辑器 WindowGroup 的 `.onAppear`
+    /// 会先于 `.task { start() }` 调 `applyPageToDevice()`,若等到 start() 才接 hook,
+    /// 首次 attach 的帧会被丢掉。三个 animator 同一时机,不在此处区分。
     init() {
+        monitorInput.onFrame = { [weak self] image in
+            guard let self, let index = self.monitorInput.activeIndex else { return }
+            self.setKeyImage(index: index, image: image)
+        }
+        monitorInput.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
         heatmap.onFrame = { [weak self] image in
             guard let self, let index = self.heatmap.activeIndex else { return }
             self.setKeyImage(index: index, image: image)
         }
         heatmap.onLog = { [weak self] line in
             self?.appendLog(line)
+        }
+        statTiles.onFrame = { [weak self] index, image in
+            self?.setKeyImage(index: index, image: image)
         }
     }
 
@@ -86,11 +99,6 @@ final class AppModel {
     private var started = false
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
     private var workspaceObservers: [NSObjectProtocol] = []
-    /// Stats 集成:采样器(CPU/GPU/温度)与 2s 刷新定时器
-    private let statSampler = StatSampler()
-    private var statTimer: Timer?
-    /// 最近一次采样(UI 网格占位帧与定时刷新共用)
-    private(set) var lastStatSample: StatSample?
     /// App Nap 断言:菜单栏 app 长期无窗口时会被整进程挂起,插件 webview 的
     /// 定时器/轮询随之冻结(HTML 家族无界面可见性,尤甚)。设备心跳与插件宿主
     /// 是本 app 的存在意义,进程常驻即业务,断言与进程同生命周期。
@@ -109,10 +117,8 @@ final class AppModel {
             options: [.userInitiated],
             reason: "OpenDeck:设备心跳与插件宿主常驻"
         )
-        // Stats 集成:2s 采样,统计瓷贴整帧刷新(设备 + UI 镜像同源)
-        statTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshStatTiles() }
-        }
+        // Stats 集成:瓷贴节拍器接管采样与整帧刷新(设备 + UI 镜像同源)
+        statTiles.start(slots: Self.statSlots)
 
         refreshOfficialAppFlag()
         observeWorkspaceApplications()
@@ -142,22 +148,7 @@ final class AppModel {
             self?.appendLog(line)
         }
         pluginHost.start()
-
-        // 动效键面:帧回调落到当前挂载的键位(设备 + UI 镜像同源)
-        monitorInput.onFrame = { [weak self] image in
-            guard let self, let index = self.monitorInput.activeIndex else { return }
-            self.setKeyImage(index: index, image: image)
-        }
-        monitorInput.onLog = { [weak self] line in
-            self?.appendLog(line)
-        }
-        heatmap.onFrame = { [weak self] image in
-            guard let self, let index = self.heatmap.activeIndex else { return }
-            self.setKeyImage(index: index, image: image)
-        }
-        heatmap.onLog = { [weak self] line in
-            self?.appendLog(line)
-        }
+        // 动效键面(animator)的帧回调已在 init 挂接,这里只启动各自的节拍
 
         device.onLog = { [weak self] line in
             self?.appendLog(line)
@@ -190,6 +181,11 @@ final class AppModel {
             // 插件动作:按下/抬起两沿都转发(协议要求),不走原生动作执行器
             if case .plugin = action {
                 self.pluginHost.handleKey(index: index, phase: event.phase)
+                return
+            }
+            // 热键 = 键盘按键:按下沿 keyDown、抬起沿 keyUp(按住槽位 = 按住该键;单按修饰键如右⌘也走这里)
+            if case .hotkey(let keyCode, let modifiers) = action {
+                Task { await ActionRunner.runHotkey(keyCode: keyCode, modifiers: modifiers, down: event.phase == .down) }
                 return
             }
             // 其余动作只在按下沿触发,抬起沿不重复执行
@@ -447,11 +443,11 @@ final class AppModel {
         // 固定导航键:无视配置,强制导航动作(配置里这两格的内容不渲染、不建实例)
         let key = Self.resolvedKeyConfig(at: index, config: config)
         pluginHost.syncKey(at: index, action: key.action)
-        // Stats 槽:整帧由采样定时器覆盖,这里先上占位帧(采样值或 "--")
+        // Stats 槽:整帧由瓷贴节拍器覆盖,这里先上占位帧(采样值或 "--")
         if case .stat(let kind) = Self.reservedSlot(at: index) {
-            let image = StatTileRenderer.tile(kind: kind, value: statValueText(kind))
-                ?? StatTileRenderer.tile(kind: kind, value: "--")
-            if let image { setKeyImage(index: index, image: image) }
+            if let image = statTiles.placeholderTile(kind: kind) {
+                setKeyImage(index: index, image: image)
+            }
             return
         }
         // 热力图键:整帧由读数键的 animator 驱动,同样跳过常规渲染
@@ -765,34 +761,6 @@ final class AppModel {
         NSWorkspace.shared.runningApplications
             .first { $0.bundleIdentifier == Self.officialBundleID }?
             .terminate()
-    }
-
-    // MARK: - Stats 集成
-
-    /// 统计瓷贴取值文本:无数据显示 "--"
-    private func statValueText(_ kind: StatKind) -> String {
-        guard let sample = lastStatSample else { return "--" }
-        switch kind {
-        case .gpu: return sample.gpu.map { "\($0)%" } ?? "--"
-        case .cpu: return sample.cpu.map { "\($0)%" } ?? "--"
-        case .temp: return sample.temp.map { "\(Int($0.rounded()))°" } ?? "--"
-        }
-    }
-
-    /// 后台采样 → 主线程整帧刷新统计瓷贴(设备 + UI 镜像同源)
-    private func refreshStatTiles() {
-        let sampler = statSampler
-        Task.detached(priority: .utility) { [weak self] in
-            let sample = sampler.sample()
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                lastStatSample = sample
-                for (index, kind) in Self.statSlots {
-                    guard let image = StatTileRenderer.tile(kind: kind, value: statValueText(kind)) else { continue }
-                    setKeyImage(index: index, image: image)
-                }
-            }
-        }
     }
 
     // MARK: - 登录项

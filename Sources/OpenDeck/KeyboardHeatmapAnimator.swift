@@ -183,17 +183,45 @@ final class KeyboardHeatmapAnimator {
 
     // MARK: 采样
 
+    /// 采样代数:轮询(10s)与重试(1s)两条路径都会触发采样,后台读库完成时若已有
+    /// 更新一轮在读,旧结果直接丢弃——乱序应用会让相位日志与灯效来回跳
+    private var sampleGeneration = 0
+
+    /// 全部采样 IO 在后台:SQLite 读(busy_timeout 400ms)+ 桥接 JSON + 相位收敛
+    /// (桥接缺失时相位收敛还会扫 6 小时 OSLog)——任何一项都不可上主线程
     private func refresh(force: Bool = false) {
         guard activeIndex != nil else { return }
-        let reading = HeatmapStore.readToday()
-        let truth = Phase(rawValue: HeatmapProbe.phase(reading: reading).rawValue) ?? .off
+        sampleGeneration += 1
+        let generation = sampleGeneration
+        Task.detached(priority: .utility) { [weak self] in
+            let reading = HeatmapStore.readToday()
+            let bridge = HeatmapProbe.bridgeState()
+            let truth = HeatmapProbe.phase(reading: reading)
+            await MainActor.run { [weak self] in
+                guard let self, self.sampleGeneration == generation else { return }
+                self.applySample(
+                    reading: reading,
+                    bridgeToday: bridge?.today,
+                    truth: Phase(rawValue: truth.rawValue) ?? .off,
+                    force: force
+                )
+            }
+        }
+    }
 
+    /// 采样结果应用到灯效状态机(主线程)
+    private func applySample(
+        reading: Result<HeatmapReading, HeatmapStoreError>,
+        bridgeToday: Int64?,
+        truth: Phase,
+        force: Bool
+    ) {
         var value: Int64 = shownValue
         switch reading {
         case let .success(data): value = data.today
         case .failure: break
         }
-        if let bridge = HeatmapProbe.bridgeState(), let bridgeToday = bridge.today, bridgeToday > value {
+        if let bridgeToday, bridgeToday > value {
             value = bridgeToday
         }
 

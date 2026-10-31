@@ -1,4 +1,6 @@
-import Foundation
+// @preconcurrency:CFRunLoopPerformBlock 的 block 参数未标 Sendable,捕获 CFRunLoop
+// 等跨线程值时会产生噪音诊断;捕获内容经锁/信号量保护(见 stop 注释)
+@preconcurrency import Foundation
 @preconcurrency import IOKit
 @preconcurrency import IOKit.hid
 
@@ -34,8 +36,16 @@ final class HIDTransport: @unchecked Sendable {
     var onDeviceAttached: (@Sendable () -> Void)?
     var onDeviceDetached: (@Sendable () -> Void)?
     var onLog: (@Sendable (String) -> Void)?
-    /// 每次成功写入的报文追踪(诊断用;在写线程触发)
-    var onWrite: (@Sendable ([UInt8]) -> Void)?
+    /// 每次成功写入的报文追踪(诊断用;在写线程触发)。
+    /// 运行中会被设置(harness 诊断),读写都走锁——无锁直赋会与写线程构成数据竞争
+    private var onWrite: (@Sendable ([UInt8]) -> Void)?
+
+    /// 设置写入追踪回调(任意时刻调用安全)
+    func setWriteTrace(_ trace: (@Sendable ([UInt8]) -> Void)?) {
+        lock.lock()
+        onWrite = trace
+        lock.unlock()
+    }
 
     // MARK: - 生命周期
 
@@ -83,36 +93,53 @@ final class HIDTransport: @unchecked Sendable {
         started = false
         heartbeatTimer?.cancel()
         heartbeatTimer = nil
-
-        if let dev = device {
-            // 与已入队的写命令保序:关闭动作排到串行队列尾执行。
-            // 有界等待:设备固件无响应时 IOHIDDeviceClose 可能永久阻塞,不能拖死调用方
-            // (此 SDK 中注销回调的参数非 Optional,无法传 nil;IOHIDDeviceClose 即注销一切)
-            let closed = DispatchSemaphore(value: 0)
-            writeQueue.async { [weak self] in
-                guard let self else { return }
-                IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
-                if let rl = self.lock.withLock({ self.runLoop }) {
-                    IOHIDDeviceUnscheduleFromRunLoop(dev, rl, CFRunLoopMode.defaultMode.rawValue)
-                }
-                closed.signal()
-            }
-            _ = closed.wait(timeout: .now() + 1)
-        }
-        if let manager, let runLoop {
-            IOHIDManagerRegisterDeviceMatchingCallback(manager, nil, nil)
-            IOHIDManagerRegisterDeviceRemovalCallback(manager, nil, nil)
-            IOHIDManagerUnscheduleFromRunLoop(manager, runLoop, CFRunLoopMode.defaultMode.rawValue)
-            CFRunLoopStop(runLoop)
-        }
-        inputBuffer?.deallocate()
-        inputBuffer = nil
-        inputBufferLength = 0
-        device = nil
-        manager = nil
-        runLoop = nil
-        callbackBox = nil
+        let dev = device
+        let mgr = manager
+        let rl = runLoop
         lock.unlock()
+
+        guard let rl else { return } // start 从未完成调度:无 runloop 可串行化,状态已清
+
+        // 关停全部搬到 runloop 线程串行执行:与 attach/detach/report 回调同一线程排队,
+        // 一次性消除三组竞态——① stop 与 handlePossibleAttach 并发会留下未关句柄/复活心跳;
+        // ② 此前在调用线程 deallocate 输入缓冲,runloop 里迟到的 reportCallback 仍持该指针
+        //    (use-after-free);③ 注销与在途回调交错。
+        let finished = DispatchSemaphore(value: 0)
+        CFRunLoopPerformBlock(rl, "kCFRunLoopDefaultMode" as CFString) { [weak self] in
+            defer { finished.signal() }
+            guard let self else { return }
+            // 与在途写保序:close 排到串行写队列尾(设备固件无响应时 IOHIDDeviceClose
+            // 可能永久阻塞,不能在 runloop 线程同步等)
+            if let dev {
+                self.writeQueue.async {
+                    IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+                    IOHIDDeviceUnscheduleFromRunLoop(dev, rl, CFRunLoopMode.defaultMode.rawValue as CFString)
+                }
+            }
+            if let mgr {
+                IOHIDManagerRegisterDeviceMatchingCallback(mgr, nil, nil)
+                IOHIDManagerRegisterDeviceRemovalCallback(mgr, nil, nil)
+                IOHIDManagerUnscheduleFromRunLoop(mgr, rl, CFRunLoopMode.defaultMode.rawValue as CFString)
+            }
+            // 此刻就在 runloop 线程,绝无并发 reportCallback:释放输入缓冲安全
+            self.lock.lock()
+            self.inputBuffer?.deallocate()
+            self.inputBuffer = nil
+            self.inputBufferLength = 0
+            self.device = nil
+            self.manager = nil
+            self.callbackBox = nil
+            self.runLoop = nil
+            self.lock.unlock()
+            // 在 perform 末尾停 runloop:保证清理先于退出,CFRunLoopStop 不会把本块丢掉
+            CFRunLoopStop(rl)
+        }
+        CFRunLoopWakeUp(rl)
+        // 有界等待:runloop 已死的极端情形不拖死调用方;超时则保守放弃缓冲释放
+        // (泄漏一块 512B 缓冲换不崩,此路径只在进程退出时走,可接受)
+        if finished.wait(timeout: .now() + 2) == .timedOut {
+            onLog?("传输层停止超时(runloop 未响应),已放弃缓冲释放")
+        }
     }
 
     // MARK: - 写入(串行队列,保序)
@@ -132,7 +159,8 @@ final class HIDTransport: @unchecked Sendable {
 
     private func performWrite(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
-        let dev = lock.withLock { device }
+        // device 与 onWrite 同锁读取:onWrite 可在运行中被设置,无锁读是数据竞争
+        let (dev, trace) = lock.withLock { (device, onWrite) }
         guard let dev else { return }
         let kr = bytes.withUnsafeBufferPointer { buf -> IOReturn in
             guard let base = buf.baseAddress else { return kIOReturnError }
@@ -141,7 +169,7 @@ final class HIDTransport: @unchecked Sendable {
         if kr != kIOReturnSuccess {
             onLog?(String(format: "写入失败 0x%08x(%d 字节)", kr, bytes.count))
         } else {
-            onWrite?(bytes)
+            trace?(bytes)
         }
     }
 
