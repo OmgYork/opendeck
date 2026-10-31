@@ -1,6 +1,6 @@
 #!/bin/bash
 # make-app — 把 OpenDeck 组装成 macOS .app 包(dist/OpenDeck.app)
-# 用法:./make-app.sh(在 mirabox/ 目录下执行)
+# 用法:./make-app.sh(在仓库根目录下执行;本仓库即独立项目,2026-10-31 自 ShortcutGeneral 拆分而来)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -11,7 +11,7 @@ DIST="dist"
 APP="$DIST/$APP_NAME.app"
 
 # 构建溯源:记录被编译的源码状态,让 dist/OpenDeck.app 能回答"我是哪个 commit"。
-# 只看 mirabox 子树——父仓库是 ShortcutGeneral,它的改动与本 app 无关,不该误报 dirty。
+# 仓库根即项目根,`-- .` 覆盖全部源码。
 BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 if [ -n "$(git status --porcelain --untracked-files=no -- . 2>/dev/null)" ]; then
   BUILD_STATE="dirty"            # 已跟踪文件有未提交改动:二进制无法对应任何 commit

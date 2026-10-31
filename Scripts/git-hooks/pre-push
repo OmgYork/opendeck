@@ -13,7 +13,8 @@
 
 set -e
 
-# 脚本所在仓库的 mirabox 目录(本脚本位于 mirabox/Scripts/git-hooks/)
+# 脚本所在的工程根(本脚本位于 <工程根>/Scripts/git-hooks/,上两级即工程根——
+# 独立仓库时工程根=仓库根;拆分前的嵌套布局下同为 mirabox/,两层深度不变)
 HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 APP_DIR=$(CDPATH= cd -- "$HOOK_DIR/../.." && pwd)
 # hook 名优先取转发器注入的环境变量:转发器 exec 后 $0 已变成本脚本自身路径,认不出源头
