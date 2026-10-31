@@ -57,14 +57,27 @@ final class AppModel {
     let statTiles = StatTileAnimator()
     /// 亮度域:背光、内屏亮度读取、跟随轮询、0% 涂黑与回涂黑、空闲熄屏看门狗
     let brightness: BrightnessCoordinator
+    /// 场景/页面路由域:两级导航、场景与页面增删、按前台应用联动
+    let sceneRouter: SceneRouter
 
     /// animator 回调统一在 init 挂接(接入约定):编辑器 WindowGroup 的 `.onAppear`
     /// 会先于 `.task { start() }` 调 `applyPageToDevice()`,若等到 start() 才接 hook,
     /// 首次 attach 的帧会被丢掉。三个 animator 同一时机,不在此处区分。
     init() {
+        // 先构造全部协调器(捕获 self 的前提是存储属性已全部初始化),再统一挂钩子
         brightness = BrightnessCoordinator(device: device, config: config)
+        sceneRouter = SceneRouter(config: config, device: device)
         brightness.onLog = { [weak self] line in
             self?.appendLog(line)
+        }
+        sceneRouter.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
+        sceneRouter.applyPage = { [weak self] in
+            self?.applyPageToDevice()
+        }
+        sceneRouter.isEditorWindowVisible = { [weak self] in
+            self?.editorWindowVisible ?? true
         }
         monitorInput.onFrame = { [weak self] image in
             guard let self, let index = self.monitorInput.activeIndex else { return }
@@ -231,126 +244,70 @@ final class AppModel {
         device.shutdown()
     }
 
-    // MARK: - 场景与页面(两级)
+    // MARK: - 场景与页面(两级，转发到场景路由协调器)
 
     /// 切换到指定场景;同场景重复切换无副作用
     func switchScene(to id: UUID) {
-        guard let index = config.indexOfScene(id: id), index != config.config.currentSceneIndex else { return }
-        config.setCurrentSceneIndex(index)
-        applyPageToDevice()
+        sceneRouter.switchScene(to: id)
     }
 
     /// 循环切换场景(上一场景/下一场景;落到目标场景第一页)
     func switchScene(offset: Int) {
-        guard let target = config.targetSceneIndex(offset: offset) else { return }
-        config.setCurrentSceneIndex(target)
-        applyPageToDevice()
+        sceneRouter.switchScene(offset: offset)
     }
 
     /// 切换到指定页(跨场景按 Page.id 定位;圆点点击直达用)
     func switchPage(to id: UUID) {
-        guard let location = config.pageLocation(id: id) else { return }
-        guard location.sceneIndex != config.config.currentSceneIndex
-                || location.pageIndex != config.config.currentPageIndex else { return }
-        config.setCurrentSceneIndex(location.sceneIndex)
-        config.currentPageIndex = location.pageIndex
-        applyPageToDevice()
+        sceneRouter.switchPage(to: id)
     }
 
     /// 场景内循环翻页(上一页/下一页)
     func switchPage(offset: Int) {
-        guard let target = config.targetPageIndex(offset: offset) else { return }
-        config.currentPageIndex = target
-        applyPageToDevice()
+        sceneRouter.switchPage(offset: offset)
     }
 
     func addScene() {
-        let id = config.addScene()
-        switchScene(to: id)
+        sceneRouter.addScene()
     }
 
     func duplicateScene(id: UUID) {
-        _ = config.duplicateScene(id: id)
+        sceneRouter.duplicateScene(id: id)
     }
 
     /// 删除场景;若删的是当前场景(索引被回退),设备需重画新当前场景
     func deleteScene(id: UUID) {
-        config.deleteScene(id: id)
-        applyPageToDevice()
+        sceneRouter.deleteScene(id: id)
     }
 
     /// 当前场景加一页(圆点 +1)并切到新页
     func addPageToCurrentScene() {
-        let sceneIndex = config.config.currentSceneIndex
-        guard config.addPage(toSceneIndex: sceneIndex) != nil else { return }
-        config.currentPageIndex = config.currentScene.pages.count - 1
-        applyPageToDevice()
+        sceneRouter.addPageToCurrentScene()
     }
 
     /// 给指定场景加一页(圆点 +1)并切到该场景新页
     func addPage(toScene id: UUID) {
-        guard let sceneIndex = config.indexOfScene(id: id),
-              config.addPage(toSceneIndex: sceneIndex) != nil
-        else { return }
-        switchScene(to: id)
-        config.currentPageIndex = config.currentScene.pages.count - 1
-        applyPageToDevice()
+        sceneRouter.addPage(toScene: id)
     }
 
     /// 删除当前场景内的一页(每场景至少保留 1 页)
     func deletePageInCurrentScene(at pageIndex: Int) {
-        config.deletePage(sceneIndex: config.config.currentSceneIndex, pageIndex: pageIndex)
-        applyPageToDevice()
+        sceneRouter.deletePageInCurrentScene(at: pageIndex)
     }
 
     // MARK: - 场景联动(前台应用自动切换场景)
 
-    /// 编辑器窗口是否可见:官方语义为「应用窗口关闭时」才做前台切换,配置期间不打扰
+    /// 编辑器窗口是否可见:官方语义为「应用窗口关闭时」才做前台切换,配置期间不打扰。
+    /// 存储留在本类(会被 EditorView 写入的可观察属性),路由器按下标读取。
     var editorWindowVisible = true
 
     /// 前台应用变化:优先切到绑定了该应用的场景;无绑定且设了默认场景则回默认场景
     func autoSwitchPageForFrontmostApp() {
-        guard !editorWindowVisible, !device.isScreenOff else { return }
-        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
-        Self.oslog.debug("联动评估:前台=\(bundleID, privacy: .public)")
-        let currentSceneID = config.currentSceneID
-        if let bound = config.sceneBoundToApp(bundleID) {
-            if bound.id != currentSceneID, let id = bound.id {
-                appendLog("场景联动:「\(bundleID)」→ 场景「\(bound.name)」")
-                switchScene(to: id)
-            }
-            return
-        }
-        if let defaultID = config.config.defaultSceneID,
-           defaultID != currentSceneID,
-           config.indexOfScene(id: defaultID) != nil {
-            appendLog("场景联动:「\(bundleID)」无绑定 → 默认场景")
-            switchScene(to: defaultID)
-        }
+        sceneRouter.autoSwitchPageForFrontmostApp()
     }
 
     /// 已安装应用清单(场景联动下拉用;/Applications + /System/Applications,按名称排序)
     nonisolated static func installedApps() -> [(bundleID: String, name: String)] {
-        var directories = FileManager.default.urls(for: .applicationDirectory, in: .systemDomainMask)
-        directories.append(URL(fileURLWithPath: "/System/Applications"))
-        var seen = Set<String>()
-        var apps: [(bundleID: String, name: String)] = []
-        for directory in directories {
-            guard let items = try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: nil
-            ) else { continue }
-            for url in items where url.pathExtension == "app" {
-                guard let bundle = Bundle(url: url), let bundleID = bundle.bundleIdentifier,
-                      bundleID != "com.opendeck.app", !seen.contains(bundleID)
-                else { continue }
-                seen.insert(bundleID)
-                let name = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-                    ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
-                    ?? url.deletingPathExtension().lastPathComponent
-                apps.append((bundleID, name))
-            }
-        }
-        return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        SceneRouter.installedApps()
     }
 
     // MARK: - 设备控制动作
@@ -410,11 +367,7 @@ final class AppModel {
         case .nextScene: switchScene(offset: 1)
         case .gotoPage(let pageID):
             // 兼容旧配置的动作:跨场景按 Page.id 定位
-            if let location = config.pageLocation(id: pageID) {
-                config.setCurrentSceneIndex(location.sceneIndex)
-                config.currentPageIndex = location.pageIndex
-                applyPageToDevice()
-            }
+            sceneRouter.gotoLegacyPage(pageID)
         case .screenOff: device.screenOff()
         case .pageIndicator: break // 纯显示键,按下无操作
         default: return false
@@ -620,7 +573,7 @@ final class AppModel {
             ) { [weak self] _ in
                 Task { @MainActor in
                     self?.refreshOfficialAppFlag()
-                    self?.autoSwitchPageForFrontmostApp()
+                    self?.sceneRouter.autoSwitchPageForFrontmostApp()
                 }
             })
         }
