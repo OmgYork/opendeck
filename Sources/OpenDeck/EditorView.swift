@@ -91,6 +91,7 @@ struct EditorView: View {
             Button("好") {
                 if let id = renameTargetID { appModel.config.renameScene(id: id, to: renameText) }
             }
+            .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty) // 空名:ConfigStore 会静默忽略,这里直接不给按
             Button("取消", role: .cancel) { renameTargetID = nil }
         }
         .sheet(isPresented: $pageBindingSheetShown) {
