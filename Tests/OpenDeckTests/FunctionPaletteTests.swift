@@ -134,6 +134,56 @@ struct FunctionPaletteTests {
     }
 }
 
+/// 组装口径契约(KeyTemplate.assemble 单源):空参不成动作、脚本必须非空、热键需键码。
+/// KeyEditView 与 TemplateConfigSheet 共用这一个函数——漂移即测试失败。
+@Suite("模板组装口径")
+@MainActor
+struct TemplateAssembleTests {
+    private let empty = (appPath: "", urlString: "", shortcutName: "", scriptText: "",
+                         hotkeyKeyCode: Int?.none, hotkeyModifiers: [String]())
+
+    @Test("全空参数:六种模板一律不成动作")
+    func allEmptyYieldsNil() {
+        #expect(KeyTemplate.assemble(.openApp, appPath: empty.appPath, urlString: empty.urlString,
+                                     shortcutName: empty.shortcutName, scriptText: empty.scriptText,
+                                     hotkeyKeyCode: empty.hotkeyKeyCode,
+                                     hotkeyModifiers: empty.hotkeyModifiers) == nil)
+        #expect(KeyTemplate.assemble(.shellScript, appPath: empty.appPath, urlString: empty.urlString,
+                                     shortcutName: empty.shortcutName, scriptText: "",
+                                     hotkeyKeyCode: empty.hotkeyKeyCode,
+                                     hotkeyModifiers: empty.hotkeyModifiers) == nil, "空脚本不成动作")
+        #expect(KeyTemplate.assemble(.hotkey, appPath: empty.appPath, urlString: empty.urlString,
+                                     shortcutName: empty.shortcutName, scriptText: "",
+                                     hotkeyKeyCode: nil,
+                                     hotkeyModifiers: empty.hotkeyModifiers) == nil, "未录制键码不成动作")
+    }
+
+    @Test("填全参数:产出对应动作")
+    func filledYieldsAction() throws {
+        let full = KeyTemplate.assemble(.openApp, appPath: "/Applications/Safari.app",
+                                        urlString: "", shortcutName: "", scriptText: "",
+                                        hotkeyKeyCode: nil, hotkeyModifiers: [])
+        #expect(full == .openApp(path: "/Applications/Safari.app"))
+
+        let hotkey = KeyTemplate.assemble(.hotkey, appPath: "", urlString: "", shortcutName: "",
+                                          scriptText: "", hotkeyKeyCode: 36,
+                                          hotkeyModifiers: ["command", "shift"])
+        #expect(hotkey == .hotkey(keyCode: 36, modifiers: ["command", "shift"]))
+
+        let script = KeyTemplate.assemble(.appleScript, appPath: "", urlString: "", shortcutName: "",
+                                          scriptText: "beep", hotkeyKeyCode: nil, hotkeyModifiers: [])
+        #expect(script == .appleScript("beep"))
+    }
+
+    @Test("URL 仅去首尾空白,内部空白不截断")
+    func urlTrimmed() {
+        let trimmed = KeyTemplate.assemble(.openURL, appPath: "", urlString: "  https://a.b/c  ",
+                                           shortcutName: "", scriptText: "",
+                                           hotkeyKeyCode: nil, hotkeyModifiers: [])
+        #expect(trimmed == .openURL("https://a.b/c"))
+    }
+}
+
 /// 落键政策纯函数(landingConfig):槽位镜像/草稿消费/目录磁贴三种来源的落键语义。
 /// 这是调色盘拖拽的核心契约——拖错写错场景、克隆抢实例这类事故都在这一层拦截。
 @Suite("落键政策")

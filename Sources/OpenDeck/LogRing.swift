@@ -8,9 +8,9 @@ import os
 /// - oslog:`log stream` / `log show --info` 可取证(.app 后台运行时唯一可用通道)
 /// - 内存环:「运行日志」面板展示尾部 50 条
 ///
-/// 不做 @Observable:环内内容由日志面板/状态栏读取,读取点不在 SwiftUI body 的
-/// 观察路径上(拆分前它也只是 AppModel 的一个普通属性)。
+/// 做 @Observable:「运行日志」面板打开时实时尾随新日志。
 @MainActor
+@Observable
 final class LogRing {
     /// 环容量:诊断面板一屏可读的量级,超出丢最早
     private static let capacity = 50

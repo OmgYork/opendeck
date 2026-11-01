@@ -56,19 +56,21 @@ enum KeyTemplate: String, Codable, Hashable, CaseIterable, Identifiable {
         _ kind: KeyTemplate, appPath: String, urlString: String, shortcutName: String,
         scriptText: String, hotkeyKeyCode: Int?, hotkeyModifiers: [String]
     ) -> KeyAction? {
+        // 含 let 语句的 case 会让 switch 退化成语句形式,全表显式 return
         switch kind {
         case .openApp:
-            appPath.isEmpty ? nil : .openApp(path: appPath)
+            return appPath.isEmpty ? nil : .openApp(path: appPath)
         case .openURL:
-            urlString.trimmingCharacters(in: .whitespaces).isEmpty ? nil : .openURL(urlString)
+            let trimmed = urlString.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? nil : .openURL(trimmed)
         case .runShortcut:
-            shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
+            return shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
         case .shellScript:
-            scriptText.isEmpty ? nil : .shellScript(scriptText)
+            return scriptText.isEmpty ? nil : .shellScript(scriptText)
         case .appleScript:
-            scriptText.isEmpty ? nil : .appleScript(scriptText)
+            return scriptText.isEmpty ? nil : .appleScript(scriptText)
         case .hotkey:
-            hotkeyKeyCode.map { .hotkey(keyCode: $0, modifiers: hotkeyModifiers) }
+            return hotkeyKeyCode.map { .hotkey(keyCode: $0, modifiers: hotkeyModifiers) }
         }
     }
 }
