@@ -59,7 +59,7 @@ Bundle ID：`com.opendeck.app`。源码入口：`Sources/OpenDeck/OpenDeckApp.sw
    open "/Users/yorkli/Downloads/shortcut general/mirabox/dist/OpenDeck.app"
    ```
 2. **不要同时运行官方 StreamDock.app。** OpenDeck 已能检测并提示退出它；你也不要在后台拉起官方 app。
-3. **不要修改保留槽。** 索引 5/6/7（位置 6/7/8）是 GPU/CPU/温度，索引 13/14（位置 14/15）是固定导航键；编辑器禁止编辑，配置里的旧值也不会渲染。
+3. **不要修改保留槽。** 索引 13/14（位置 14/15）是固定导航键；编辑器禁止编辑，配置里的旧值也不会渲染。索引 5/6/7（位置 6/7/8）自 2026-11-01 起不再是保留槽——统计键（GPU/CPU/温度）动作化为 `KeyAction.stat`，可放任意键位、可清除。
 4. **不要手改正在被插件读写的运行时文件。** 例如状态灯的 `state.json` 可以写（这正是契约），但不要删除、替换插件目录内的运行中文件；先退出 app。
 5. **键面图必须是 112×112。** 小于键面的图会被固件锚定到右下角，表现为「左/上空隙大」。单张 JPEG ≤ 10240 字节由宿主自动降质，插件侧不必自己压。
 6. **不要提交（git commit/push）**，除非用户明确要求。文档与代码改完留在工作区即可。
@@ -300,11 +300,10 @@ node <plugin>/plugin/index.js -port <P> -pluginUUID <U> -registerEvent registerP
 
 | 索引 | 位置 | 内容 |
 |---|---|---|
-| 5 | 6 | GPU 利用率（2s 采样） |
-| 6 | 7 | CPU 利用率 |
-| 7 | 8 | 最热 CPU 温度 |
 | 13 | 14 | `↔` 下一场景 |
 | 14 | 15 | `↕` 下一页 |
+
+统计键（GPU/CPU/温度）自 2026-11-01 起是普通动作（`KeyAction.stat`）：从调色盘「系统」分类拖到任意键位即实时刷新，清除即消失，不再固定占用 6/7/8。
 
 2026-10-22 默认场景首页占用（**以 `config.json` 为准**）：
 
@@ -318,7 +317,7 @@ node <plugin>/plugin/index.js -port <P> -pluginUUID <U> -registerEvent registerP
 | 12 | 13 | 壁纸图标 |
 | 13/14 | 14/15 | 保留导航键 |
 
-首页其余空闲键（索引）：3、4、8、11；索引 5/6/7 是保留槽，不算空闲。**加东西前先读配置确认，不要凭这张表猜。**
+首页其余空闲键（索引）：3、4、5、6、7、8、11（5/6/7 自 2026-11-01 统计键动作化后为普通用户槽）。**加东西前先读配置确认，不要凭这张表猜。**
 
 设备与绘制细节：
 
@@ -334,7 +333,7 @@ node <plugin>/plugin/index.js -port <P> -pluginUUID <U> -registerEvent registerP
 
 ```bash
 swift build                 # 增量构建，必须确认 "Build complete"
-swift test                  # 当前 58 个测试，全绿才算通过
+swift test                  # 全部测试（只增不减），全绿才算通过
 ./make-app.sh               # release + 图标 + 组装 dist/OpenDeck.app + ad-hoc 签名
 ```
 

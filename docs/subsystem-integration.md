@@ -31,7 +31,10 @@ Stats 瓷贴）,遵守同一形态:
   - 随页挂卸（单键）:`attach(index:size:)` / `detach(ifIndex:)`,幂等且对称
     （停全部定时器、摘全部通知观察者）;`applyKey` 是全键对账点。
     范本:`KeyboardHeatmapAnimator`、`MonitorInputAnimator`。
-  - 常驻保留槽（多键）:`start(slots:)` 幂等启动,与页面无关。范本:`StatTileAnimator`。
+  - 配置驱动动态槽位（多键）:`start()` 幂等起定时器,槽位清单由
+    `setSlots(_:)` 按当前页配置对账（AppModel.syncStatSlots 在 applyKey 里触发,
+    清单变化立即重渲）。范本:`StatTileAnimator`（2026-11-01 随 `KeyAction.stat`
+    动作化从「常驻保留槽」改为此模式——统计键可放任意键位、可清除）。
 - **节拍**:定时器一律 `Timer(timeInterval:repeats:)` + `RunLoop.main.add(.common)`
   （滚动时不断拍）,并设 `tolerance`（趋势类 0.2~1s）省电。
 - **熄屏/断连**:不做各 animator 自守卫——统一依赖 `DeviceController.drawKey` 的

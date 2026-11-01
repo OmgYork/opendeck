@@ -17,7 +17,7 @@
 cd "/Users/yorkli/Downloads/shortcut general/mirabox"
 
 swift build          # 增量构建
-swift test           # 58 个测试
+swift test           # 全部测试（只增不减）
 ./make-app.sh        # 组装 dist/OpenDeck.app 并 ad-hoc 签名
 
 osascript -e 'quit app "OpenDeck"'
@@ -59,10 +59,11 @@ python3 Scripts/docs_baseline.py diff --full # 附完整 unified diff
 - 插件参数：`~/Library/Application Support/OpenDeck/pluginSettings/`
 - 状态灯模板源码：`Scripts/com.zcode.status.sdPlugin/`
 
-## 当前状态（2026-10-22）
+## 当前状态（2026-11-01）
 
 - 15 键、112×112 JPEG、180° 预旋转；心跳 7s。
-- 官方 HTML/Node 插件宿主、Property Inspector、多页面/场景、Stats 槽 6/7/8。
-- 保留槽：索引 5/6/7（GPU/CPU/温度）、13/14（切场景/翻页）。
+- 官方 HTML/Node 插件宿主、Property Inspector、多页面/场景。
+- 保留槽：仅索引 13/14（切场景/翻页）；统计键（GPU/CPU/温度）已动作化（`KeyAction.stat`），从功能调色盘「系统」分类拖到任意键位即实时刷新，可清除。
+- 功能调色盘：编辑器右列常驻，含自定义（指定槽位实时镜像）/显示器/翻页·场景/媒体控制/系统/模板（待配置）六类。
 - 首页：槽 1 显示器输入动效 + Toggle Monitor，槽 2 ZCode 状态灯，槽 3 Hermes 状态灯。
-- `swift test` 58 测全绿；剩余挂账：官方 HTML 插件逐个视觉适配。
+- `swift test` 全绿；剩余挂账：官方 HTML 插件逐个视觉适配。
