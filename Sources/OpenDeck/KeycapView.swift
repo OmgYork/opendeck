@@ -19,6 +19,25 @@ private enum KeycapImageCache {
     }
 }
 
+/// GIF 底图视图:NSImageView 承载动画 GIF,`animates` 控制播放(悬停即播,离开停回首帧)。
+/// 设备端不受影响——IconRenderer 取 GIF 首帧画静态键面。
+struct GifImageView: NSViewRepresentable {
+    let path: String
+    let animates: Bool
+
+    func makeNSView(context: Context) -> NSImageView {
+        let view = NSImageView()
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.image = NSImage(contentsOfFile: path)
+        view.animates = animates
+        return view
+    }
+
+    func updateNSView(_ view: NSImageView, context: Context) {
+        view.animates = animates
+    }
+}
+
 /// 单键实时镜像槽:设备最近一次写入的键面帧(IconRenderer 合成产物,已预旋转 180°)。
 /// @Observable 按对象粒度追踪——只有读过该槽的 KeycapView 因其变化重绘,网格其余键不动
 @Observable
@@ -89,6 +108,10 @@ struct KeycapView: View {
                         .resizable()
                         .scaledToFit()
                         .rotationEffect(.degrees(180))
+                        .allowsHitTesting(false)
+                } else if let path = config.iconPath, path.hasSuffix(".gif") {
+                    // GIF 底图:常态显示首帧,悬停(交互态)播放——磁贴在盘上不通电原则
+                    GifImageView(path: path, animates: hovering && interactive)
                         .allowsHitTesting(false)
                 } else if let path = config.iconPath, let image = KeycapImageCache.image(at: path) {
                     // scaledToFill 溢出部分由整体 clipShape 裁掉

@@ -958,7 +958,8 @@ final class PluginHostModel {
 
     // MARK: - 插件管理器支撑
 
-    /// 安装走后台:ditto 解包/整目录拷贝是秒级磁盘 IO,不能占主线程(registry 有锁,Sendable)
+    /// 安装走后台:ditto 解包/整目录拷贝是秒级磁盘 IO,不能占主线程
+    /// (registry 的存储属性全为 let,@unchecked Sendable 成立;勿给它加 var)
     func installPlugin(from url: URL) async throws -> SDManifest {
         let registry = self.registry
         let manifest = try await Task.detached(priority: .userInitiated) {

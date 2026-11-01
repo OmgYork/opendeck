@@ -50,14 +50,14 @@ final class AppModel {
             payload: raw, targetIndex: index,
             current: config.keyConfig(at: index),
             homeKey: { homeKeyConfig(at: $0) },
-            draft: { templateDrafts[$0] }
+            draft: { config.templateDrafts[$0] }
         ) else {
             Self.paletteLog.info("palette bind rejected unknown payload \(raw, privacy: .public)")
             return
         }
         if raw.hasPrefix("draft:"),
            let kind = KeyTemplate(rawValue: String(raw.dropFirst("draft:".count))) {
-            templateDrafts[kind] = nil // 一次性:落键即消费草稿
+            setTemplateDraft(kind, nil) // 一次性:落键即消费草稿(持久化清除)
         }
         config.updateKey(key, at: index)
         applyKey(at: index)
@@ -127,6 +127,7 @@ final class AppModel {
     /// 会先于 `.task { start() }` 调 `applyPageToDevice()`,若等到 start() 才接 hook,
     /// 首次 attach 的帧会被丢掉。三个 animator 同一时机,不在此处区分。
     init() {
+        onboardingNeeded = config.isFreshInstall
         // 先构造全部协调器(捕获 self 的前提是存储属性已全部初始化),再统一挂钩子
         brightness = BrightnessCoordinator(device: device, config: config)
         sceneRouter = SceneRouter(config: config, device: device)
@@ -195,11 +196,21 @@ final class AppModel {
     /// 合盖休眠锁状态缓存(nil = 还没读到)。只作渲染用;真实值以 pmset 为准,
     /// 每次切换后由 SleepGuard 的回读结果覆盖,不做乐观翻转。
     private(set) var sleepGuardEnabled: Bool?
+    /// sudoers 规则缺失(授权失败):键帽常驻「未授权」态,直到规则装好且切换成功
+    private(set) var sleepGuardUnauthorized = false
     /// 「缺授权」提示每会话只弹一次:反复按键不该反复打断
     private var didWarnSleepGuard = false
-    /// 模板磁贴就绪态(会话内存,不持久化):调色盘里点击模板磁贴配置出的动作。
-    /// 一次性:拖拽落键即消费(bindPayload 清除),磁贴复原回占位态;重启同样清零。
-    var templateDrafts: [KeyTemplate: KeyConfig] = [:]
+    /// 模板磁贴就绪态(持久化在 config.templateDrafts):点击模板磁贴配置出的动作。
+    /// 一次性:拖拽落键即消费(落键清除),磁贴复原回占位态;重启后草稿仍在,直到被使用或清除
+    var templateDrafts: [KeyTemplate: KeyConfig] { config.templateDrafts }
+
+    /// 保存/清除模板草稿(nil = 清除)
+    func setTemplateDraft(_ kind: KeyTemplate, _ key: KeyConfig?) {
+        config.setTemplateDraft(kind, key)
+    }
+
+    /// 首次启动引导:仅 config.json 当次不存在(全新安装)时为真,关闭后持久记忆
+    let onboardingNeeded: Bool
 
     private var started = false
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
@@ -355,10 +366,15 @@ final class AppModel {
         switch await SleepGuard.toggle() {
         case .success(let enabled):
             sleepGuardEnabled = enabled
+            sleepGuardUnauthorized = false
             appendLog("合盖休眠锁 → \(enabled ? "开(合盖不睡)" : "关(合盖休眠)")")
             applyKey(at: index)
         case .failure(let error):
             sleepGuardEnabled = await SleepGuard.currentState()
+            // 未授权是可持续状态:键帽常驻「未授权」提示,比一次性弹窗更有解释力
+            if case .authorizationMissing = error {
+                sleepGuardUnauthorized = true
+            }
             appendLog("合盖休眠锁切换失败:\(error.localizedDescription)")
             applyKey(at: index)
             presentSleepGuardAlertOnce(message: error.localizedDescription)
@@ -382,17 +398,27 @@ final class AppModel {
     private func presentSleepGuardAlertOnce(message: String) {
         guard !didWarnSleepGuard else { return }
         didWarnSleepGuard = true
+        // 精确规则:只放行 pmset disablesleep 的 0/1 两个取值,其余 sudo 权限不变
+        let rule = "\(NSUserName()) ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
+        let installCommand = "echo '\(rule)' | sudo tee \(SleepGuard.sudoersPath)"
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "合盖休眠锁不可用"
         alert.informativeText = """
             \(message)
 
-            需要一次性安装免密规则(只放行 pmset disablesleep 的 0/1 两个取值):
-            \(SleepGuard.sudoersPath)
+            一次性安装免密规则(只放行 pmset disablesleep 的 0/1 两个取值,其余 sudo 权限不变)——终端执行:
+
+            \(installCommand)
+
+            执行后回到 OpenDeck 再按一次该键。
             """
+        alert.addButton(withTitle: "复制命令")
         alert.addButton(withTitle: "好")
-        alert.runModal()
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(installCommand, forType: .string)
+        }
     }
 
     // MARK: - 键面上屏
@@ -449,19 +475,26 @@ final class AppModel {
             }
             iconPath = nil
         } else if case .sleepGuard = key.action {
-            // 合盖休眠锁:键面即状态。绿=已禁止合盖休眠,灰=正常休眠,蓝灰=尚未读到
-            switch sleepGuardEnabled {
-            case true:
-                title = "睡眠锁 ON"
-                backgroundHex = "#2E7D32"
-            case false:
-                title = "睡眠锁 OFF"
-                backgroundHex = "#3B4252"
-            case nil:
-                title = "睡眠锁 ⋯"
-                backgroundHex = "#4C566A"
+            // 合盖休眠锁:键面即状态。绿=已禁止合盖休眠,灰=正常休眠,
+            // 橙=未授权(sudoers 规则缺失,持续提示),蓝灰=尚未读到
+            if sleepGuardUnauthorized {
+                title = "睡眠锁 未授权"
+                backgroundHex = "#D08770"
+                iconPath = nil
+            } else {
+                switch sleepGuardEnabled {
+                case true:
+                    title = "睡眠锁 ON"
+                    backgroundHex = "#2E7D32"
+                case false:
+                    title = "睡眠锁 OFF"
+                    backgroundHex = "#3B4252"
+                case nil:
+                    title = "睡眠锁 ⋯"
+                    backgroundHex = "#4C566A"
+                }
+                iconPath = nil
             }
-            iconPath = nil
         } else {
             title = key.title.isEmpty ? nil : key.title
             iconPath = key.iconPath

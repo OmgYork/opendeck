@@ -98,6 +98,8 @@ public enum IconRenderer {
     /// 起点用上一张成功图的质量:键面帧尺寸/复杂度稳定时一步命中,
     /// 每帧省掉逐档下调的重复全图编码。进程内调用方全在 MainActor
     /// (DeviceController);StreamDeckHarness 是独立可执行进程,不共享。
+    // nonisolated(unsafe) 前提:render 的全部调用方都在主线程(设备/UI 同源),无并发写。
+    // 若渲染移出主线程,先给这个变量上锁
     private nonisolated(unsafe) static var lastGoodQuality: Double = 0.9
 
     public static func jpeg(from image: CGImage, maxBytes: Int = StreamDock293S.maxKeyJPEGBytes) -> Data? {

@@ -286,6 +286,15 @@ struct FunctionPaletteView: View {
                 onConfigureTemplate(kind)
             }
         }
+        .contextMenu {
+            // 已配置草稿的模板磁贴:右键清除,不必重启或落键来复位
+            if let kind = item.template, appModel.templateDrafts[kind] != nil {
+                Button("清除已配置参数") {
+                    appModel.setTemplateDraft(kind, nil)
+                }
+                .help("磁贴复原回占位态(已落键的不受影响)")
+            }
+        }
         .draggable(payload) {
             // 拖拽跟随图：与磁贴/最终键帽同源（复合带真实动效帧）
             KeycapView(

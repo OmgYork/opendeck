@@ -49,6 +49,28 @@ enum KeyTemplate: String, Codable, Hashable, CaseIterable, Identifiable {
     case hotkey
 
     var id: String { rawValue }
+
+    /// 六种带参模板的组装口径——KeyEditView 与 TemplateConfigSheet 共用同一函数(防漂移)。
+    /// 空参不成动作,**含空脚本**(空脚本键 = 按下无反应的死键,不允许保存)。
+    static func assemble(
+        _ kind: KeyTemplate, appPath: String, urlString: String, shortcutName: String,
+        scriptText: String, hotkeyKeyCode: Int?, hotkeyModifiers: [String]
+    ) -> KeyAction? {
+        switch kind {
+        case .openApp:
+            appPath.isEmpty ? nil : .openApp(path: appPath)
+        case .openURL:
+            urlString.trimmingCharacters(in: .whitespaces).isEmpty ? nil : .openURL(urlString)
+        case .runShortcut:
+            shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
+        case .shellScript:
+            scriptText.isEmpty ? nil : .shellScript(scriptText)
+        case .appleScript:
+            scriptText.isEmpty ? nil : .appleScript(scriptText)
+        case .hotkey:
+            hotkeyKeyCode.map { .hotkey(keyCode: $0, modifiers: hotkeyModifiers) }
+        }
+    }
 }
 
 struct KeyConfig: Codable, Hashable {
@@ -158,6 +180,10 @@ struct AppConfig: Codable {
     /// 配置结构版本:normalize 时补当前值。旧配置缺键解码为 nil(视为 v1),
     /// 下一次需要破坏性迁移时据此判定,不再靠键名嗅探
     var schemaVersion: Int? = nil
+    /// 模板草稿(键 = KeyTemplate.rawValue):就绪态持久化,落键/手动清除时移除
+    var templateDrafts: [String: KeyConfig]? = nil
+    /// 首启引导已关闭(nil/缺省 = 未关闭)
+    var onboardingDismissed: Bool? = nil
 }
 
 // MARK: - 配置存储
@@ -180,16 +206,29 @@ final class ConfigStore {
     ]
     /// ~/Library/Application Support/OpenDeck/config.json
     /// 目录链的创建交给 ensureDirectory(非抛出的 urls(for:in:) 只做定位)
-    private static let configFileURL: URL = {
+    /// 默认落盘路径:~/Library/Application Support/OpenDeck/config.json
+    private static let defaultFileURL: URL = {
         let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return applicationSupport.appendingPathComponent("OpenDeck/config.json")
     }()
 
-    init() {
-        if var loaded = Self.loadConfiguration() {
+    /// 实际读写路径(测试注入临时文件用,默认即 defaultFileURL)
+    private let fileURL: URL
+    /// 全新安装(本次 init 时 config.json 不存在/不可解析):首启引导的判定依据
+    private(set) var isFreshInstall = false
+
+    convenience init() {
+        self.init(contentsOf: Self.defaultFileURL)
+    }
+
+    /// 注入路径装载:测试用(临时文件);缺失/损坏走与默认路径完全同一套容错
+    init(contentsOf url: URL) {
+        fileURL = url
+        if var loaded = Self.loadConfiguration(from: url) {
             Self.normalize(&loaded)
             config = loaded
         } else {
+            isFreshInstall = true
             config = Self.defaultConfig()
             // 首次启动(或配置损坏)立即落盘,保证后续启动读到的是真实文件
             // normalize 补场景/页面 id 等派生字段,与读盘路径行为一致
@@ -226,6 +265,36 @@ final class ConfigStore {
     /// 只更新内存(不落盘):玻璃校准的实时调参;落盘由 AppModel 防抖触发
     func setGlassOffsetInMemory(_ value: GlassOffset) {
         config.glassOffset = value
+    }
+
+    /// 模板草稿(按 KeyTemplate 取回;无法识别的 raw 忽略)
+    var templateDrafts: [KeyTemplate: KeyConfig] {
+        var result: [KeyTemplate: KeyConfig] = [:]
+        for (raw, key) in config.templateDrafts ?? [:] {
+            if let kind = KeyTemplate(rawValue: raw) { result[kind] = key }
+        }
+        return result
+    }
+
+    /// 保存/清除模板草稿(nil = 清除,落盘)
+    func setTemplateDraft(_ kind: KeyTemplate, _ key: KeyConfig?) {
+        var drafts = config.templateDrafts ?? [:]
+        if let key {
+            drafts[kind.rawValue] = key
+        } else {
+            drafts.removeValue(forKey: kind.rawValue)
+        }
+        config.templateDrafts = drafts.isEmpty ? nil : drafts
+        save()
+    }
+
+    /// 首启引导开关(持久记忆:关过一次就不再出现)
+    var onboardingDismissed: Bool {
+        get { config.onboardingDismissed ?? false }
+        set {
+            config.onboardingDismissed = newValue
+            save()
+        }
     }
 
     // MARK: 当前场景/页面访问
@@ -535,25 +604,24 @@ final class ConfigStore {
             // 人工可读可改:调试期直接手编辑 config.json 是常见操作
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(config)
-            try Self.ensureDirectory()
-            try data.write(to: Self.configFileURL, options: .atomic)
+            try Self.ensureDirectory(for: fileURL)
+            try data.write(to: fileURL, options: .atomic)
         } catch {
             Self.logger.error("配置保存失败:\(error, privacy: .public)")
         }
     }
 
-    // MARK: 私有
+    // MARK: - 私有
 
     /// 读取失败(缺失/损坏/结构不合法)返回 nil,由调用方回退默认配置
-    private static func loadConfiguration() -> AppConfig? {
-        let url = configFileURL
+    private static func loadConfiguration(from url: URL) -> AppConfig? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch {
             logger.error("配置文件读取失败:\(error, privacy: .public)")
-            archiveCorruptFile(data: nil, reason: "unreadable")
+            archiveCorruptFile(url: url, data: nil, reason: "unreadable")
             return nil
         }
         // 新旧格式探测:新模型字段有默认值,仅凭解码失败判旧格式不可靠,
@@ -572,7 +640,7 @@ final class ConfigStore {
             return try JSONDecoder().decode(AppConfig.self, from: data)
         } catch {
             logger.error("配置文件无法解析,归档后回退默认配置:\(error, privacy: .public)")
-            archiveCorruptFile(data: data, reason: "undecodable")
+            archiveCorruptFile(url: url, data: data, reason: "undecodable")
             return nil
         }
     }
@@ -580,20 +648,20 @@ final class ConfigStore {
     /// 损坏配置归档:回退默认前先把原文件留底到同目录(config.corrupt-<时间戳>-<原因>.json)。
     /// 数据完整性最高优先级——手编 JSON 写错、外部工具写坏都属正常事故,
     /// 宁可目录里多一个损坏文件,绝不悄悄覆掉用户配置。
-    private static func archiveCorruptFile(data: Data?, reason: String) {
+    private static func archiveCorruptFile(url: URL, data: Data?, reason: String) {
         let stamp = Int(Date().timeIntervalSince1970)
-        let archiveURL = configFileURL.deletingLastPathComponent()
+        let archiveURL = url.deletingLastPathComponent()
             .appendingPathComponent("config.corrupt-\(stamp)-\(reason).json")
         do {
             if let data {
                 try data.write(to: archiveURL, options: .atomic)
             } else {
-                try FileManager.default.copyItem(at: configFileURL, to: archiveURL)
+                try FileManager.default.copyItem(at: url, to: archiveURL)
             }
             logger.error("损坏配置已归档:\(archiveURL.path, privacy: .public)")
         } catch {
             // 归档失败也绝不静默——这是数据完整性的最后防线
-            logger.fault("损坏配置归档失败,原文件仍在 \(configFileURL.path, privacy: .public):\(error, privacy: .public)")
+            logger.fault("损坏配置归档失败,原文件仍在 \(url.path, privacy: .public):\(error, privacy: .public)")
         }
     }
 
@@ -708,9 +776,9 @@ final class ConfigStore {
         )
     }
 
-    private static func ensureDirectory() throws {
+    private static func ensureDirectory(for url: URL) throws {
         try FileManager.default.createDirectory(
-            at: configFileURL.deletingLastPathComponent(),
+            at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
     }

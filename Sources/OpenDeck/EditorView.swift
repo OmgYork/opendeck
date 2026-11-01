@@ -151,8 +151,8 @@ struct EditorView: View {
                 kind: kind,
                 initial: appModel.templateDrafts[kind],
                 onSave: { config in
-                    // 就绪态存会话内存(不持久化):一次性,拖拽落键即被消费;重启同样清零
-                    appModel.templateDrafts[kind] = config
+                    // 草稿持久化(config.templateDrafts);一次性消费在落键,手动清除走磁贴右键
+                    appModel.setTemplateDraft(kind, config)
                 }
             )
         }
@@ -415,18 +415,28 @@ struct EditorView: View {
         return Button {
             if let id = scene.id, !isCurrent { appModel.switchScene(to: id) }
         } label: {
-            Text("\(offset + 1)")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(isCurrent ? .primary : .secondary)
-                .frame(width: 32, height: 30)
-                .background(
-                    Color.primary.opacity(isCurrent ? 0.14 : 0.05),
-                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(isCurrent ? .tertiary : .quaternary, lineWidth: 1)
+            // 当前场景的芯片亮出名字(信息可见性);其余芯片保持编号紧凑
+            HStack(spacing: 5) {
+                Text("\(offset + 1)")
+                if isCurrent {
+                    Text(scene.name)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+            }
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .foregroundStyle(isCurrent ? .primary : .secondary)
+            .padding(.horizontal, isCurrent ? 9 : 0)
+            .frame(minWidth: 32, minHeight: 30)
+            .background(
+                Color.primary.opacity(isCurrent ? 0.14 : 0.05),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(isCurrent ? .tertiary : .quaternary, lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
         .help("\(scene.name) · \(scene.pages.count) 页")
@@ -1170,51 +1180,42 @@ private struct KeyEditView: View {
     }
 
     private var assembledAction: KeyAction? {
+        // 含 guard 语句的 case 会让 switch 退化成语句形式,全表显式 return
         switch kind {
         case .none:
-            nil
-        case .openApp:
-            appPath.isEmpty ? nil : .openApp(path: appPath)
-        case .openURL:
-            urlString.trimmingCharacters(in: .whitespaces).isEmpty ? nil : .openURL(urlString)
-        case .runShortcut:
-            shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
-        case .shellScript:
-            scriptText.isEmpty ? nil : .shellScript(scriptText)
-        case .appleScript:
-            scriptText.isEmpty ? nil : .appleScript(scriptText)
-        case .hotkey:
-            if let code = hotkeyKeyCode {
-                .hotkey(keyCode: code, modifiers: hotkeyModifiers)
-            } else {
-                nil
-            }
+            return nil
+        case .openApp, .openURL, .runShortcut, .shellScript, .appleScript, .hotkey:
+            // 六种带参模板:组装口径与 TemplateConfigSheet 同源(KeyTemplate.assemble 单函数)
+            guard let template = kind.templateKind else { return nil }
+            return KeyTemplate.assemble(template, appPath: appPath, urlString: urlString,
+                                        shortcutName: shortcutName, scriptText: scriptText,
+                                        hotkeyKeyCode: hotkeyKeyCode, hotkeyModifiers: hotkeyModifiers)
         case .mediaKey:
-            .mediaKey(mediaKeyValue)
+            return .mediaKey(mediaKeyValue)
         case .plugin:
-            assembledPluginAction
+            return assembledPluginAction
         case .monitor:
-            .monitor(monitorCommand)
+            return .monitor(monitorCommand)
         case .stat:
-            .stat(statKind)
+            return .stat(statKind)
         case .gotoPageLegacy:
-            nil // 旧动作不可再组装(前往指定页的选择器已移除),保存即清除
+            return nil // 旧动作不可再组装(前往指定页的选择器已移除),保存即清除
         case .heatmap:
-            .keyboardHeatmap
+            return .keyboardHeatmap
         case .previousPage:
-            .previousPage
+            return .previousPage
         case .nextPage:
-            .nextPage
+            return .nextPage
         case .previousScene:
-            .previousScene
+            return .previousScene
         case .nextScene:
-            .nextScene
+            return .nextScene
         case .pageIndicator:
-            .pageIndicator
+            return .pageIndicator
         case .screenOff:
-            .screenOff
+            return .screenOff
         case .sleepGuard:
-            .sleepGuard
+            return .sleepGuard
         }
     }
 
@@ -1312,22 +1313,11 @@ private struct TemplateConfigSheet: View {
         _iconPath = State(initialValue: initial?.iconPath)
     }
 
-    /// 参数口径与 KeyEditView 一致:空参不成动作(保存按钮禁用),脚本允许空文
+    /// 参数口径与 KeyEditView 同源:组装走 KeyTemplate.assemble 单函数(空参不成动作,含空脚本)
     private var assembledAction: KeyAction? {
-        switch kind {
-        case .openApp:
-            appPath.isEmpty ? nil : .openApp(path: appPath)
-        case .openURL:
-            urlString.trimmingCharacters(in: .whitespaces).isEmpty ? nil : .openURL(urlString)
-        case .runShortcut:
-            shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
-        case .shellScript:
-            scriptText.isEmpty ? nil : .shellScript(scriptText)
-        case .appleScript:
-            scriptText.isEmpty ? nil : .appleScript(scriptText)
-        case .hotkey:
-            hotkeyKeyCode.map { .hotkey(keyCode: $0, modifiers: hotkeyModifiers) }
-        }
+        KeyTemplate.assemble(kind, appPath: appPath, urlString: urlString,
+                             shortcutName: shortcutName, scriptText: scriptText,
+                             hotkeyKeyCode: hotkeyKeyCode, hotkeyModifiers: hotkeyModifiers)
     }
 
     private var draftConfig: KeyConfig {
@@ -1447,6 +1437,22 @@ extension KeyTemplate {
         case .shellScript: .shellScript
         case .appleScript: .appleScript
         case .hotkey: .hotkey
+        }
+    }
+}
+
+/// ActionKind ↔ KeyTemplate 桥接:带参模板的组装与预选共用(单源在 KeyTemplate.assemble)
+extension ActionKind {
+    /// 该类型若属六种带参模板,给出对应 KeyTemplate
+    var templateKind: KeyTemplate? {
+        switch self {
+        case .openApp: .openApp
+        case .openURL: .openURL
+        case .runShortcut: .runShortcut
+        case .shellScript: .shellScript
+        case .appleScript: .appleScript
+        case .hotkey: .hotkey
+        default: nil
         }
     }
 }
