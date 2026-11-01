@@ -10,3 +10,6 @@
 
 # ZCode 会话方案快照(会话产物,结论已沉淀 HANDOFF §6.x;docs_baseline.py 亦排除 .zcode)
 /.zcode/
+
+# make-app 产物(可由源码重建)
+/dist/

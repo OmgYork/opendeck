@@ -18,6 +18,8 @@ public final class PluginServer: @unchecked Sendable {
         fileprivate var inbox = Data()
         fileprivate var outbox = Data()
         fileprivate var readSource: DispatchSourceRead?
+        /// outbox 暂不可写时挂写就绪源;排空即撤(隐藏的 webview 不读事件,靠读事件重试会永久滞留)
+        fileprivate var writeSource: DispatchSourceWrite?
         /// 握手完成前收到的是 HTTP 升级请求
         fileprivate var isHandshaken = false
         /// 分片帧累积(opcode 0x1 首帧 + 0x0 续帧,直到 FIN)
@@ -102,6 +104,9 @@ public final class PluginServer: @unchecked Sendable {
         }
         var reuse: Int32 = 1
         setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        // 对端断开后写入不再抛 SIGPIPE 杀死整个进程(测试宿主/正式 app 同源),改为写入返回 EPIPE 走关闭路径
+        var nosigpipe: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
         // 非阻塞:level-triggered 读源已保证就绪才进 accept,再阻塞式 accept 会卡死串行队列(实测踩坑)
         let flags = fcntl(descriptor, F_GETFL, 0)
         _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
@@ -151,42 +156,48 @@ public final class PluginServer: @unchecked Sendable {
 
     private func acceptPending() {
         // 一次事件只 accept 一个:fd 已非阻塞且读源水平触发,还有积压会立刻再次进来
-        if true {
-            var address = sockaddr()
-            var length = socklen_t(MemoryLayout<sockaddr>.size)
-            let descriptor = withUnsafeMutablePointer(to: &address) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    accept(listenDescriptor, $0, &length)
-                }
+        var address = sockaddr()
+        var length = socklen_t(MemoryLayout<sockaddr>.size)
+        let descriptor = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                accept(listenDescriptor, $0, &length)
             }
-            guard descriptor >= 0 else { return } // EAGAIN = 没了
-
-            var nodelay: Int32 = 1
-            setsockopt(descriptor, Int32(IPPROTO_TCP), TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
-
-            let connection = Connection(id: UUID(), fileDescriptor: descriptor)
-            connections[connection.id] = connection
-            serverLog.info("server: accept fd=\(descriptor) 连接数=\(self.connections.count)")
-            let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
-            source.setEventHandler { [weak self] in
-                self?.readAvailable(connection)
-            }
-            source.setCancelHandler { [weak connection] in
-                guard let connection else { return }
-                Darwin.close(connection.fileDescriptor)
-            }
-            connection.readSource = source
-            source.resume()
-            onOpen?(connection)
         }
+        guard descriptor >= 0 else { return } // EAGAIN = 没了
+
+        var nodelay: Int32 = 1
+        setsockopt(descriptor, Int32(IPPROTO_TCP), TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
+        // 同监听端:已接受连接也要关 SIGPIPE(webview 重载/客户端断连后的写路径)
+        var nosigpipe: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+
+        let connection = Connection(id: UUID(), fileDescriptor: descriptor)
+        connections[connection.id] = connection
+        serverLog.info("server: accept fd=\(descriptor) 连接数=\(self.connections.count)")
+        let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
+        source.setEventHandler { [weak self] in
+            self?.readAvailable(connection)
+        }
+        source.setCancelHandler { [weak connection] in
+            guard let connection else { return }
+            Darwin.close(connection.fileDescriptor)
+        }
+        connection.readSource = source
+        source.resume()
+        onOpen?(connection)
     }
 
     private func readAvailable(_ connection: Connection) {
         var buffer = [UInt8](repeating: 0, count: 65536)
         let count = read(connection.fileDescriptor, &buffer, buffer.count)
         serverLog.info("server: read fd=\(connection.fileDescriptor) n=\(count)")
-        if count <= 0 {
-            // 0 = 对端关闭,-1 = EAGAIN/ECONNRESET 等
+        if count == 0 {
+            finish(connection) // 对端正常关闭
+            return
+        }
+        if count < 0 {
+            // EAGAIN(水平触发的边界竞态)/EINTR 都不是致命错误,保留连接;其余按断开走优雅关闭
+            if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
             finish(connection)
             return
         }
@@ -366,13 +377,30 @@ public final class PluginServer: @unchecked Sendable {
             if written > 0 {
                 connection.outbox.removeFirst(written)
             } else if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                // 写缓冲满:留到下次 read 事件后重试(消息都很小,足够)
+                // 写缓冲满:挂写就绪源排空——隐藏的 webview 不产生读事件,靠读事件重试会永久滞留
+                armWriteSource(connection)
                 return
             } else {
                 finish(connection)
                 return
             }
         }
+    }
+
+    /// 写就绪源:outbox 非空且 socket 暂不可写时挂起,可写即排空;排空即撤
+    private func armWriteSource(_ connection: Connection) {
+        guard connection.writeSource == nil else { return }
+        let source = DispatchSource.makeWriteSource(fileDescriptor: connection.fileDescriptor, queue: queue)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.flush(connection)
+            if connection.outbox.isEmpty {
+                connection.writeSource?.cancel()
+                connection.writeSource = nil
+            }
+        }
+        connection.writeSource = source
+        source.resume()
     }
 
     private func finish(_ connection: Connection) {
@@ -387,5 +415,7 @@ public final class PluginServer: @unchecked Sendable {
         connection.isClosed = true
         connection.readSource?.cancel()
         connection.readSource = nil
+        connection.writeSource?.cancel()
+        connection.writeSource = nil
     }
 }

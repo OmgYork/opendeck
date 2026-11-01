@@ -192,6 +192,28 @@ final class PluginHostModel {
         brokenPlugins = result.broken
     }
 
+    // MARK: - 健康与复活
+
+    /// 该键的插件动作是否指向未安装/已卸载的插件(KeycapView 警示态用)。
+    /// pluginID 历史上既写过 manifest UUID 也写过目录名,两种都认。
+    func isPluginMissing(_ action: KeyAction?) -> Bool {
+        guard case .plugin(let pluginID, _, _) = action else { return false }
+        return !installedPlugins.contains {
+            $0.manifest.pluginUUID == pluginID || $0.manifest.directoryName == pluginID
+        }
+    }
+
+    /// 复活路径:连续失败 3 次的插件原本死到重启。用户显式动作(重新应用到设备/
+    /// 打开插件管理)时调用——重置重启计数并立即重拉,给人工一次「再试一次」的入口。
+    func reviveRuntimes() {
+        for (_, runtime) in runtimes where !runtime.isAlive {
+            runtime.respawnAttempts = 0
+        }
+        for pluginUUID in runtimes.keys {
+            _ = ensureRuntime(pluginUUID: pluginUUID)
+        }
+    }
+
     // MARK: - 键位同步(AppModel.applyKey 在启动/编辑/整页刷新时逐键调用)
 
     func syncKey(at index: Int, action: KeyAction?) {
@@ -314,8 +336,10 @@ final class PluginHostModel {
             handlePIMessage(connection: connection, data: data)
             return
         }
+        // 解析一次,三个分支共用(此前 2s 一帧的消息最多被解码三遍)
+        let parsed = SDProtocol.parse(data)
         // 注册包必须先行处理:它建立连接→插件的归属关系,路由守卫在其后才成立
-        if let first = SDProtocol.parse(data), case .registered(let uuid) = first {
+        if let first = parsed, case .registered(let uuid) = first {
             pluginByConnection[connection.id] = uuid
             guard let runtime = runtimes[uuid] else {
                 hooks.log("未知插件注册(未配置):\(uuid)")
@@ -334,7 +358,7 @@ final class PluginHostModel {
         }
 
         // PI 注册包(新连接首条消息):按 contextID 反查归属(instances 优先,草稿态预登记兜底)
-        if let first = SDProtocol.parse(data), case .registeredPI(let contextID) = first {
+        if let first = parsed, case .registeredPI(let contextID) = first {
             handlePIRegistration(connection: connection, contextID: contextID)
             return
         }
@@ -343,7 +367,7 @@ final class PluginHostModel {
               let runtime = runtimes[pluginUUID]
         else { return } // 未注册的连接不发业务消息
 
-        switch SDProtocol.parse(data) {
+        switch parsed {
         case .registered:
             break // 已由上方注册分支处理
         case .registeredPI, .sendToPlugin:

@@ -235,6 +235,9 @@ private final class FakeClient: @unchecked Sendable {
     private static func rawConnect(port: UInt16) -> Int32 {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return -1 }
+        // 与 PluginServer 同守卫:测试内对端关闭后的写入走 EPIPE,不抛 SIGPIPE 杀测试进程
+        var nosigpipe: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)

@@ -18,7 +18,7 @@ struct OpenDeckApp: App {
             EditorView(appModel: appModel)
                 .onAppear { appDelegate.appModel = appModel }
         }
-        .defaultSize(width: 840, height: 720)
+        .defaultSize(width: 1120, height: 720) // 与 EditorView 的 minWidth 同步(双列 + 矩阵轨放得下)
 
         // 用窗口样式而非菜单样式:菜单样式的 NSMenu 承载不了亮度 Slider
         MenuBarExtra("OpenDeck", systemImage: "rectangle.grid.3x2") {

@@ -61,33 +61,33 @@ nonisolated enum MonitorDDC {
                 case .inputPC: target = pc
                 default: target = currentInputIsMac() ? pc : mac
                 }
-                try write(code: spec.code, value: target)
+                try await write(code: spec.code, value: target)
                 recordInput(isMac: target == mac)
                 return .ok("\(command.title) ✓")
 
             case .set(let value):
-                try write(code: spec.code, value: value)
+                try await write(code: spec.code, value: value)
                 if spec.disruptive {
                     // 链路重协商期间读不回来是预期行为，不做校验、不重试
                     return .ok("\(command.title)（画面会闪断十余秒）")
                 }
-                let after = (try? read(code: spec.code))?.current ?? value
+                let after = (try? await read(code: spec.code))?.current ?? value
                 return .ok("\(command.title) → \(after)")
 
             case .step(let delta):
-                let reading = try read(code: spec.code)
+                let reading = try await read(code: spec.code)
                 let target = min(max(reading.current + delta, 0), max(reading.maximum, 0))
-                try write(code: spec.code, value: target)
-                let after = (try? read(code: spec.code))?.current ?? target
+                try await write(code: spec.code, value: target)
+                let after = (try? await read(code: spec.code))?.current ?? target
                 return .ok("\(command.title) → \(after)")
 
             case .manualTempStep(let delta):
                 // 0x69 只在「手动」档可写：先确保处于手动色温档（0x14 = 65502）
-                let preset = try read(code: 0x14)
+                let preset = try await read(code: 0x14)
                 if preset.current != 65502 {
-                    try write(code: 0x14, value: 65502)
+                    try await write(code: 0x14, value: 65502)
                 }
-                let reading = try read(code: 0x69)
+                let reading = try await read(code: 0x69)
                 let ladder = MonitorCommand.manualTempLadder
                 guard let nearest = ladder.enumerated().min(by: {
                     abs($0.element - reading.current) < abs($1.element - reading.current)
@@ -95,8 +95,8 @@ nonisolated enum MonitorDDC {
                     return .failed("\(command.title): 刻度表为空")
                 }
                 let target = ladder[min(max(nearest + delta, 0), ladder.count - 1)]
-                try write(code: 0x69, value: target)
-                let after = (try? read(code: 0x69))?.current ?? target
+                try await write(code: 0x69, value: target)
+                let after = (try? await read(code: 0x69))?.current ?? target
                 return .ok("\(command.title) → \(after)K")
             }
         } catch let error as MonitorDDCError {
@@ -114,7 +114,7 @@ nonisolated enum MonitorDDC {
 
     // MARK: DDC 原语
 
-    static func read(code: UInt8) throws -> (current: Int, maximum: Int) {
+    static func read(code: UInt8) async throws -> (current: Int, maximum: Int) {
         let service = try openExternalService()
         let addr = address(for: code)
         var request: [UInt8] = [0x82, 0x01, code, 0]
@@ -128,13 +128,13 @@ nonisolated enum MonitorDDC {
             // 关键：这台显示器的 DDC 请求必须连写两帧才会应答（m1ddc 的 DDC_ITERATIONS=2），
             // 只写一帧时 IOKit 返回 0 但拿回来的是无效应答
             for _ in 0..<2 {
-                usleep(ddcWaitMicros)
+                try await waitDDC(micros: ddcWaitMicros)
                 var writeBuffer = request
                 let writeResult = IOAVServiceWriteI2C(service, chipAddress, UInt32(addr), &writeBuffer, 4)
                 guard writeResult == 0 else { throw MonitorDDCError.io(writeResult) }
             }
 
-            usleep(ddcWaitMicros + UInt32(attempt) * 20_000)
+            try await waitDDC(micros: ddcWaitMicros + UInt32(attempt) * 20_000)
             var reply = [UInt8](repeating: 0, count: 12)
             let readResult = IOAVServiceReadI2C(service, chipAddress, UInt32(addr), &reply, 12)
             guard readResult == 0 else { throw MonitorDDCError.io(readResult) }
@@ -153,7 +153,7 @@ nonisolated enum MonitorDDC {
         )
     }
 
-    static func write(code: UInt8, value: Int) throws {
+    static func write(code: UInt8, value: Int) async throws {
         let service = try openExternalService()
         let addr = address(for: code)
         var frame: [UInt8] = [
@@ -164,13 +164,18 @@ nonisolated enum MonitorDDC {
         // 与 m1ddc 一致：固定写两帧（首帧会被丢弃，只写一次等于没写）
         var lastError: kern_return_t = 0
         for _ in 0..<2 {
-            usleep(ddcWaitMicros)
+            try await waitDDC(micros: ddcWaitMicros)
             var buffer = frame
             lastError = IOAVServiceWriteI2C(service, chipAddress, UInt32(addr), &buffer, 6)
         }
         guard lastError == 0 else { throw MonitorDDCError.io(lastError) }
         // 写后让显示器把 ACK 吐完，避免下一次读拿到上一帧的尾巴
-        usleep(60_000)
+        try await waitDDC(micros: 60_000)
+    }
+
+    /// DDC 节拍:usleep 改 Task.sleep——协作线程池不该被 10–60ms 的硬件节拍钉住
+    private static func waitDDC(micros: UInt32) async throws {
+        try await Task.sleep(for: .microseconds(Int(micros)))
     }
 
     // MARK: 私有

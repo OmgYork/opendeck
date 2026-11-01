@@ -394,14 +394,6 @@ enum MonitorCompositeCatalog {
 }
 
 // MARK: - 拖拽
-
-extension UTType {
-    /// 托盘 → 键位的内部拖拽类型
-    nonisolated static let opendeckMonitorCommand = UTType(exportedAs: "com.opendeck.monitor-command")
-}
-
-extension MonitorCommand: Transferable {
-    nonisolated static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .opendeckMonitorCommand)
-    }
-}
+//
+// 拖拽载荷走纯文本(见 FunctionPaletteCatalog.swift 头注释):自定义 UTType
+// 在宿主 NSView 上不保证被接受,历史上的 Transferable 声明已随死代码清理移除。

@@ -6,14 +6,14 @@ import os
 /// 三个通道同时写(拆分前就在 AppModel 里,行为不变):
 /// - stdout:swift run 直跑时可观察(以行缓冲模式输出)
 /// - oslog:`log stream` / `log show --info` 可取证(.app 后台运行时唯一可用通道)
-/// - 内存环:状态栏只显示尾部一屏,环形保留 12 条
+/// - 内存环:「运行日志」面板展示尾部 50 条
 ///
-/// 不做 @Observable:环内内容当前只有状态栏读取,且读取点不在 SwiftUI body 的
+/// 不做 @Observable:环内内容由日志面板/状态栏读取,读取点不在 SwiftUI body 的
 /// 观察路径上(拆分前它也只是 AppModel 的一个普通属性)。
 @MainActor
 final class LogRing {
-    /// 环容量:一屏即可,超出丢最早
-    private static let capacity = 12
+    /// 环容量:诊断面板一屏可读的量级,超出丢最早
+    private static let capacity = 50
 
     /// 最近日志(尾部最新)
     private(set) var recentLogs: [String] = []

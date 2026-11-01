@@ -10,18 +10,17 @@ import UniformTypeIdentifiers
 struct EditorView: View {
     let appModel: AppModel
 
-    private static let monitorLog = Logger(subsystem: "opendeck", category: "monitor")
+    private static let paletteLog = Logger(subsystem: "opendeck", category: "palette") // 仅拖放事件追踪;落键政策日志在 AppModel
 
     @State private var editingTarget: EditTarget?
     @State private var brightness: Double = 0
     @State private var showLayoutTuning = false
     @State private var showGlassCalibration = false
     @State private var showPluginManager = false
-    @State private var showMonitorPalette = true
+    @State private var showLogSheet = false
     @State private var dropTargetIndex: Int?
-    /// 点选绑定:点一下托盘条目 → 再点任意键位即绑定(拖拽之外的兜底路径)
-    /// 载荷 = MonitorCommand.rawValue 或 "composite:<id>"(自定义/复合磁贴)
-    @State private var pendingMonitorPayload: String?
+    /// 正在配置的模板磁贴(点调色盘模板磁贴弹出配置面板;保存进 AppModel.templateDrafts 就绪态)
+    @State private var configuringTemplate: KeyTemplate?
     @State private var deleteTargetID: UUID?
     @State private var pageDeleteConfirm = false
     @State private var renameTargetID: UUID?
@@ -35,25 +34,39 @@ struct EditorView: View {
     @State private var swipeMonitor = SwipePageMonitor()
 
     var body: some View {
-        VStack(spacing: 18) {
-            if appModel.officialAppRunning {
-                conflictBanner
-            }
-            HStack(alignment: .center, spacing: 12) {
-                chassis
-                    .overlay(alignment: .trailing) { navTrailingOverlay }
-                if appModel.config.navStyle == .matrixRail {
-                    railMatrixNav
+        HStack(alignment: .top, spacing: 24) {
+            // 左列:设备底座 + 翻页/场景导航(布局原样,原单列 VStack 平移进来)
+            VStack(spacing: 18) {
+                if appModel.officialAppRunning {
+                    conflictBanner
                 }
+                HStack(alignment: .center, spacing: 12) {
+                    chassis
+                        .overlay(alignment: .trailing) { navTrailingOverlay }
+                    if appModel.config.navStyle == .matrixRail {
+                        railMatrixNav
+                    }
+                }
+                // 以理想高度(=底座高度)布局本行:右缘轨的 maxHeight:.infinity 只在底座高度内
+                // 展开、与底座等高——否则会被 VStack 的整窗高度提案拉成通天空轨
+                .fixedSize(horizontal: false, vertical: true)
+                if showGlassCalibration {
+                    glassCalibrationBar
+                }
+                sceneNavBottom
+                hint
             }
-            // 以理想高度(=底座高度)布局本行:右缘轨的 maxHeight:.infinity 只在底座高度内
-            // 展开、与底座等高——否则会被 VStack 的整窗高度提案拉成通天空轨
-            .fixedSize(horizontal: false, vertical: true)
-            if showGlassCalibration {
-                glassCalibrationBar
+            // 右列:功能调色盘,固定停靠(不是浮层,不遮挡键位)
+            FunctionPaletteView(
+                appModel: appModel,
+                onConfigureTemplate: { kind in
+                    configuringTemplate = kind
+                }
+            )
+            .onHover { inside in
+                // 指针在调色盘内:滚动只作用于调色盘,不翻页(见 SwipePageMonitor.handle)
+                swipeMonitor.isPointerOverPalette = inside
             }
-            sceneNavBottom
-            hint
         }
         // 内容固定 15 键,无需滚动(滚动条与滚动功能已移除);顶部对齐保持原视觉——
         // 键帽定尺后,全屏/大窗下键列同样不摊开,只是画布留白增多(官方 Stream Deck app 同款做法)
@@ -86,27 +99,11 @@ struct EditorView: View {
             }
         }
         .toolbar { toolbar }
-        .overlay(alignment: .topTrailing) {
-            if showMonitorPalette {
-                MonitorPaletteView(
-                    appModel: appModel,
-                    picked: pendingMonitorPayload,
-                    onPick: { payload in
-                        pendingMonitorPayload = (pendingMonitorPayload == payload) ? nil : payload
-                    }
-                )
-                .onHover { inside in
-                    // 指针在托盘内:滚动只作用于托盘,不翻页(见 SwipePageMonitor.handle)
-                    swipeMonitor.isPointerOverPalette = inside
-                }
-                .padding(.top, 6)
-                .padding(.trailing, 6)
-            }
-        }
         .containerBackground(for: .window) {
             Color(nsColor: .windowBackgroundColor)
         }
-        .frame(minWidth: 760, minHeight: 560)
+        // 双列下限:底座 584 + 右缘轨 ~100(矩阵导航样式) + 间距 + 调色盘 344 + 左右留白 48
+        .frame(minWidth: 1120, minHeight: 560)
         .task { appModel.start() }
         .onAppear {
             brightness = Double(appModel.config.config.brightness)
@@ -142,16 +139,31 @@ struct EditorView: View {
             editing: editingTarget != nil,
             layout: showLayoutTuning,
             manager: showPluginManager,
-            binding: pageBindingSheetShown
+            binding: pageBindingSheetShown,
+            template: configuringTemplate != nil,
+            logs: showLogSheet
         ))
         .sheet(item: $editingTarget) { target in
             KeyEditView(index: target.index, appModel: appModel)
+        }
+        .sheet(item: $configuringTemplate) { kind in
+            TemplateConfigSheet(
+                kind: kind,
+                initial: appModel.templateDrafts[kind],
+                onSave: { config in
+                    // 就绪态存会话内存(不持久化):一次性,拖拽落键即被消费;重启同样清零
+                    appModel.templateDrafts[kind] = config
+                }
+            )
         }
         .sheet(isPresented: $showLayoutTuning) {
             LayoutTuningSheet(appModel: appModel)
         }
         .sheet(isPresented: $showPluginManager) {
             PluginManagerSheet(appModel: appModel)
+        }
+        .sheet(isPresented: $showLogSheet) {
+            LogSheet(appModel: appModel)
         }
     }
 
@@ -173,9 +185,6 @@ struct EditorView: View {
                 }
                 Toggle(isOn: $showGlassCalibration) {
                     Label("玻璃对位校准", systemImage: "scope")
-                }
-                Toggle(isOn: $showMonitorPalette) {
-                    Label("显示器功能托盘", systemImage: "display")
                 }
                 Button {
                     showPluginManager = true
@@ -216,12 +225,16 @@ struct EditorView: View {
                     Label("立即熄屏", systemImage: "moon.zzz.fill")
                 }
                 Button {
+                    appModel.pluginHost.reviveRuntimes() // 死亡插件的人工复活入口
                     appModel.applyPageToDevice()
                 } label: {
                     Label("重新应用到设备", systemImage: "arrow.triangle.2.circlepath")
                 }
-                Divider()
-                Button("帮助") {}
+                Button {
+                    showLogSheet = true
+                } label: {
+                    Label("运行日志…", systemImage: "doc.text.magnifyingglass")
+                }
                 Divider()
                 Button("退出 OpenDeck") { NSApp.terminate(nil) }
             } label: {
@@ -233,12 +246,18 @@ struct EditorView: View {
     /// 连接状态徽章
     private var statusPill: some View {
         let connected = appModel.device.state == .running
+        // 熄屏/涂黑不再静默:Mac 端看得见设备为什么是黑的,菜单里也有「立即熄屏」的对称出口
+        let screenOff = connected && appModel.device.isScreenOff
+        let blacked = connected && !screenOff && appModel.device.keysBlacked
         return HStack(spacing: 7) {
             Circle()
-                .fill(connected ? Color.green : Color.gray)
+                .fill(!connected ? Color.gray : screenOff || blacked ? Color.orange : Color.green)
                 .frame(width: 8, height: 8)
-                .shadow(color: connected ? .green.opacity(0.6) : .clear, radius: 3)
-            Text(connected ? "Stream Dock 293V3" : "未连接设备")
+                .shadow(color: connected && !screenOff && !blacked ? .green.opacity(0.6) : .clear, radius: 3)
+            Text(!connected ? "未连接设备"
+                 : screenOff ? "已熄屏(按任意键唤醒)"
+                 : blacked ? "键面已涂黑(亮度回拉恢复)"
+                 : "Stream Dock 293V3")
                 .font(.callout.weight(.semibold))
         }
         .padding(.horizontal, 10)
@@ -419,6 +438,14 @@ struct EditorView: View {
             Button("添加页") {
                 if let id = scene.id { appModel.addPage(toScene: id) }
             }
+            if isCurrent {
+                // 圆点页此前只能加不能删(误触「添加页」永久留痕);主页(第 1 页)按设计不可删
+                Button("删除当前页(圆点)", role: .destructive) {
+                    appModel.deletePageInCurrentScene(at: appModel.config.currentPageIndex)
+                }
+                .disabled(appModel.config.currentPageIndex == 0 || scene.pages.count < 2)
+                .help(appModel.config.currentPageIndex == 0 ? "主页不可删除" : "删除正在查看的这页圆点")
+            }
             Button("重命名") {
                 renameTargetID = scene.id
                 renameText = scene.name
@@ -494,21 +521,16 @@ struct EditorView: View {
                 // 直接往 Button 上挂 dropDestination 在合成输入下收不到落点
                 ZStack {
                     Button {
-                        // 保留槽(导航 14/15 + Stats 6/7/8):全页保留,不开放编辑
+                        // 保留槽(仅导航 14/15):全页保留,不开放编辑(统计键已动作化,不再占 6/7/8)
                         guard AppModel.reservedSlot(at: index) == nil else { return }
-                        if let pending = pendingMonitorPayload {
-                            Self.monitorLog.info("monitor click-bind \(pending, privacy: .public) → key \(index, privacy: .public)")
-                            pendingMonitorPayload = nil
-                            bindPayload(pending, at: index)
-                            return
-                        }
                         editingTarget = EditTarget(index: index)
                     } label: {
                         KeycapView(
                             config: key,
                             remotePressed: appModel.pressedKeyIndices.contains(index),
                             slot: appModel.keyImageSlots[index],
-                            staticFrame: appModel.animationPreviewFrame(for: key)
+                            staticFrame: appModel.animationPreviewFrame(for: key),
+                            pluginMissing: appModel.pluginHost.isPluginMissing(key.action)
                         )
                     }
                     .buttonStyle(KeycapButtonStyle())
@@ -519,19 +541,21 @@ struct EditorView: View {
                     }
                 }
                 .dropDestination(for: String.self) { items, _ in
-                    // 用纯文本承载载荷（command rawValue 或 "composite:<id>"）：自定义 UTType
+                    // 用纯文本承载载荷（格式见 FunctionPaletteCatalog 头注释）：自定义 UTType
                     // 在宿主 NSView 上不保证被接受，而 public.utf8-plain-text 投放链路最稳
                     guard let raw = items.first,
                           AppModel.reservedSlot(at: index) == nil else {
-                        Self.monitorLog.info("monitor drop rejected at \(index, privacy: .public)")
+                        Self.paletteLog.info("palette drop rejected at \(index, privacy: .public)")
                         return false
                     }
                     dropTargetIndex = nil
-                    Self.monitorLog.info("monitor drop \(raw, privacy: .public) → key \(index, privacy: .public)")
+                    Self.paletteLog.info("palette drop \(raw, privacy: .public) → key \(index, privacy: .public)")
                     bindPayload(raw, at: index)
                     return true
                 } isTargeted: { targeted in
-                    if targeted { Self.monitorLog.info("monitor drop target entered \(index, privacy: .public)") }
+                    // 保留槽不亮拖放圈:亮白圈再静默拒绝是纯挫败感
+                    if targeted, AppModel.reservedSlot(at: index) != nil { return }
+                    if targeted { Self.paletteLog.info("palette drop target entered \(index, privacy: .public)") }
                     dropTargetIndex = targeted ? index : (dropTargetIndex == index ? nil : dropTargetIndex)
                 }
                 .help(AppModel.reservedSlot(at: index) == nil
@@ -545,27 +569,9 @@ struct EditorView: View {
     private static let gridColumns: [GridItem] =
         Array(repeating: GridItem(.fixed(100), spacing: 12), count: StreamDock293S.columns)
 
-    /// 托盘落下/点选:把载荷绑到该键(保留槽不可放置),并即时上屏
-    /// 载荷 = MonitorCommand.rawValue(原子动作) 或 "composite:<id>"(自定义/复合配方)
+    /// 调色盘落下/点选:落键政策在 AppModel.bindPayload(复刻/草稿消费/插件实例政策),视图只转发
     private func bindPayload(_ raw: String, at index: Int) {
-        guard AppModel.reservedSlot(at: index) == nil else { return }
-        var key = appModel.config.keyConfig(at: index)
-        if let tile = MonitorCompositeCatalog.tile(payload: raw) {
-            key.action = tile.action
-            key.animation = tile.animation
-            key.title = tile.title
-        } else if let command = MonitorCommand(rawValue: raw) {
-            key.action = .monitor(command)
-            // 落下即写短标签:槽位里原有的数字占位(3…15)不是用户标题,留着会读成"5 号键在调亮度"
-            key.title = command.title
-            // 输入类动作自动带 monitorInput 动效键面(与槽位 1 同款);其它动作清掉动效,避免残留
-            key.animation = command.carriesInputAnimation ? .monitorInput : nil
-        } else {
-            Self.monitorLog.info("monitor bind rejected unknown payload \(raw, privacy: .public)")
-            return
-        }
-        appModel.config.updateKey(key, at: index)
-        appModel.applyKey(at: index)
+        appModel.bindPayload(raw, at: index)
     }
 
     // MARK: - 玻璃对位校准(实时预览区内联)
@@ -696,6 +702,8 @@ private struct KeyEditView: View {
     @State private var pluginActionUUID: String
     /// 显示器动作草稿:托盘拖到键位后,点开该键编辑时也落到这里
     @State private var monitorCommand: MonitorCommand
+    /// 系统状态草稿:GPU/CPU/温度
+    @State private var statKind: StatKind
     /// 草稿实例身份:PI(webview 生命周期)与保存组装共用,必须跨渲染稳定。
     /// 原动作未变 = 复用持久化 contextID;换了动作 = onChange 时一次性生成新 UUID。
     @State private var draftContextID: String
@@ -724,6 +732,7 @@ private struct KeyEditView: View {
         var pluginActionUUID = ""
         var draftContextID = ""
         var monitorCommand = MonitorCommand.brightnessUp
+        var statKind = StatKind.gpu
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url
@@ -741,13 +750,16 @@ private struct KeyEditView: View {
         case .nextPage: kind = .nextPage
         case .previousScene: kind = .previousScene
         case .nextScene: kind = .nextScene
-        case .gotoPage: break // 旧动作类型不再提供编辑,重新保存即清除
+        case .gotoPage: kind = .gotoPageLegacy // 旧动作:只读可见,保存即清除(不再静默伪装成「无动作」)
         case .pageIndicator: kind = .pageIndicator
         case .screenOff: kind = .screenOff
         case .sleepGuard: kind = .sleepGuard
         case .monitor(let command): kind = .monitor; monitorCommand = command
+        case .stat(let statKind): kind = .stat; self.statKind = statKind
         case .keyboardHeatmap: kind = .heatmap
-        case nil: break
+        case nil:
+            // 待配置模板占位(调色盘模板磁贴落下):预选类型、参数留空,补齐后保存即落定
+            if let template = key.template { kind = template.actionKind }
         }
         _kind = State(initialValue: kind)
         _appPath = State(initialValue: appPath)
@@ -761,6 +773,7 @@ private struct KeyEditView: View {
         _pluginActionUUID = State(initialValue: pluginActionUUID)
         _draftContextID = State(initialValue: draftContextID)
         _monitorCommand = State(initialValue: monitorCommand)
+        _statKind = State(initialValue: statKind)
     }
 
     /// 草稿状态组装出的键配置——live 预览与保存共用,保证「所见即所得」
@@ -770,7 +783,8 @@ private struct KeyEditView: View {
             backgroundColorHex: normalizedColorHex,
             iconPath: iconPath,
             action: assembledAction,
-            animation: animation
+            animation: animation,
+            template: nil  // 保存即落定:清除模板占位(取消编辑则保留占位)
         )
     }
 
@@ -833,6 +847,10 @@ private struct KeyEditView: View {
                 Button("保存") { save() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
+                // 防「看起来配好了的死键」:选了动作类型但参数没填全时禁用保存
+                // (「无动作」是显式清空、旧版 gotoPage 是文档化的清除路径,两者均可保存)
+                .disabled(kind != .none && kind != .gotoPageLegacy && assembledAction == nil)
+                .help(kind != .none && kind != .gotoPageLegacy && assembledAction == nil ? "参数未填全,该键将不会执行任何动作" : "")
             }
             .padding(12)
         }
@@ -998,6 +1016,12 @@ private struct KeyEditView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        case .gotoPageLegacy:
+            LabeledContent("说明") {
+                Text("旧版「前往指定页」动作（选择器已移除），此键目前仍可正常使用；一旦保存，该动作即被清除。")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .monitor:
             LabeledContent("功能") {
                 Picker("", selection: $monitorCommand) {
@@ -1018,6 +1042,21 @@ private struct KeyEditView: View {
                 Text("VCP 0x\(String(monitorCommand.spec.code, radix: 16))　\(note)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        case .stat:
+            LabeledContent("监视项") {
+                Picker("", selection: $statKind) {
+                    ForEach(StatKind.allCases, id: \.self) { kind in
+                        Text(kind.label).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            }
+            LabeledContent("说明") {
+                Text("键面整帧实时刷新(2s 采样);放哪哪显示,清除即消失")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         case .previousPage:
             LabeledContent("说明") { Text("在当前场景内循环切到上一页").foregroundStyle(.secondary) }
@@ -1141,9 +1180,9 @@ private struct KeyEditView: View {
         case .runShortcut:
             shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
         case .shellScript:
-            .shellScript(scriptText)
+            scriptText.isEmpty ? nil : .shellScript(scriptText)
         case .appleScript:
-            .appleScript(scriptText)
+            scriptText.isEmpty ? nil : .appleScript(scriptText)
         case .hotkey:
             if let code = hotkeyKeyCode {
                 .hotkey(keyCode: code, modifiers: hotkeyModifiers)
@@ -1156,6 +1195,10 @@ private struct KeyEditView: View {
             assembledPluginAction
         case .monitor:
             .monitor(monitorCommand)
+        case .stat:
+            .stat(statKind)
+        case .gotoPageLegacy:
+            nil // 旧动作不可再组装(前往指定页的选择器已移除),保存即清除
         case .heatmap:
             .keyboardHeatmap
         case .previousPage:
@@ -1189,13 +1232,14 @@ private struct KeyEditView: View {
         dismiss()
     }
 
-    /// 清除此键：动作 / 动效 / 标题 / 图标全部清空，立即保存上屏（槽位 11 清「切换输入」用这个）
+    /// 清除此键：动作 / 动效 / 标题 / 图标 / 模板占位全部清空，立即保存上屏（槽位 11 清「切换输入」用这个）
     private func clearKey() {
         var key = appModel.config.keyConfig(at: index)
         key.action = nil
         key.animation = nil
         key.title = ""
         key.iconPath = nil
+        key.template = nil
         appModel.config.updateKey(key, at: index)
         appModel.applyKey(at: index)
         dismiss()
@@ -1205,6 +1249,205 @@ private struct KeyEditView: View {
         appModel.config.updateKey(draftConfig, at: index)
         appModel.applyKey(at: index)
         dismiss()
+    }
+}
+
+/// 应用图标 → 键面底图 PNG(落盘缓存:~/Library/Application Support/OpenDeck/app-icons/)。
+/// 缓存键 = bundleID(稳定可读),无 bundleID 时退回转义路径;同一 app 只渲一次。
+/// 注意:NSWorkspace.icon 会带 Finder 同款文件状态角标(隔离/替身等)——与用户在 Finder 看到的一致。
+// MARK: - 模板磁贴配置面板（调色盘）
+
+/// 点击调色盘里的模板磁贴弹出:配参数 → 保存为就绪态(AppModel.templateDrafts,会话内存)
+/// → 拖拽磁贴到键位即完整键;**一次性**——落键即消费草稿,磁贴复原;再点磁贴 = 重新配置。
+/// 只收 6 种带参模板;复用 KeyEditView 同款捕获组件(HotkeyCaptureField/FilePicker),
+/// 参数口径与 KeyEditView.assembledAction 一致(空参不成动作,含空脚本)。
+private struct TemplateConfigSheet: View {
+    let kind: KeyTemplate
+    /// 已有就绪态(再点磁贴 = 改配置)
+    let initial: KeyConfig?
+    var onSave: (KeyConfig) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var title: String
+    @State private var appPath: String
+    @State private var urlString: String
+    @State private var shortcutName: String
+    @State private var scriptText: String
+    @State private var hotkeyKeyCode: Int?
+    @State private var hotkeyModifiers: [String]
+    /// 打开应用的键面底图(应用真实图标,AppIconCache 落盘缓存)
+    @State private var iconPath: String?
+
+    private var defaultTitle: String {
+        FunctionPaletteCatalog.item(forPayload: "template:\(kind.rawValue)")?.title ?? "未命名"
+    }
+
+    init(kind: KeyTemplate, initial: KeyConfig?, onSave: @escaping (KeyConfig) -> Void) {
+        self.kind = kind
+        self.initial = initial
+        self.onSave = onSave
+        var appPath = ""
+        var urlString = ""
+        var shortcutName = ""
+        var scriptText = ""
+        var keyCode: Int?
+        var modifiers: [String] = []
+        switch initial?.action {
+        case .openApp(let path): appPath = path
+        case .openURL(let url): urlString = url
+        case .runShortcut(let name): shortcutName = name
+        case .shellScript(let script): scriptText = script
+        case .appleScript(let script): scriptText = script
+        case .hotkey(let code, let mods): keyCode = code; modifiers = mods
+        default: break
+        }
+        _title = State(initialValue: initial?.title ?? "")
+        _appPath = State(initialValue: appPath)
+        _urlString = State(initialValue: urlString)
+        _shortcutName = State(initialValue: shortcutName)
+        _scriptText = State(initialValue: scriptText)
+        _hotkeyKeyCode = State(initialValue: keyCode)
+        _hotkeyModifiers = State(initialValue: modifiers)
+        _iconPath = State(initialValue: initial?.iconPath)
+    }
+
+    /// 参数口径与 KeyEditView 一致:空参不成动作(保存按钮禁用),脚本允许空文
+    private var assembledAction: KeyAction? {
+        switch kind {
+        case .openApp:
+            appPath.isEmpty ? nil : .openApp(path: appPath)
+        case .openURL:
+            urlString.trimmingCharacters(in: .whitespaces).isEmpty ? nil : .openURL(urlString)
+        case .runShortcut:
+            shortcutName.isEmpty ? nil : .runShortcut(name: shortcutName)
+        case .shellScript:
+            scriptText.isEmpty ? nil : .shellScript(scriptText)
+        case .appleScript:
+            scriptText.isEmpty ? nil : .appleScript(scriptText)
+        case .hotkey:
+            hotkeyKeyCode.map { .hotkey(keyCode: $0, modifiers: hotkeyModifiers) }
+        }
+    }
+
+    private var draftConfig: KeyConfig {
+        KeyConfig(
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? defaultTitle : title,
+            backgroundColorHex: "#3B4252",
+            iconPath: iconPath,
+            action: assembledAction,
+            animation: nil,
+            template: nil
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    HStack(spacing: 14) {
+                        KeycapView(config: draftConfig, interactive: false)
+                            .frame(width: 64)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("就绪磁贴预览")
+                                .font(.subheadline.weight(.semibold))
+                            Text("保存后拖拽此磁贴到键位即完成绑定")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                Section("外观") {
+                    LabeledContent("标题") {
+                        TextField(defaultTitle, text: $title)
+                    }
+                }
+                Section("参数") {
+                    parameterForm
+                }
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("保存") {
+                    guard assembledAction != nil else { return }
+                    onSave(draftConfig)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(assembledAction == nil)
+            }
+            .padding(12)
+        }
+        .frame(width: 420)
+    }
+
+    @ViewBuilder
+    private var parameterForm: some View {
+        switch kind {
+        case .openApp:
+            LabeledContent("应用") {
+                HStack {
+                    Text(appPath.isEmpty ? "未选择" : (appPath as NSString).lastPathComponent)
+                        .foregroundStyle(appPath.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    Button("选择应用…") {
+                        if let path = FilePicker.pick(types: [.application], prompt: "选择要打开的应用") {
+                            appPath = path
+                            // 自动带出应用显示名与真实图标(标题仍可手改,重选应用即覆盖)
+                            title = FileManager.default.displayName(atPath: path)
+                            iconPath = AppIconCache.pngPath(forAppAt: path)
+                        }
+                    }
+                }
+            }
+        case .openURL:
+            LabeledContent("网址") {
+                TextField("https://example.com", text: $urlString)
+            }
+        case .runShortcut:
+            LabeledContent("快捷指令名称") {
+                TextField("Shortcuts 应用里的名称", text: $shortcutName)
+            }
+        case .shellScript:
+            scriptEditor("以 zsh -c 执行")
+        case .appleScript:
+            scriptEditor("以 osascript 执行")
+        case .hotkey:
+            LabeledContent("组合键") {
+                HotkeyCaptureField(keyCode: $hotkeyKeyCode, modifiers: $hotkeyModifiers)
+            }
+        }
+    }
+
+    private func scriptEditor(_ caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextEditor(text: $scriptText)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 96)
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// 待配置模板 → 编辑器预选类型:调色盘模板磁贴落下后(action = nil)首次点开,
+/// 直接落到对应表单,不必在下拉菜单里重选一遍
+extension KeyTemplate {
+    var actionKind: ActionKind {
+        switch self {
+        case .openApp: .openApp
+        case .openURL: .openURL
+        case .runShortcut: .runShortcut
+        case .shellScript: .shellScript
+        case .appleScript: .appleScript
+        case .hotkey: .hotkey
+        }
     }
 }
 
@@ -1227,7 +1470,10 @@ enum ActionKind: Hashable, CaseIterable {
     case sleepGuard
     case plugin
     case monitor
+    case stat
     case heatmap
+    /// 旧版「前往指定页」:只读展示(选择器已移除),保存即清除——替代原「静默显示为无动作」
+    case gotoPageLegacy
 
     var label: String {
         switch self {
@@ -1248,7 +1494,9 @@ enum ActionKind: Hashable, CaseIterable {
         case .sleepGuard: "合盖休眠锁"
         case .plugin: "插件动作"
         case .monitor: "显示器（DDC）"
+        case .stat: "系统状态（GPU/CPU/温度）"
         case .heatmap: "键盘热力图（读取 KeyAnalyze）"
+        case .gotoPageLegacy: "前往指定页（旧版）"
         }
     }
 }
@@ -1260,173 +1508,8 @@ enum ActionKind: Hashable, CaseIterable {
 /// 步进保证:触控板精确手势以「手指接触周期」(phase began→changed→ended)为单位,
 /// 周期内至多步进 1,手指离开后的惯性滚动(momentumPhase)全部吞掉——
 /// 不论速度多快、行程多长,一次扫动恰好步进 1。传统滚轮(无相位)一格一步 + 0.35s 冷却防连翻。
-@MainActor
-private final class SwipePageMonitor {
-    private var token: Any?
-    /// 回调:isHorizontal(水平=切场景/垂直=场景内翻页)+ 方向(+1 下一/-1 上一)
-    var onSwipe: ((_ isHorizontal: Bool, _ direction: Int) -> Void)?
-    /// 模态抑制:Sheet(键编辑/调参/插件管理/场景联动)打开时手势让路,滚动交还给面板
-    var isSuppressed = false
-    /// 指针悬停在显示器托盘(deco)内:滚动只作用于托盘自身的 ScrollView,不触发翻页
-    var isPointerOverPalette = false
-
-    private var horizontalAccumulated: CGFloat = 0
-    private var verticalAccumulated: CGFloat = 0
-    /// 一次手指接触周期内至多步进 1
-    private var flipped = false
-    private var gestureActive = false
-    /// 阈值:累积滚动量达到即触发(触控板一指行程约 10–30)
-    private let threshold: CGFloat = 30
-    /// 传统滚轮一格 = 一步:非精确增量单位是「行」,一格约 ±1~±3;若沿用触控板阈值 30
-    /// 等于要滚 10~30 格才翻一页,体感即「滚轮没反应」(2026-10-17 用户反馈)
-    private let wheelStep: CGFloat = 1
-    /// 传统滚轮(无精确增量、无相位)的触发冷却
-    private var wheelCooldownUntil = Date.distantPast
-    /// 上一格滚轮时刻:两格间隔超 0.5s 视为新动作,清掉零星半行残余防误触
-    private var lastWheelAt = Date.distantPast
-
-    func start() {
-        end()
-        token = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            self?.handle(event) ?? event
-        }
-    }
-
-    func end() {
-        if let token {
-            NSEvent.removeMonitor(token)
-        }
-        token = nil
-        horizontalAccumulated = 0
-        verticalAccumulated = 0
-        gestureActive = false
-        flipped = false
-    }
-
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        // 模态上下文(Sheet 打开):手势让路,滚动交还给面板;抑制期动量也放行
-        if isSuppressed { return event }
-        // 指针在显示器托盘(deco)内:滚动只作用于托盘自身(其 ScrollView),不翻页
-        if isPointerOverPalette { return event }
-
-        let dx = event.scrollingDeltaX
-        let dy = event.scrollingDeltaY
-
-        // 惯性尾流(手指离开后的动量滚动):一律吞掉——"快扫连翻"的根源。
-        // 动量结束、下一次 phase .began 到来才开启新的一次扫动。
-        if event.momentumPhase != [] { return nil }
-
-        // 分流依据是「有无手势相位」而非「是否精确增量」:机械滚轮无相位且非精确;
-        // Logi Options+ 等平滑滚动驱动是精确增量但同样无相位——若按精确路由进触控板分支,
-        // 手势永远等不到 .ended,翻一页后 flipped 卡死,滚轮从此失灵(2026-10-17 用户反馈)
-        guard event.phase != [] else {
-            return handleDiscrete(dx: dx, dy: dy, precise: event.hasPreciseScrollingDeltas)
-        }
-
-        // 触控板精确手势:一次接触周期(phase began→changed→ended)至多步进 1
-        if event.phase == .began || !gestureActive {
-            horizontalAccumulated = 0
-            verticalAccumulated = 0
-            flipped = false
-            gestureActive = true
-        }
-        if event.phase == .ended {
-            gestureActive = false // 周期结束:下一次事件(无论相位)开启新扫动
-        }
-
-        // 手势周期内的所有滚动一律吞掉(网格内容固定,页面不晃)
-        if abs(dx) > abs(dy) {
-            horizontalAccumulated += dx
-            guard !flipped, abs(horizontalAccumulated) >= threshold else { return nil }
-            flipped = true
-            // 自然滚动:双指左扫 deltaX 为正 = 看右侧内容 = 下一场景
-            let direction = horizontalAccumulated > 0 ? 1 : -1
-            horizontalAccumulated = 0
-            onSwipe?(true, direction)
-            return nil
-        }
-        if abs(dy) >= abs(dx) {
-            verticalAccumulated += dy
-            guard !flipped, abs(verticalAccumulated) >= threshold else { return nil }
-            flipped = true
-            // 自然滚动:双指上扫 deltaY 为负 = 看下方内容 = 下一页。
-            // deltaY 与 deltaX 符号约定相反(水平左扫为正),以真机实证为准,勿按直觉假设
-            let direction = verticalAccumulated > 0 ? -1 : 1
-            verticalAccumulated = 0
-            onSwipe?(false, direction)
-            return nil
-        }
-        return nil
-    }
-
-    /// 无相位的离散滚动(机械滚轮 / 平滑滚动驱动):一步一触发 + 0.35s 冷却防连翻,全程吞掉;
-    /// 机械滚轮增量单位是行(一格 ±1~±3)→ 步长 1;精确增量单位是点 → 步长 20(一格约 10~40 点)。
-    /// 诊断日志(默认级别,log show 可查):每个滚动突发首事件 + 每次触发,定位设备类别与方向
-    private func handleDiscrete(dx: CGFloat, dy: CGFloat, precise: Bool) -> NSEvent? {
-        let now = Date()
-        if now.timeIntervalSince(lastWheelAt) > 0.5 {
-            horizontalAccumulated = 0
-            verticalAccumulated = 0
-            Self.swipeLog.notice("离散滚动开始 precise=\(precise) dx=\(dx) dy=\(dy)")
-        }
-        lastWheelAt = now
-        guard now >= wheelCooldownUntil else { return nil }
-        let step: CGFloat = precise ? 20 : wheelStep
-        if abs(dx) > abs(dy) {
-            horizontalAccumulated += dx
-            guard abs(horizontalAccumulated) >= step else { return nil }
-            // 右滚(Shift+滚轮转水平)= 看右侧 = 下一场景
-            let direction = horizontalAccumulated > 0 ? 1 : -1
-            horizontalAccumulated = 0
-            wheelCooldownUntil = now.addingTimeInterval(0.35)
-            Self.swipeLog.notice("离散触发 水平 direction=\(direction)")
-            onSwipe?(true, direction)
-            return nil
-        }
-        if dy != 0 {
-            verticalAccumulated += dy
-            guard abs(verticalAccumulated) >= step else { return nil }
-            // 滚轮下滚 = 内容下移 = 下一页(AppKit 符号:deltaY 正 = 向上滚)
-            let direction = verticalAccumulated > 0 ? -1 : 1
-            verticalAccumulated = 0
-            wheelCooldownUntil = now.addingTimeInterval(0.35)
-            Self.swipeLog.notice("离散触发 垂直 direction=\(direction) acc=\(dy)")
-            onSwipe?(false, direction)
-            return nil
-        }
-        return nil
-    }
-
-    private static let swipeLog = Logger(subsystem: "opendeck", category: "swipe")
-}
-
 // MARK: - 模态滑动抑制
 
-/// 任一 Sheet 打开 → 滑动手势让路,滚动交还给面板(键编辑 PI/调参/插件管理/场景联动)。
-/// 用 ViewModifier 而非实例方法:链式调用查的是 View 值的类型,查不到 EditorView 的私有方法
-private struct ModalSwipeSuppression: ViewModifier {
-    let monitor: SwipePageMonitor
-    let editing: Bool
-    let layout: Bool
-    let manager: Bool
-    let binding: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: editing) { _, value in
-                monitor.isSuppressed = value
-            }
-            .onChange(of: layout) { _, value in
-                monitor.isSuppressed = value
-            }
-            .onChange(of: manager) { _, value in
-                monitor.isSuppressed = value
-            }
-            .onChange(of: binding) { _, value in
-                monitor.isSuppressed = value
-            }
-    }
-}
 
 // MARK: - 全局热键捕获
 
@@ -1434,339 +1517,9 @@ private struct ModalSwipeSuppression: ViewModifier {
 /// 比 NSView keyDown 可靠(不受焦点状态与菜单键等价拦截影响),且无需辅助功能权限。
 /// 生命周期纪律:start 前必 end;捕获到组合键或 ⎋ 后立即 end;视图消失兜底 end,
 /// 确保 monitor 绝不会在录制之外吞键。
-@MainActor
-private final class HotkeyCaptureMonitor {
-    private var token: Any?
-
-    /// solo 候选:已按下、尚未伴随主键或其他修饰键的修饰键码(单按修饰键录制的判定状态)
-    private var soloModifiers: Set<Int> = []
-    /// 本轮出现过第二个修饰键或任何主键:之后的修饰键「按下再松开」不再视为单键录制
-    private var soloSequenceBroken = false
-
-    var onCapture: ((Int, [String]) -> Void)?
-    var onCancel: (() -> Void)?
-    var onModifiersChanged: ((String) -> Void)?
-
-    func start() {
-        end()
-        token = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            guard let self else { return event }
-            return self.handle(event)
-        }
-    }
-
-    func end() {
-        if let token {
-            NSEvent.removeMonitor(token)
-        }
-        token = nil
-        soloModifiers = []
-        soloSequenceBroken = false
-    }
-
-    /// 返回 nil 表示吞掉该事件(录制期间按键不应再触发输入框/快捷键)
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        switch event.type {
-        case .flagsChanged:
-            onModifiersChanged?(HotkeySymbols.modifierPreview(for: event.modifierFlags))
-            trackSoloModifier(event)
-            return nil
-        case .keyDown:
-            // ⎋ 语义 = 取消录制:⎋ 本身几乎不会被设为热键,还能避免顺带关闭 Sheet
-            if event.keyCode == 53 {
-                end()
-                onCancel?()
-                return nil
-            }
-            let modifiers = HotkeySymbols.configModifiers(for: event.modifierFlags)
-            end()
-            onCapture?(Int(event.keyCode), modifiers)
-            return nil
-        default:
-            return event
-        }
-    }
-
-    /// 单按修饰键录制:修饰键「单独按下 → 松开」(期间无任何主键、无第二个修饰键)
-    /// 即录制为该键本身(如右⌘ = hotkey(54, []),让槽位可以模拟单颗修饰键)。
-    /// 修饰键按下/抬起只有 flagsChanged 事件:keyCode 指明是哪颗键,
-    /// 该键的功能位在 modifierFlags 里置位 = 按下、清位 = 松开。
-    private func trackSoloModifier(_ event: NSEvent) {
-        let code = Int(event.keyCode)
-        guard let mask = HotkeySymbols.modifierMasksByKeyCode[code] else { return } // 非修饰键(如大写锁定)不参与
-        if event.modifierFlags.contains(mask) {
-            if !soloModifiers.isEmpty { soloSequenceBroken = true } // 组合键积累中,不是单按
-            soloModifiers.insert(code)
-        } else {
-            // 松开时恰好是全程单独按住的这一颗 → 录制为单键
-            if soloModifiers == [code], !soloSequenceBroken {
-                end()
-                onCapture?(code, [])
-                return
-            }
-            soloModifiers.remove(code)
-            if soloModifiers.isEmpty { soloSequenceBroken = false } // 全部松开,下一轮重新判定
-        }
-    }
-}
-
-private struct HotkeyCaptureField: View {
-    @Binding var keyCode: Int?
-    @Binding var modifiers: [String]
-
-    @State private var monitor = HotkeyCaptureMonitor()
-    @State private var recording = false
-    @State private var livePreview = ""
-
-    var body: some View {
-        HStack(spacing: 8) {
-            display
-            Spacer()
-            if recording {
-                Button("取消") { stopRecording() }
-            } else {
-                Button(keyCode == nil ? "录制" : "重新录制") { startRecording() }
-            }
-            if keyCode != nil, !recording {
-                Button {
-                    keyCode = nil
-                    modifiers = []
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("清除组合键")
-            }
-        }
-        .onDisappear {
-            monitor.end()
-            recording = false
-        }
-    }
-
-    @ViewBuilder
-    private var display: some View {
-        if recording {
-            Label(
-                livePreview.isEmpty ? "按下组合键,或单独按下再松开修饰键;⎋ 取消" : "\(livePreview) … 松开修饰键即录制",
-                systemImage: "record.circle"
-            )
-            .foregroundStyle(.orange)
-        } else if let code = keyCode {
-            Text(HotkeySymbols.displayString(keyCode: code, modifiers: modifiers))
-                .font(.system(.body, design: .monospaced).weight(.medium))
-        } else {
-            Text("未设置").foregroundStyle(.secondary)
-        }
-    }
-
-    private func startRecording() {
-        livePreview = ""
-        recording = true
-        monitor.onCapture = { code, mods in
-            keyCode = code
-            modifiers = mods
-            recording = false
-        }
-        monitor.onCancel = { recording = false }
-        monitor.onModifiersChanged = { preview in
-            livePreview = preview
-        }
-        monitor.start()
-    }
-
-    private func stopRecording() {
-        monitor.end()
-        recording = false
-        livePreview = ""
-    }
-}
-
-/// keyCode/修饰键 ↔ 显示符号、配置字符串的转换(按美式 ANSI 布局)
-enum HotkeySymbols {
-    private static let keyNames: [Int: String] = [
-        // 字母区(kVK_ANSI_A…Z 扫描码不连续)
-        0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V",
-        11: "B", 12: "Q", 13: "W", 14: "E", 15: "R", 16: "Y", 17: "T",
-        31: "O", 32: "U", 34: "I", 35: "P", 37: "L", 38: "J", 40: "K", 45: "N", 46: "M",
-        // 数字行与符号
-        18: "1", 19: "2", 20: "3", 21: "4", 22: "6", 23: "5", 25: "9", 26: "7",
-        28: "8", 29: "0",
-        24: "=", 27: "-", 30: "]", 33: "[", 39: "'", 41: ";", 42: "\\",
-        43: ",", 44: "/", 47: ".",
-        // 常用功能键
-        36: "↩", 48: "⇥", 49: "空格", 51: "⌫", 117: "⌦",
-        96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9", 103: "F11",
-        105: "F13", 106: "F16", 107: "F14", 109: "F10", 111: "F12", 113: "F15",
-        118: "F4", 119: "End", 120: "F2", 122: "F1",
-        115: "Home", 116: "PageUp", 121: "PageDown",
-        123: "←", 124: "→", 125: "↓", 126: "↑",
-        // 修饰键(kVK_RightCommand…kVK_Function):可单独绑定为热键主键(如右⌘触发器)
-        54: "右⌘", 55: "左⌘", 56: "左⇧", 58: "左⌥", 59: "左⌃",
-        60: "右⇧", 61: "右⌥", 62: "右⌃", 63: "fn",
-    ]
-
-    /// 修饰键键码 → modifierFlags 里的功能位(左右同位)。
-    /// flagsChanged 事件的 keyCode 指明是哪颗物理键,该位在 modifierFlags 里置位 = 按下。
-    /// 大写锁定(57)等锁存键不在表内,不参与单键录制。
-    static let modifierMasksByKeyCode: [Int: NSEvent.ModifierFlags] = [
-        54: .command, 55: .command,
-        56: .shift, 60: .shift,
-        58: .option, 61: .option,
-        59: .control, 62: .control,
-        63: .function,
-    ]
-
-    static func displayString(keyCode: Int, modifiers: [String]) -> String {
-        modifierSymbols(modifiers) + (keyNames[keyCode] ?? "Key(\(keyCode))")
-    }
-
-    /// 已存配置的修饰键 → 展示符号,顺序遵循 macOS 惯例 ⌃⌥⇧⌘
-    static func modifierSymbols(_ modifiers: [String]) -> String {
-        var out = ""
-        if modifiers.contains("control") { out += "⌃" }
-        if modifiers.contains("option") { out += "⌥" }
-        if modifiers.contains("shift") { out += "⇧" }
-        if modifiers.contains("command") { out += "⌘" }
-        return out
-    }
-
-    /// 录制中按住修饰键时的实时预览
-    static func modifierPreview(for flags: NSEvent.ModifierFlags) -> String {
-        var out = ""
-        if flags.contains(.control) { out += "⌃" }
-        if flags.contains(.option) { out += "⌥" }
-        if flags.contains(.shift) { out += "⇧" }
-        if flags.contains(.command) { out += "⌘" }
-        return out
-    }
-
-    /// NSEvent 修饰键 → 配置层字符串(契约取值:command/option/control/shift)
-    static func configModifiers(for flags: NSEvent.ModifierFlags) -> [String] {
-        var out: [String] = []
-        if flags.contains(.command) { out.append("command") }
-        if flags.contains(.option) { out.append("option") }
-        if flags.contains(.control) { out.append("control") }
-        if flags.contains(.shift) { out.append("shift") }
-        return out
-    }
-}
-
 // MARK: - 键面颜色(UI 侧)
 
-/// 键面 hex 颜色的 UI 侧解析。
-/// StreamDockKit 内部的 HexColor 未导出,且 UI 预览(Color)与设备渲染(CGImage)
-/// 所需的类型不同,这里独立实现并用与 IconRenderer 相同的亮度阈值保证观感一致。
-struct KeyPalette {
-    let color: Color
-    let isLight: Bool
-
-    init(hex: String) {
-        var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("#") { value.removeFirst() }
-        guard (6...8).contains(value.count), let raw = UInt64(value, radix: 16) else {
-            self.color = Color(white: 0.25)
-            self.isLight = false
-            return
-        }
-        let r: Double
-        let g: Double
-        let b: Double
-        let alpha: Double
-        if value.count == 8 {
-            r = Double((raw >> 24) & 0xff) / 255
-            g = Double((raw >> 16) & 0xff) / 255
-            b = Double((raw >> 8) & 0xff) / 255
-            alpha = Double(raw & 0xff) / 255
-        } else {
-            r = Double((raw >> 16) & 0xff) / 255
-            g = Double((raw >> 8) & 0xff) / 255
-            b = Double(raw & 0xff) / 255
-            alpha = 1
-        }
-        self.color = Color(.sRGB, red: r, green: g, blue: b, opacity: alpha)
-        // 与 IconRenderer 相同的感知亮度阈值,深浅色文字判断与设备渲染一致
-        self.isLight = (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.6
-    }
-
-    var textColor: Color { isLight ? Color(white: 0.08) : .white }
-}
 
 /// NSOpenPanel 的最小封装;runModal 在主线程阻塞是 AppKit 模态的标准用法
-@MainActor
-enum FilePicker {
-    static func pick(types: [UTType], prompt: String) -> String? {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = types
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = prompt
-        guard panel.runModal() == .OK else { return nil }
-        return panel.urls.first?.path
-    }
-}
-
-
 // MARK: - 页面场景联动设置
 
-/// 前台应用自动切换:每页最多绑 3 个应用;可设为默认页
-private struct SceneAppBindingSheet: View {
-    let appModel: AppModel
-    let sceneID: UUID
-
-    @Environment(\.dismiss) private var dismiss
-    private static let apps = AppModel.installedApps()
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    Text("当 OpenDeck 编辑器窗口关闭且下列应用程序位于前台时,自动切换到本场景。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Section("绑定的应用程序") {
-                    ForEach(0..<3, id: \.self) { slot in
-                        LabeledContent("应用程序 \(slot + 1)") {
-                            Picker("", selection: binding(for: slot)) {
-                                Text("无").tag(String?.none)
-                                ForEach(Self.apps, id: \.bundleID) { app in
-                                    Text(app.name).tag(String?.some(app.bundleID))
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(width: 240)
-                        }
-                    }
-                }
-                Section {
-                    Toggle("设为默认场景(前台应用无绑定时显示本场景)", isOn: defaultBinding)
-                }
-            }
-            .formStyle(.grouped)
-            Divider()
-            HStack {
-                Spacer()
-                Button("完成") { dismiss() }
-            }
-            .padding(12)
-        }
-        .frame(width: 480)
-    }
-
-    private func binding(for slot: Int) -> Binding<String?> {
-        Binding(
-            get: { appModel.config.sceneAppBinding(id: sceneID, slot: slot) },
-            set: { appModel.config.setSceneAppBinding(id: sceneID, slot: slot, bundleID: $0) }
-        )
-    }
-
-    private var defaultBinding: Binding<Bool> {
-        Binding(
-            get: { appModel.config.config.defaultSceneID == sceneID },
-            set: { appModel.config.setDefaultScene(id: $0 ? sceneID : nil) }
-        )
-    }
-}

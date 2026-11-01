@@ -230,8 +230,8 @@ enum ActionRunner {
             if case .failed(let message) = outcome {
                 report(ActionError.processFailed(command: "DDC \(command.rawValue)", exitCode: -1, stderr: message))
             }
-        case .hotkey, .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff, .sleepGuard, .keyboardHeatmap:
-            break // 热键由 AppModel 两沿直调 runHotkey(按住槽位=按住该键);插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction;热力图键走 KeyboardHeatmapAnimator
+        case .hotkey, .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff, .sleepGuard, .stat, .keyboardHeatmap:
+            break // 热键由 AppModel 两沿直调 runHotkey(按住槽位=按住该键);插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction;统计键纯显示(StatTileAnimator 整帧驱动);热力图键走 KeyboardHeatmapAnimator
         }
     }
 
@@ -300,10 +300,15 @@ enum ActionRunner {
         }
     }
 
+    /// AX 授权提示每会话一次:连按键刷模态框只会教会用户砸键盘(与 sleepGuard 同策略)
+    private static var didPresentAccessibilityAlert = false
+
     /// 上报策略:一律记日志;只有需要用户处理的错误才弹窗打断
     private static func report(_ error: ActionError) {
         logger.error("\(error.localizedDescription, privacy: .public)")
         if case .accessibilityPermissionRequired = error {
+            guard !didPresentAccessibilityAlert else { return }
+            didPresentAccessibilityAlert = true
             presentAccessibilityAlert()
         }
     }

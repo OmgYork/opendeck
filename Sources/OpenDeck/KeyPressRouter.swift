@@ -114,6 +114,7 @@ final class KeyPressRouter {
             sceneRouter.gotoLegacyPage(pageID)
         case .screenOff: device.screenOff()
         case .pageIndicator: break // 纯显示键,按下无操作
+        case .stat: break // 系统状态键:纯显示,整帧由 StatTileAnimator 驱动,按压无操作
         default: return false
         }
         return true

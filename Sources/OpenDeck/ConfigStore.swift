@@ -29,9 +29,26 @@ enum KeyAction: Codable, Hashable {
     case plugin(pluginID: String, actionUUID: String, contextID: String)
     /// 显示器 DDC/CI 动作(亮度/对比度/锐度/响应时间/输入源…):由 ActionRunner 直连显示器执行
     case monitor(MonitorCommand)
+    /// 系统状态键(GPU/CPU 利用率、温度):整帧由 StatTileAnimator 驱动,按压无操作。
+    /// 2026-11-01 从「保留槽固定仪表盘」动作化——槽位随配置走,可放任意键位、可清除
+    case stat(StatKind)
     /// 键盘热力图键:读数来自 KeyAnalyze 自己的库,状态来自它自己的桥接/日志,
     /// 按下转发给它自己的入口(打开 dashboard / 重试统计)。见 KeyboardHeatmap*.swift
     case keyboardHeatmap
+}
+
+/// 待配置模板:功能调色盘的参数类磁贴(打开应用/网址/快捷指令/Shell/AppleScript/热键)
+/// 落下后的占位态。占位期间 action 保持 nil(按下无动作),编辑器打开时按此预选类型;
+/// 保存有效动作即清除(draftConfig 落定),取消编辑则保留占位。
+enum KeyTemplate: String, Codable, Hashable, CaseIterable, Identifiable {
+    case openApp
+    case openURL
+    case runShortcut
+    case shellScript
+    case appleScript
+    case hotkey
+
+    var id: String { rawValue }
 }
 
 struct KeyConfig: Codable, Hashable {
@@ -41,6 +58,8 @@ struct KeyConfig: Codable, Hashable {
     var action: KeyAction? = nil
     /// 内建动效键面(可选,旧配置缺键可解码)。语义由渲染器决定,优先于 iconPath/title。
     var animation: KeyAnimation? = nil
+    /// 待配置模板占位(可选,旧配置缺键可解码)。与 action 互斥:有 template 即无 action。
+    var template: KeyTemplate? = nil
 }
 
 /// 键面内建动效。目前只有一种:LG 显示器输入源切换(Mac DP ↔ PC HDMI1)。
@@ -136,6 +155,9 @@ struct AppConfig: Codable {
     var sliderZeroBlacksKeys: Bool? = nil
     /// 玻璃对位补偿(可选保证旧配置缺键可解码);nil/缺省 = 0,0
     var glassOffset: GlassOffset? = nil
+    /// 配置结构版本:normalize 时补当前值。旧配置缺键解码为 nil(视为 v1),
+    /// 下一次需要破坏性迁移时据此判定,不再靠键名嗅探
+    var schemaVersion: Int? = nil
 }
 
 // MARK: - 配置存储
@@ -187,6 +209,11 @@ final class ConfigStore {
         }
     }
 
+    /// 只更新内存(不落盘):布局调参的实时预览;落盘交给「完成」按钮
+    func setLayoutInMemory(_ value: LayoutParams) {
+        config.layout = value
+    }
+
     /// 玻璃对位补偿(缺省 = 0,0);调参面板每步落盘
     var glassOffset: GlassOffset {
         get { config.glassOffset ?? .zero }
@@ -194,6 +221,11 @@ final class ConfigStore {
             config.glassOffset = newValue
             save()
         }
+    }
+
+    /// 只更新内存(不落盘):玻璃校准的实时调参;落盘由 AppModel 防抖触发
+    func setGlassOffsetInMemory(_ value: GlassOffset) {
+        config.glassOffset = value
     }
 
     // MARK: 当前场景/页面访问
@@ -297,9 +329,17 @@ final class ConfigStore {
     }
 
     /// 删除场景(至少保留 1 个);若删的是当前场景,回退到第 0 个
-    func deleteScene(id: UUID) {
-        guard config.scenes.count > 1, let index = indexOfScene(id: id) else { return }
+    /// 删除场景;返回被删的是否是正在查看的场景(调用方据此决定是否需要整页重渲)
+    @discardableResult
+    func deleteScene(id: UUID) -> Bool {
+        guard config.scenes.count > 1, let index = indexOfScene(id: id) else { return false }
+        let wasCurrent = index == config.currentSceneIndex
         config.scenes.remove(at: index)
+        // 保持「正在看的场景」不动:删的是当前页之前的场景时,后续场景整体前移,索引要跟着 -1;
+        // 删的正是当前场景时,落到同位置(原 index 处,已夹到合法范围)
+        if index < config.currentSceneIndex {
+            config.currentSceneIndex -= 1
+        }
         if !config.scenes.indices.contains(config.currentSceneIndex) {
             config.currentSceneIndex = 0
         }
@@ -308,24 +348,40 @@ final class ConfigStore {
             config.defaultSceneID = nil
         }
         save()
+        return wasCurrent
     }
 
-    /// 复制场景(沿用全部页与绑定,新 id,名称加「副本」),插到原场景之后
+    /// 复制场景(沿用全部页与绑定,新 id,名称加「副本」),插到原场景之后。
+    /// Page.id 必须重生成:页点是按 id 稳定引用的,克隆共享 id 会让导航跳回原场景。
+    /// 插入会把被看场景之后的索引整体 +1,currentSceneIndex 同步平移,视野不动。
     @discardableResult
     func duplicateScene(id: UUID) -> UUID? {
         guard let index = indexOfScene(id: id) else { return nil }
         var copy = config.scenes[index]
         copy.id = UUID()
         copy.name = config.scenes[index].name + " 副本"
+        copy.pages = copy.pages.map { page in
+            var page = page
+            page.id = UUID()
+            return page
+        }
         config.scenes.insert(copy, at: index + 1)
+        if index + 1 <= config.currentSceneIndex {
+            config.currentSceneIndex += 1
+        }
         save()
         return copy.id
     }
 
-    /// 给场景追加一页(圆点 +1),返回其 id
+    /// 给场景追加一页(圆点 +1),返回其 id;25 页封顶——
+    /// 无限加圆点会稀释导航(页点一屏放不下),上限封在数据层,UI 层超限只见日志
     @discardableResult
     func addPage(toSceneIndex sceneIndex: Int) -> UUID? {
         guard config.scenes.indices.contains(sceneIndex) else { return nil }
+        guard config.scenes[sceneIndex].pages.count < 25 else {
+            Self.logger.info("场景页数已达上限(25),拒绝继续添加")
+            return nil
+        }
         let id = UUID()
         config.scenes[sceneIndex].pages.append(Page(id: id, keys: Array(repeating: KeyConfig(), count: Self.keyCount)))
         save()
@@ -497,6 +553,7 @@ final class ConfigStore {
             data = try Data(contentsOf: url)
         } catch {
             logger.error("配置文件读取失败:\(error, privacy: .public)")
+            archiveCorruptFile(data: nil, reason: "unreadable")
             return nil
         }
         // 新旧格式探测:新模型字段有默认值,仅凭解码失败判旧格式不可靠,
@@ -507,16 +564,36 @@ final class ConfigStore {
         {
             if let migrated = migrateLegacyConfig(from: data) {
                 logger.info("已从旧版单级页面配置迁移到场景结构(\(migrated.scenes.count) 场景)")
-                print("📜 已从旧版配置迁移:\(migrated.scenes.count) 个场景")
                 return migrated
             }
-            print("📜 未触发迁移(非旧格式或迁移失败)")
+            logger.info("未触发旧格式迁移(非旧格式或迁移失败)")
         }
         do {
             return try JSONDecoder().decode(AppConfig.self, from: data)
         } catch {
-            logger.error("配置文件无法解析,将回退默认配置:\(error, privacy: .public)")
+            logger.error("配置文件无法解析,归档后回退默认配置:\(error, privacy: .public)")
+            archiveCorruptFile(data: data, reason: "undecodable")
             return nil
+        }
+    }
+
+    /// 损坏配置归档:回退默认前先把原文件留底到同目录(config.corrupt-<时间戳>-<原因>.json)。
+    /// 数据完整性最高优先级——手编 JSON 写错、外部工具写坏都属正常事故,
+    /// 宁可目录里多一个损坏文件,绝不悄悄覆掉用户配置。
+    private static func archiveCorruptFile(data: Data?, reason: String) {
+        let stamp = Int(Date().timeIntervalSince1970)
+        let archiveURL = configFileURL.deletingLastPathComponent()
+            .appendingPathComponent("config.corrupt-\(stamp)-\(reason).json")
+        do {
+            if let data {
+                try data.write(to: archiveURL, options: .atomic)
+            } else {
+                try FileManager.default.copyItem(at: configFileURL, to: archiveURL)
+            }
+            logger.error("损坏配置已归档:\(archiveURL.path, privacy: .public)")
+        } catch {
+            // 归档失败也绝不静默——这是数据完整性的最后防线
+            logger.fault("损坏配置归档失败,原文件仍在 \(configFileURL.path, privacy: .public):\(error, privacy: .public)")
         }
     }
 
@@ -588,6 +665,7 @@ final class ConfigStore {
     /// 数据完整性兜底:手改/旧版文件可能场景为空、页为空、索引越界、键数不符,
     /// 载入时统一拉回合法形状,并补齐场景/页面 id
     private static func normalize(_ config: inout AppConfig) {
+        if config.schemaVersion == nil { config.schemaVersion = 2 } // 旧配置补版本标(下次迁移的判定依据)
         if config.scenes.isEmpty {
             config.scenes = [DeckScene(name: "默认页面", pages: [Page()])]
         }

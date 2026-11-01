@@ -12,7 +12,8 @@ import os
 /// - CPU 利用率:mach host_statistics64 两次采样差分
 /// - 温度:AppleSMC 现代接口——仅 selector 2 分发器(80 字节结构:data8@42=传统功能号,
 ///   data32@44=参数;keyInfo 因对齐 12 字节,整体 80 字节),Tp* 键为 4 字节 IEEE754 浮点温度
-enum StatKind {
+/// 统计项:可作 KeyAction 关联值随配置落盘(Codable 合成用 String rawValue)
+enum StatKind: String, Codable, Hashable, CaseIterable, Sendable {
     case gpu
     case cpu
     case temp
@@ -167,12 +168,16 @@ nonisolated final class StatSampler: @unchecked Sendable {
     }
 
     /// mach 系统调用:两次 host_statistics64 差分的非空闲占比
+    /// 宿主 port 缓存:mach_host_self() 每次调用都会新建 send right,
+    /// 2s 一采还不释放 = 稳定泄漏 port right;进程内宿主 port 恒定,取一次用到底
+    private static let hostPort: mach_port_t = mach_host_self()
+
     static func cpuUtilization(previous: inout host_cpu_load_info?) -> Int? {
         var load = host_cpu_load_info()
         var size = mach_msg_type_number_t(4) // HOST_CPU_LOAD_INFO_COUNT(cpu_ticks 4 字段)
         let result = withUnsafeMutablePointer(to: &load) {
             $0.withMemoryRebound(to: integer_t.self, capacity: 4) { ptr in
-                host_statistics(mach_host_self(), 3 /*HOST_CPU_LOAD_INFO*/, ptr, &size)
+                host_statistics(hostPort, 3 /*HOST_CPU_LOAD_INFO*/, ptr, &size)
             }
         }
         guard result == KERN_SUCCESS else { return nil }

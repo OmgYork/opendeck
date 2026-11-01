@@ -88,8 +88,11 @@ final class SceneRouter {
 
     /// 删除场景;若删的是当前场景(索引被回退),设备需重画新当前场景
     func deleteScene(id: UUID) {
-        config.deleteScene(id: id)
-        applyPage?()
+        // 只有删掉正在看的场景,网格内容才变了,才值得整页重渲;
+        // 删别的场景时当前页内容不变,PluginHost 实例表也不受当前页外影响
+        if config.deleteScene(id: id) {
+            applyPage?()
+        }
     }
 
     // MARK: - 页面增删

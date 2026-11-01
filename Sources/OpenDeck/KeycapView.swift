@@ -4,6 +4,21 @@ import SwiftUI
 
 // MARK: - 键帽(拟真键面)
 
+/// iconPath → NSImage 缓存。KeycapView 每次求值都读盘的话,按一次键(全格重估)
+/// 就是 15 次磁盘 IO;图标文件内容基本不变,按路径缓存即可(换图 = 换路径,天然失效;
+/// 同路径覆写内容不自动失效——当前无此场景,AppIconCache 同 bundleID 重生成亦视为同图)。
+@MainActor
+private enum KeycapImageCache {
+    private static var images: [String: NSImage] = [:]
+
+    static func image(at path: String) -> NSImage? {
+        if let cached = images[path] { return cached }
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        images[path] = image
+        return image
+    }
+}
+
 /// 单键实时镜像槽:设备最近一次写入的键面帧(IconRenderer 合成产物,已预旋转 180°)。
 /// @Observable 按对象粒度追踪——只有读过该槽的 KeycapView 因其变化重绘,网格其余键不动
 @Observable
@@ -16,10 +31,11 @@ final class KeyImageSlot {
 /// 有实时镜像槽且已有帧时,整面以设备帧为准(原样显示,仅转正),不再叠配置层。
 /// 交互遵循 fluid interfaces:悬停浮起、按下凹陷,弹簧可中断。
 extension KeyAction {
-    /// 默认图标：无自定义 iconPath 时键面主视觉使用的 SF Symbol（显示器动作 = 其语义图标）
+    /// 默认图标：无自定义 iconPath 时键面主视觉使用的 SF Symbol。
+    /// 全部动作类型统一取自 ActionStyle 单表（角标同源）——键帽 UI 与设备帧
+    /// （AppModel 经 IconRenderer 传 symbolName）同源生效，磁贴与落键 1:1。
     var defaultIconSymbol: String? {
-        if case .monitor(let command) = self { return command.symbol }
-        return nil
+        ActionStyle.symbol(for: self)
     }
 }
 
@@ -33,6 +49,8 @@ struct KeycapView: View {
     var slot: KeyImageSlot?
     /// 编辑器草稿预览用:动效键的静息帧(与设备帧同源,已预旋转)
     var staticFrame: CGImage? = nil
+    /// 插件动作指向未安装/已卸载的插件:键帽打警示标并压暗(按下无反应的可见解释)
+    var pluginMissing = false
 
     @State private var hovering = false
 
@@ -72,7 +90,7 @@ struct KeycapView: View {
                         .scaledToFit()
                         .rotationEffect(.degrees(180))
                         .allowsHitTesting(false)
-                } else if let path = config.iconPath, let image = NSImage(contentsOfFile: path) {
+                } else if let path = config.iconPath, let image = KeycapImageCache.image(at: path) {
                     // scaledToFill 溢出部分由整体 clipShape 裁掉
                     Image(nsImage: image)
                         .resizable()
@@ -135,6 +153,25 @@ struct KeycapView: View {
                     .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
             }
             .overlay {
+                if config.template != nil {
+                    // 待配置模板占位:虚线描边提示键面尚未配置(落下后点开编辑器补参数)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.white.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if pluginMissing, liveFrame == nil, staticFrame == nil {
+                    // 插件缺失:角标 + 压暗,给「按下没反应」一个看得见的解释
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.yellow)
+                        .shadow(color: .black.opacity(0.55), radius: 2)
+                        .padding(6)
+                }
+            }
+            .opacity(pluginMissing ? 0.62 : 1)
+            .overlay {
                 if remotePressed {
                     // 物理按压的即时可视反馈:发光描边
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -196,7 +233,7 @@ enum ActionStyle {
         case .shellScript: "terminal"
         case .appleScript: "chevron.left.forwardslash.chevron.right"
         case .hotkey: "keyboard"
-        case .mediaKey: "play.circle"
+        case .mediaKey(let value): mediaSymbol(value)
         case .previousPage: "chevron.left.2"
         case .nextPage: "chevron.right.2"
         case .previousScene: "rectangle.stack"
@@ -207,7 +244,31 @@ enum ActionStyle {
         case .sleepGuard: "moon.zzz.fill"
         case .plugin: "puzzlepiece.extension"
         case .monitor(let command): command.symbol
+        case .stat(let kind): statSymbol(kind)
         case .keyboardHeatmap: "square.grid.3x3.fill"
+        }
+    }
+
+    /// 统计项符号(gpu/cpu/temp 各异;设备帧实际由 StatTileAnimator 整帧接管,
+    /// 此符号只出现在调色盘磁贴与编辑器预览)
+    private static func statSymbol(_ kind: StatKind) -> String {
+        switch kind {
+        case .gpu: "gauge.with.needle"
+        case .cpu: "cpu"
+        case .temp: "thermometer.medium"
+        }
+    }
+
+    /// 媒体控制 6 取值各给语义符号（取值域同 ActionRunner.mediaKeyCodes；未知值回落通用符号）
+    private static func mediaSymbol(_ value: String) -> String {
+        switch value {
+        case "playPause": "playpause.fill"
+        case "next": "forward.fill"
+        case "previous": "backward.fill"
+        case "volumeUp": "speaker.wave.3.fill"
+        case "volumeDown": "speaker.wave.1.fill"
+        case "mute": "speaker.slash.fill"
+        default: "play.circle"
         }
     }
 
@@ -230,6 +291,7 @@ enum ActionStyle {
         case .sleepGuard: "合盖休眠锁"
         case .plugin: "插件"
         case .monitor(let command): command.title
+        case .stat(let kind): kind.label
         case .keyboardHeatmap: "键盘热力图"
         }
     }

@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import os
 import StreamDockKit
 
 /// 应用级模型:粘合驱动层(DeviceController)与配置层(ConfigStore)。
@@ -21,12 +22,86 @@ final class AppModel {
         ReservedSlots.slot(at: index)
     }
 
-    /// Stats 槽位(索引)
-    static let statSlots: [(index: Int, kind: StatKind)] = ReservedSlots.statSlots
-
     /// 键位最终生效配置:保留槽强制保留瓷贴,其余读用户配置
     static func resolvedKeyConfig(at index: Int, config: ConfigStore) -> KeyConfig {
         ReservedSlots.keyConfig(at: index, config: config)
+    }
+
+    /// 首页(第一场景第一页)键位配置:调色盘「自定义」镜像的取数源。
+    /// 固定读首页而非当前页——在任何场景/页下,镜像都是同一份「我的常用键」,
+    /// 否则切到别的页,镜像会变成那边大概率还空着的槽位,复制语义就断了。
+    func homeKeyConfig(at index: Int) -> KeyConfig? {
+        guard config.config.scenes.indices.contains(0),
+              config.config.scenes[0].pages.indices.contains(0),
+              config.config.scenes[0].pages[0].keys.indices.contains(index) else { return nil }
+        return config.config.scenes[0].pages[0].keys[index]
+    }
+
+    private static let paletteLog = Logger(subsystem: "opendeck", category: "palette")
+
+    /// 调色盘落键:把载荷绑到该键(保留槽不可放置),并即时上屏。
+    /// 自 EditorView 下沉到模型层——复刻/草稿消费/插件实例政策集中于此,可测可复用。
+    /// 载荷格式见 FunctionPaletteCatalog 头注释,另支持:
+    /// - "slot:<index>":整键复刻**首页**该槽的配置(与自定义镜像磁贴渲染同源);
+    ///   插件键复刻生成**新 contextID**(克隆 = 新实例,两键不再互抢实例表唯一身份)
+    /// - "draft:<kind>":消费 templateDrafts 就绪态(一次性,落键即清)
+    func bindPayload(_ raw: String, at index: Int) {
+        guard let key = Self.landingConfig(
+            payload: raw, targetIndex: index,
+            current: config.keyConfig(at: index),
+            homeKey: { homeKeyConfig(at: $0) },
+            draft: { templateDrafts[$0] }
+        ) else {
+            Self.paletteLog.info("palette bind rejected unknown payload \(raw, privacy: .public)")
+            return
+        }
+        if raw.hasPrefix("draft:"),
+           let kind = KeyTemplate(rawValue: String(raw.dropFirst("draft:".count))) {
+            templateDrafts[kind] = nil // 一次性:落键即消费草稿
+        }
+        config.updateKey(key, at: index)
+        applyKey(at: index)
+    }
+
+    /// 落键政策(纯函数,可测):payload → 目标槽位应有的完整 KeyConfig;nil = 拒绝。
+    /// - 保留槽(目标或镜像源)一律拒绝
+    /// - "slot:<index>":整键复刻**首页**该槽配置(含底色);插件键生成新 contextID(克隆 = 独立实例)
+    /// - "draft:<kind>":就绪模板整份落键(标题/动作/图标),底色沿用目标槽现状,清模板占位
+    /// - 其余走 FunctionPaletteCatalog(命令/复合/即用动作);底色/图标沿用目标槽现状
+    static func landingConfig(
+        payload: String, targetIndex: Int, current: KeyConfig,
+        homeKey: (Int) -> KeyConfig?, draft: (KeyTemplate) -> KeyConfig?
+    ) -> KeyConfig? {
+        guard Self.reservedSlot(at: targetIndex) == nil else { return nil }
+        var key = current
+        if payload.hasPrefix("slot:"),
+           let source = Int(payload.dropFirst("slot:".count)),
+           Self.reservedSlot(at: source) == nil,
+           let home = homeKey(source) {
+            key = home
+            if case .plugin(let pluginID, let actionUUID, _) = key.action {
+                key.action = .plugin(pluginID: pluginID, actionUUID: actionUUID,
+                                     contextID: UUID().uuidString)
+            }
+            return key
+        }
+        if payload.hasPrefix("draft:"),
+           let kind = KeyTemplate(rawValue: String(payload.dropFirst("draft:".count))),
+           let ready = draft(kind) {
+            key.action = ready.action
+            key.title = ready.title
+            key.animation = ready.animation
+            key.iconPath = ready.iconPath
+            key.template = nil
+            return key
+        }
+        guard let item = FunctionPaletteCatalog.item(forPayload: payload) else { return nil }
+        key.action = item.action
+        // 落下即写短标签:槽位里原有的数字占位(3…15)不是用户标题,留着会读成"5 号键在调亮度"
+        key.title = item.title
+        key.animation = item.animation
+        key.template = item.template
+        return key
     }
 
     let config = ConfigStore()
@@ -35,7 +110,7 @@ final class AppModel {
     let monitorInput = MonitorInputAnimator()
     /// 内建读数键面:键盘热力图(KeyAnalyze)。同样是单实例,只服务当前页那一颗。
     let heatmap = KeyboardHeatmapAnimator()
-    /// Stats 瓷贴节拍器(CPU/GPU/温度,三颗保留槽整帧刷新)
+    /// Stats 瓷贴节拍器(CPU/GPU/温度,槽位随当前页配置对账,可放任意键位)
     let statTiles = StatTileAnimator()
     /// 亮度域:背光、内屏亮度读取、跟随轮询、0% 涂黑与回涂黑、空闲熄屏看门狗
     let brightness: BrightnessCoordinator
@@ -122,6 +197,9 @@ final class AppModel {
     private(set) var sleepGuardEnabled: Bool?
     /// 「缺授权」提示每会话只弹一次:反复按键不该反复打断
     private var didWarnSleepGuard = false
+    /// 模板磁贴就绪态(会话内存,不持久化):调色盘里点击模板磁贴配置出的动作。
+    /// 一次性:拖拽落键即消费(bindPayload 清除),磁贴复原回占位态;重启同样清零。
+    var templateDrafts: [KeyTemplate: KeyConfig] = [:]
 
     private var started = false
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
@@ -144,8 +222,9 @@ final class AppModel {
             options: [.userInitiated],
             reason: "OpenDeck:设备心跳与插件宿主常驻"
         )
-        // Stats 集成:瓷贴节拍器接管采样与整帧刷新(设备 + UI 镜像同源)
-        statTiles.start(slots: Self.statSlots)
+        // Stats 集成:瓷贴节拍器接管采样与整帧刷新(设备 + UI 镜像同源);槽位随当前页配置对账
+        statTiles.start()
+        syncStatSlots()
 
         refreshOfficialAppFlag()
         observeWorkspaceApplications()
@@ -333,8 +412,14 @@ final class AppModel {
         // 固定导航键:无视配置,强制导航动作(配置里这两格的内容不渲染、不建实例)
         let key = Self.resolvedKeyConfig(at: index, config: config)
         pluginHost.syncKey(at: index, action: key.action)
-        // Stats 槽:整帧由瓷贴节拍器覆盖,这里先上占位帧(采样值或 "--")
-        if case .stat(let kind) = Self.reservedSlot(at: index) {
+        // 统计槽位对账:当前页的 .stat 键清单喂给节拍器(编辑/换页/切场景都会走到这里)
+        syncStatSlots()
+        // 统计键:整帧由瓷贴节拍器覆盖,这里先上占位帧(采样值或 "--");清除后走下方常规渲染覆盖旧帧。
+        // 提前 return 前必须先摘掉别的 animator:该键原先是热力图/动效键时,
+        // 不 detach 的话旧节拍器会持续出帧与统计帧打架
+        if case .stat(let kind) = key.action {
+            heatmap.detach(ifIndex: index)
+            monitorInput.detach(ifIndex: index)
             if let image = statTiles.placeholderTile(kind: kind) {
                 setKeyImage(index: index, image: image)
             }
@@ -398,6 +483,26 @@ final class AppModel {
         }
     }
 
+    /// 统计槽位对账:扫描当前页 15 键里的 .stat 动作,喂给节拍器当渲染清单。
+    /// 统计键自 2026-11-01 起随配置走(不再是保留槽):放哪哪显示,清除即消失,换页自动挂卸。
+    private func syncStatSlots() {
+        let scene = config.currentSceneIndex
+        let page = config.currentPageIndex
+        guard config.config.scenes.indices.contains(scene),
+              config.config.scenes[scene].pages.indices.contains(page) else {
+            statTiles.setSlots([])
+            return
+        }
+        var slots: [(index: Int, kind: StatKind)] = []
+        for (index, key) in config.config.scenes[scene].pages[page].keys.enumerated()
+        where ReservedSlots.slot(at: index) == nil {
+            if case .stat(let kind) = key.action {
+                slots.append((index, kind))
+            }
+        }
+        statTiles.setSlots(slots)
+    }
+
     /// 编辑器实时预览:动效键的静息帧(已预旋转,KeycapView 会转回正立)
     func animationPreviewFrame(for key: KeyConfig) -> CGImage? {
         if case .keyboardHeatmap = key.action {
@@ -423,11 +528,23 @@ final class AppModel {
 
     /// 设备玻璃窗口相对 framebuffer 的偏心补偿(视觉坐标,正 = 右/上;zoom 百分比)。
     /// 实时预览区拖动即时生效:落盘配置 → 下发给设备 → 按新参数重发缓存帧(UI 镜像不变)。
+    private var glassCommitTask: Task<Void, Never>?
+
+    /// 玻璃对位补偿:内存即时生效;重渲(80ms)与落盘(再 700ms)防抖合并——
+    /// 校准条每格都「15 键 JPEG 重渲 + 全量写盘」曾造成主线程卡顿
     func setGlassOffset(_ offset: GlassOffset) {
         guard offset != config.glassOffset else { return }
-        config.glassOffset = offset
+        config.setGlassOffsetInMemory(offset)
         device.setGlassOffset(x: offset.x, y: offset.y, zoom: offset.zoom)
-        device.redrawCachedKeys()
+        glassCommitTask?.cancel()
+        glassCommitTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            self?.device.redrawCachedKeys()
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            self?.config.save()
+        }
     }
 
     // MARK: - 亮度（转发到亮度域协调器）
