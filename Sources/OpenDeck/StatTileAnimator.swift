@@ -21,6 +21,13 @@ final class StatTileAnimator {
     /// 过渡帧播放器(§6.33):值变化的弧线扫摆。onFrame 转发给自身回调——
     /// 不接线的话 sweep 帧与终帧全部发往 nil,瓷贴永远停在 applyKey 的占位帧(踩过)
     private let fx = TileFXPlayer()
+    /// 触发扫摆的最小分率跳变(0.10 = 10 个百分点);微动直接换帧(性能守卫)
+    static let sweepThreshold = 0.10
+    /// 扫摆冷却:同键 8s 内至多一扫——利用率波动常跨阈值,无冷却则扫摆逐轮高频
+    /// (§6.35 实测 +6% CPU);巨变(≥ hugeJumpThreshold)豁免冷却
+    static let sweepCooldown: TimeInterval = 8
+    static let hugeJumpThreshold = 0.50
+    private var lastSweepAt: [Int: Date] = [:]
 
     init() {
         fx.onFrame = { [weak self] index, image in
@@ -129,9 +136,16 @@ final class StatTileAnimator {
             guard let image = StatTileRenderer.tile(kind: kind, value: text, fraction: fraction) else { continue }
             let previous = lastValues[index]
             lastValues[index] = (text, fraction)
-            // 扫摆:首帧采样从 0 填满(占位 "--" 也是 0 分率,衔接自然);等分率直接换帧
+            // 扫摆只给「有意义的跳变」:首帧从 0 填满(每次挂载一次,衔接自然)、
+            // 分率跳变 ≥ sweepThreshold(大跨越值得动画)。利用率逐样本 ±几个点的
+            // 微动直接换帧——否则每轮采样 6 帧 × 3 键 = 9fps 渲染+编码+HID 纯增(实测 +6% CPU)
             let fromFraction = previous?.fraction ?? 0
-            if fromFraction != fraction {
+            let delta = abs(fraction - fromFraction)
+            let now = Date()
+            let cooledDown = now.timeIntervalSince(lastSweepAt[index] ?? .distantPast) >= Self.sweepCooldown
+            if previous == nil || delta >= Self.hugeJumpThreshold
+                || (delta >= Self.sweepThreshold && cooledDown) {
+                lastSweepAt[index] = now
                 let frames = StatTileRenderer.sweepFrames(kind: kind, fromFraction: fromFraction,
                                                           toFraction: fraction, value: text)
                 fx.play(index: index, frames: frames, final: image)

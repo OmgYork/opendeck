@@ -35,6 +35,16 @@ struct DarkTileTests {
         #expect(frames.allSatisfy { $0.width == 112 })
     }
 
+    /// 性能守卫(§6.35 实测回归):利用率逐样本微动必须直接换帧,不得逐轮扫摆
+    @Test("扫摆阈值:微动(<0.10)不扫,大跳(≥0.10)扫")
+    func sweepThresholdGuard() {
+        // 微动 0.03:不扫
+        #expect(abs(0.53 - 0.50) < StatTileAnimator.sweepThreshold)
+        // 大跳 0.37:扫
+        #expect(abs(0.87 - 0.50) >= StatTileAnimator.sweepThreshold)
+        #expect(StatTileAnimator.sweepThreshold == 0.10)
+    }
+
     @Test("睡眠锁渲染:三态产物互异且尺寸正确")
     func sleepGuardStates() throws {
         let on = try #require(SleepGuardTileRenderer.image(state: .on))
@@ -84,7 +94,8 @@ extension DarkTileTests {
     func samplerProducesCPUDelta() async throws {
         let sampler = StatSampler()
         _ = sampler.sample() // 首采建基线
-        try await Task.sleep(for: .milliseconds(120))
+        // 差分窗口要盖过 mach tick 粒度:120ms 偶发 totalDelta=0(测试化)
+        try await Task.sleep(for: .milliseconds(500))
         let second = sampler.sample()
         #expect(second.cpu != nil, "第二次采样 CPU 应出值,实际 \(String(describing: second.cpu))")
     }
