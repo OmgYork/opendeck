@@ -85,7 +85,8 @@ public final class PluginSettingsStore: @unchecked Sendable {
     }
 
     /// 损坏归档:同目录 settings.corrupt-<uuid>-<毫秒时间戳>-<原因>.json。
-    /// 毫秒时间戳防同秒碰撞互相覆盖;归档失败仅记日志(原文件仍在,不继续破坏现场)
+    /// 毫秒时间戳防同秒碰撞互相覆盖;归档失败仅记日志(原文件仍在,不继续破坏现场)。
+    /// 归档总量超上限时顺手清扫最旧的(本条归档不受清扫影响)
     private func archiveCorrupt(data: Data, pluginUUID: String, reason: String) {
         let stamp = Int(Date().timeIntervalSince1970 * 1000)
         let archiveURL = baseURL
@@ -95,8 +96,22 @@ public final class PluginSettingsStore: @unchecked Sendable {
             Self.logger.error("损坏 settings 已归档:\(archiveURL.path, privacy: .public)")
         } catch {
             Self.logger.fault("损坏 settings 归档失败:\(error, privacy: .public)")
+            return
+        }
+        sweepArchives()
+    }
+
+    private func sweepArchives() {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: baseURL.path) else { return }
+        let archives = entries
+            .filter { $0.hasPrefix("settings.corrupt-") && $0.hasSuffix(".json") }
+            .sorted(by: >) // 文件名含毫秒时间戳,字典序即时间序
+        for name in archives.dropFirst(Self.archiveKeepCount) {
+            try? FileManager.default.removeItem(at: baseURL.appendingPathComponent(name))
         }
     }
+
+    private static let archiveKeepCount = 10
 
     private func fileURL(for pluginUUID: String) -> URL {
         baseURL.appendingPathComponent("\(pluginUUID).json")

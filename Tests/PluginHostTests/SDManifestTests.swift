@@ -224,3 +224,22 @@ extension SDManifestTests {
         try? FileManager.default.removeItem(at: link)
     }
 }
+
+// MARK: - §6.28 挂账清理轮:逐字段宽容解码
+
+extension SDManifestTests {
+    /// 单字段类型怪异(官方带病插件形态)只降级该字段,整份 manifest 照常解析
+    @Test("manifest 宽容解码:States 类型怪异/Nodejs 数字版本不引爆整份")
+    func manifestLenientFieldDecode() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-lenient-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // States 写成字符串(应为数组)+ Nodejs.Version 写成数字(应为字符串)
+        let manifest = #"{"Name":"weird","Version":"1.0","CodePath":"index.html","Nodejs":{"Version":20},"Actions":[{"UUID":"a.b.c","Name":"A","States":"img"}]}"#
+        try Data(manifest.utf8).write(to: dir.appendingPathComponent("manifest.json"))
+
+        let parsed = try SDManifest.load(fromDirectory: dir)
+        #expect(parsed.keypadActions.count == 1, "解析成功即主目标达成(插件不归 broken)")
+        #expect(parsed.keypadActions[0].stateImages.isEmpty, "States 类型怪异 → 该字段降级为空")
+    }
+}

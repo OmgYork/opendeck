@@ -174,9 +174,27 @@ final class BrightnessCoordinator {
         onLog?("亮度跟随:停止")
     }
 
+    /// 读取代数:后台读取完成时已有更新一轮在采,旧结果丢弃(乱序覆盖会闪旧值)
+    private var brightnessReadGeneration = 0
+
     private func mirrorSystemBrightnessOnce() {
         guard config.followSystemBrightness, device.state == .running, !device.isScreenOff else { return }
-        guard let percent = Self.systemBrightnessPercent() else {
+        // NSScreen 枚举留主线程(AppKit);IOKit/DisplayServices 读移后台——
+        // legacy 兜底路径的 IOServiceGetMatchingServices 是周期采样 IO,不该钉在主线程
+        let displayID = Self.builtInDisplayID()
+        let generation = brightnessReadGeneration + 1
+        brightnessReadGeneration = generation
+        Task.detached(priority: .utility) { [weak self] in
+            let percent = Self.readBrightnessPercent(displayID: displayID)
+            await MainActor.run { [weak self] in
+                guard let self, self.brightnessReadGeneration == generation else { return }
+                self.applyMirroredBrightness(percent)
+            }
+        }
+    }
+
+    private func applyMirroredBrightness(_ percent: Int?) {
+        guard let percent else {
             if !lastBrightnessReadFailed {
                 lastBrightnessReadFailed = true
                 onLog?("亮度跟随:内建屏亮度读取失败(持续静默重试)")
@@ -226,19 +244,20 @@ final class BrightnessCoordinator {
     /// 内建屏亮度(0–100)。读取链:DisplayServices(私有,macOS 26 实测唯一有效,
     /// 外接屏返回不支持——本就只镜像内屏)→ IOKit IODisplayConnect 旧路径(其他机型兜底)。
     /// (CoreDisplay_GetUserBrightness 在 macOS 26 恒返 1.0 假值,已弃用——假值比失败更有害)
-    private static func systemBrightnessPercent() -> Int? {
-        if let percent = displayServicesBrightnessPercent() { return percent }
+    /// 非隔离:在并发池执行(displayServices 失败时的 legacy IOKit 路径是重 IO)
+    private nonisolated static func readBrightnessPercent(displayID: UInt32?) -> Int? {
+        if let percent = displayServicesBrightnessPercent(displayID: displayID) { return percent }
         return legacyDisplayBrightnessPercent()
     }
 
-    private static let displayServicesGetBrightness: (@convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32)? = {
+    private nonisolated static let displayServicesGetBrightness: (@convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32)? = {
         guard let ds = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_NOW),
               let sym = dlsym(ds, "DisplayServicesGetBrightness") else { return nil }
         return unsafeBitCast(sym, to: (@convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32).self)
     }()
 
-    private static func displayServicesBrightnessPercent() -> Int? {
-        guard let get = displayServicesGetBrightness, let displayID = builtInDisplayID() else { return nil }
+    private nonisolated static func displayServicesBrightnessPercent(displayID: UInt32?) -> Int? {
+        guard let get = displayServicesGetBrightness, let displayID else { return nil }
         var level: Float = -1
         guard get(displayID, &level) == 0, level.isFinite, level >= 0, level <= 1.001 else { return nil }
         return max(0, min(100, Int((level * 100).rounded())))
@@ -252,7 +271,7 @@ final class BrightnessCoordinator {
         return nil
     }
 
-    private static func legacyDisplayBrightnessPercent() -> Int? {
+    private nonisolated static func legacyDisplayBrightnessPercent() -> Int? {
         var iterator = io_iterator_t()
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &iterator) == KERN_SUCCESS else { return nil }
         defer { IOObjectRelease(iterator) }

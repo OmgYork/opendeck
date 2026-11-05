@@ -160,6 +160,9 @@ public struct SDManifest: Sendable, Equatable {
 
 // MARK: - manifest 原始镜像(全部可选,宽容解码)
 
+/// 合成 Codable 对「字段存在但类型怪异」直接 throw,单字段毁掉整份 manifest → 插件归
+/// broken。官方带病插件是常态(HANDOFF §6.14 time 案),改为逐字段 try?:类型不对的字段
+/// 降级 nil,其余照常解析。JSONValue 不可用在此(manifest 键是异构具体类型)
 private struct ManifestMirror: Decodable {
     struct ActionMirror: Decodable {
         struct StateMirror: Decodable {
@@ -173,6 +176,23 @@ private struct ManifestMirror: Decodable {
         var DisableAutomaticStates: Bool?
         var PropertyInspectorPath: String?
         var ActivateAppBundleID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case UUID = "UUID"
+            case Name, States, Controllers, DisableAutomaticStates
+            case PropertyInspectorPath, ActivateAppBundleID
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            UUID = (try? c.decodeIfPresent(String.self, forKey: .UUID)) ?? nil
+            Name = (try? c.decodeIfPresent(String.self, forKey: .Name)) ?? nil
+            States = (try? c.decodeIfPresent([StateMirror].self, forKey: .States)) ?? nil
+            Controllers = (try? c.decodeIfPresent([String].self, forKey: .Controllers)) ?? nil
+            DisableAutomaticStates = (try? c.decodeIfPresent(Bool.self, forKey: .DisableAutomaticStates)) ?? nil
+            PropertyInspectorPath = (try? c.decodeIfPresent(String.self, forKey: .PropertyInspectorPath)) ?? nil
+            ActivateAppBundleID = (try? c.decodeIfPresent(String.self, forKey: .ActivateAppBundleID)) ?? nil
+        }
     }
 
     var Name: String?
@@ -183,4 +203,27 @@ private struct ManifestMirror: Decodable {
     var Nodejs: [String: String]?
     var Actions: [ActionMirror]?
     var PropertyInspector: String?
+
+    enum CodingKeys: String, CodingKey {
+        case Name, Version, CodePath, CodePathMac, CodePathWin, Nodejs, Actions, PropertyInspector
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        Name = (try? c.decodeIfPresent(String.self, forKey: .Name)) ?? nil
+        Version = (try? c.decodeIfPresent(String.self, forKey: .Version)) ?? nil
+        CodePath = (try? c.decodeIfPresent(String.self, forKey: .CodePath)) ?? nil
+        CodePathMac = (try? c.decodeIfPresent(String.self, forKey: .CodePathMac)) ?? nil
+        CodePathWin = (try? c.decodeIfPresent(String.self, forKey: .CodePathWin)) ?? nil
+        // Nodejs.Version 官方有写数字 20 的形态:数字词典先试字符串版,失败再试数字版转字符串
+        if let dict = try? c.decodeIfPresent([String: String].self, forKey: .Nodejs) {
+            Nodejs = dict
+        } else if let dict = try? c.decodeIfPresent([String: Double].self, forKey: .Nodejs) {
+            Nodejs = dict.mapValues { $0 == $0.rounded() ? String(Int($0)) : String($0) }
+        } else {
+            Nodejs = nil
+        }
+        Actions = (try? c.decodeIfPresent([ActionMirror].self, forKey: .Actions)) ?? nil
+        PropertyInspector = (try? c.decodeIfPresent(String.self, forKey: .PropertyInspector)) ?? nil
+    }
 }

@@ -57,6 +57,12 @@ public final class PluginServer: @unchecked Sendable {
     /// 单次 drain 最多消化的帧数:管线化洪灌(死循环发微帧)的连接不得独占串行队列——
     /// 到上限即让出(重排队继续消化剩余帧),其他连接的收发/accept/close 照常插队
     private static let maxFramesPerDrain = 256
+    /// 连接总数上限(泄漏型对端防御;正常形态 = 插件数 + 在开 PI,个位数)
+    private static let maxConnections = 64
+    /// 握手超时(秒):完成 TCP 连接但静默不发升级包的连接到点即断
+    private static let handshakeTimeoutSeconds = 10
+    /// 读缓冲复用(读事件全部在服务串行队列触发,单缓冲无竞争)
+    private let readBuffer = OSAllocatedUnfairLock(initialState: [UInt8](repeating: 0, count: 65536))
 
     public init() {}
 
@@ -204,6 +210,12 @@ public final class PluginServer: @unchecked Sendable {
         _ = fcntl(descriptor, F_SETFL, acceptedFlags | O_NONBLOCK)
 
         let connection = Connection(id: UUID(), fileDescriptor: descriptor)
+        // 连接数上限(macOS 默认 fd 软限制仅 256):泄漏型对端不得耗尽 fd 拖垮全进程
+        guard connections.count < Self.maxConnections else {
+            serverLog.error("server: 连接数达上限 \(Self.maxConnections),拒绝 fd=\(descriptor)")
+            Darwin.close(descriptor)
+            return
+        }
         connections[connection.id] = connection
         serverLog.info("server: accept fd=\(descriptor) 连接数=\(self.connections.count)")
         let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
@@ -216,24 +228,32 @@ public final class PluginServer: @unchecked Sendable {
         }
         connection.readSource = source
         source.resume()
+        // 握手超时:完成连接静默不发升级包会永久占用 fd + 读源(macOS 软限制 256,泄漏几条即达限)
+        queue.asyncAfter(deadline: .now() + Double(Self.handshakeTimeoutSeconds)) { [weak self] in
+            guard let self, !connection.isClosed, !connection.isHandshaken else { return }
+            serverLog.error("server: 握手超时 \(Self.handshakeTimeoutSeconds)s,熔断 fd=\(connection.fileDescriptor)")
+            self.finish(connection)
+        }
         onOpen?(connection)
     }
 
     private func readAvailable(_ connection: Connection) {
-        var buffer = [UInt8](repeating: 0, count: 65536)
-        let count = read(connection.fileDescriptor, &buffer, buffer.count)
-        serverLog.info("server: read fd=\(connection.fileDescriptor) n=\(count)")
-        if count == 0 {
-            finish(connection) // 对端正常关闭
-            return
+        // 复用缓冲:读事件在服务串行队列上触发,单缓冲无竞争(此前每事件分配 64KB 暂态)
+        readBuffer.withLock { buffer in
+            let count = buffer.withUnsafeMutableBufferPointer { slice -> Int in
+                read(connection.fileDescriptor, slice.baseAddress, slice.count)
+            }
+            guard count > 0 else {
+                if count == 0 {
+                    finish(connection) // 对端正常关闭
+                } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
+                    // EAGAIN(水平触发的边界竞态)/EINTR 都不是致命错误,保留连接;其余按断开走优雅关闭
+                    finish(connection)
+                }
+                return
+            }
+            connection.inbox.append(contentsOf: buffer[0..<count])
         }
-        if count < 0 {
-            // EAGAIN(水平触发的边界竞态)/EINTR 都不是致命错误,保留连接;其余按断开走优雅关闭
-            if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
-            finish(connection)
-            return
-        }
-        connection.inbox.append(contentsOf: buffer[0..<count])
         drainInbox(connection)
     }
 
@@ -281,6 +301,7 @@ public final class PluginServer: @unchecked Sendable {
                 if frame.isFinal {
                     onMessage?(connection, connection.pendingPayload)
                     connection.pendingPayload.removeAll()
+                    connection.pendingOpcode = 0 // 分片组装完成,回到「无在途分片」态
                 }
             case 0x8: // close
                 enqueueFrame(opcode: 0x8, payload: Data(), connection: connection)
@@ -357,6 +378,37 @@ public final class PluginServer: @unchecked Sendable {
         let masked = (bytes[1] & 0x80) != 0
         var length = Int(bytes[1] & 0x7F)
         var offset = 2
+
+        // 协议错误即熔断(RFC 6455 §5/§5.4/§5.5):此前全部宽容接受,带病对端无感;
+        // 浏览器 WebSocket(全部官方插件)与 FakeClient 恒合规,严苛化零误伤
+        if bytes[0] & 0x70 != 0 {
+            serverLog.error("server: RSV 位非零(未协商扩展),熔断 fd=\(connection.fileDescriptor)")
+            finish(connection)
+            return nil
+        }
+        if !masked {
+            serverLog.error("server: 客户端帧未掩码(RFC §5.1 服务端必须拒),熔断 fd=\(connection.fileDescriptor)")
+            finish(connection)
+            return nil
+        }
+        if opcode >= 0x8 { // 控制帧:必须 FIN 且 payload ≤ 125(§5.5)
+            if !isFinal || length > 125 {
+                serverLog.error("server: 控制帧分片或超长,熔断 fd=\(connection.fileDescriptor)")
+                finish(connection)
+                return nil
+            }
+        } else if opcode == 0x0, connection.pendingOpcode == 0 {
+            // 无起始帧的 continuation(§5.4):此前当独立消息收,静默错乱
+            serverLog.error("server: 无起始帧的续帧,熔断 fd=\(connection.fileDescriptor)")
+            finish(connection)
+            return nil
+        } else if opcode != 0x0, connection.pendingOpcode != 0 {
+            // 分片未完成又开新数据帧(§5.4):此前静默覆盖 pending,旧分片丢失
+            serverLog.error("server: 分片期间插入新数据帧,熔断 fd=\(connection.fileDescriptor)")
+            finish(connection)
+            return nil
+        }
+
         if length == 126 {
             guard data.count >= 4 else { return nil }
             length = Int(bytes[2]) << 8 | Int(bytes[3])

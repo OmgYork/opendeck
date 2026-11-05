@@ -243,3 +243,117 @@ extension PluginServerTests {
         server.stop()
     }
 }
+
+// MARK: - §6.28 挂账清理轮:RFC 严苛性 + 分片组装
+
+extension PluginServerTests {
+    /// 自定义 FIN/opcode 的掩码帧(分片与协议错误用例共用)
+    private func sendMaskedFrame(_ descriptor: Int32, fin: Bool, opcode: UInt8, payload: String) throws {
+        let bytes = Array(payload.utf8)
+        let length = bytes.count
+        var header: [UInt8] = [(fin ? 0x80 : 0x00) | opcode, UInt8(0x80 | length)]
+        let mask: [UInt8] = [0x11, 0x22, 0x33, 0x44]
+        header.append(contentsOf: mask)
+        try sendAll(descriptor, Data(header))
+        try sendAll(descriptor, Data(bytes.enumerated().map { $0.element ^ mask[$0.offset % 4] }))
+    }
+
+    /// 分片正例:FIN=0 text + FIN=1 continuation 组装为一条消息送达(§5.4)
+    @Test("分片消息组装:两帧合成一条完整消息")
+    func fragmentedMessageAssembled() async throws {
+        let server = PluginServer()
+        final class Box: @unchecked Sendable {
+            var messages: [Data] = []
+        }
+        let box = OSAllocatedUnfairLock(initialState: Box())
+        server.onMessage = { _, data in box.withLock { $0.messages.append(data) } }
+        server.onError = { message in Issue.record("server error: \(message)") }
+
+        server.start()
+        for _ in 0..<150 where server.port == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(server.port != 0)
+        let client = try await connectAndHandshake(port: server.port)
+
+        try sendMaskedFrame(client, fin: false, opcode: 0x1, payload: "Hel")
+        try sendMaskedFrame(client, fin: true, opcode: 0x0, payload: "lo")
+
+        let deadline = Date().addingTimeInterval(3)
+        var got: String?
+        while Date() < deadline {
+            let current = box.withLock { $0.messages }
+            if let text = current.compactMap({ String(data: $0, encoding: .utf8) }).first(where: { $0 == "Hello" }) {
+                got = text
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(got == "Hello", "分片应组装为一条消息")
+        Darwin.close(client)
+        server.stop()
+    }
+
+    /// 协议错误即熔断(RFC §5/§5.4):未掩码帧、RSV 位非零、无起始帧续帧——连接关闭且消息不投递
+    @Test("协议错误熔断:未掩码/RSV/孤儿续帧均拒收")
+    func protocolErrorsBreakConnection() async throws {
+        for (name, makeOffense) in [
+            ("未掩码", { fd in
+                try Self.sendUnmaskedRaw(fd) // 内联构造,见下
+            }),
+            ("RSV", { fd in
+                let frame = Data([0x80 | 0x40 | 0x1, 0x80 | 2, 0x11, 0x22, 0x33, 0x44, 0x68, 0x69])
+                try Self.sendAllRaw(fd, frame)
+            }),
+            ("孤儿续帧", { fd in
+                let frame = Data([0x80 | 0x0, 0x80 | 2, 0x11, 0x22, 0x33, 0x44, 0x68, 0x69])
+                try Self.sendAllRaw(fd, frame)
+            }),
+        ] {
+            let server = PluginServer()
+            final class Box: @unchecked Sendable {
+                var closed = false
+                var delivered = 0
+            }
+            let box = OSAllocatedUnfairLock(initialState: Box())
+            server.onMessage = { _, _ in box.withLock { $0.delivered += 1 } }
+            server.onClose = { _ in box.withLock { $0.closed = true } }
+            server.onError = { _ in } // 每种熔断都会报 onError,不按错误断言
+
+            server.start()
+            for _ in 0..<150 where server.port == 0 {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(server.port != 0, "监听未就绪: \(name)")
+            let client = try await connectAndHandshake(port: server.port)
+            try makeOffense(client)
+
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline, !box.withLock({ $0.closed }) {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let (closed, delivered) = box.withLock { ($0.closed, $0.delivered) }
+            #expect(closed, "\(name) 帧应熔断连接")
+            #expect(delivered == 0, "\(name) 帧载荷不得投递")
+            Darwin.close(client)
+            server.stop()
+        }
+    }
+
+    /// 未掩码数据帧(掩码位 = 0)
+    private static func sendUnmaskedRaw(_ descriptor: Int32) throws {
+        try sendAllRaw(descriptor, Data([0x80 | 0x1, 2, 0x68, 0x69]))
+    }
+
+    private static func sendAllRaw(_ descriptor: Int32, _ data: Data) throws {
+        let bytes = [UInt8](data)
+        var sent = 0
+        while sent < bytes.count {
+            let n = bytes.withUnsafeBufferPointer { slice -> Int in
+                write(descriptor, slice.baseAddress! + sent, slice.count - sent)
+            }
+            guard n > 0 else { return } // 熔断后对端关写,错误即达成
+            sent += n
+        }
+    }
+}

@@ -87,16 +87,32 @@ struct KeyConfig: Codable, Hashable {
 
     /// 手写解码:非可选 + 默认值的字段缺键时按默认兜底。
     /// 合成 Codable 不使用属性默认值——手编 config.json 漏写某个 "title" 曾让整份解码
-    /// 失败 → 归档 + 全量重置,代价与损失完全不成比例
+    /// 失败 → 归档 + 全量重置,代价与损失完全不成比例。
+    /// 枚举三字段(action/animation/template)再宽容一层:高版本 app 写入的未知 case
+    /// (rawValue 关联值枚举前向不兼容)只降级**该键**,不引爆整份配置归档重置
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
         backgroundColorHex = try container.decodeIfPresent(String.self, forKey: .backgroundColorHex) ?? "#3B4252"
         iconPath = try container.decodeIfPresent(String.self, forKey: .iconPath)
-        action = try container.decodeIfPresent(KeyAction.self, forKey: .action)
-        animation = try container.decodeIfPresent(KeyAnimation.self, forKey: .animation)
-        template = try container.decodeIfPresent(KeyTemplate.self, forKey: .template)
+        action = Self.lenientDecode(KeyAction.self, container, .action, label: "动作")
+        animation = Self.lenientDecode(KeyAnimation.self, container, .animation, label: "动效")
+        template = Self.lenientDecode(KeyTemplate.self, container, .template, label: "模板")
     }
+
+    /// 枚举宽容解码:key 存在但解码失败(未知 case/关联值形态变化)→ nil + 日志。
+    /// 损失面 = 单键动作(保存即按新格式重写),换取配置主体存活
+    private static func lenientDecode<T: Decodable, Key: CodingKey>(_ type: T.Type, _ container: KeyedDecodingContainer<Key>, _ key: Key, label: String) -> T? {
+        guard container.contains(key) else { return nil }
+        do {
+            return try container.decodeIfPresent(T.self, forKey: key)
+        } catch {
+            Self.lenientLogger.error("配置含未知\(label)类型(高版本 app 写入?),该键\(label)已降级为空:\(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static let lenientLogger = Logger(subsystem: "opendeck", category: "config")
 
     init(
         title: String = "",
@@ -319,6 +335,7 @@ final class ConfigStore {
         case .ok(var loaded):
             Self.normalize(&loaded)
             config = loaded
+            Self.sweepArchives(at: url.deletingLastPathComponent())
         case .resetAllowed:
             isFreshInstall = true
             config = Self.defaultConfig()
@@ -326,6 +343,7 @@ final class ConfigStore {
             // normalize 补场景/页面 id 等派生字段,与读盘路径行为一致
             Self.normalize(&config)
             save()
+            Self.sweepArchives(at: url.deletingLastPathComponent())
         case .resetBlocked:
             // 损坏 + 归档失败:原文件是用户配置的唯一副本,绝不主动用默认配置覆盖。
             // 内存回退默认让 app 能跑,现场留在磁盘上等用户处置(fault 日志已上报)
@@ -914,6 +932,25 @@ final class ConfigStore {
             brightness: 80
         )
     }
+
+    /// 损坏归档清扫:只保留最近 archiveKeepCount 份(文件名含毫秒时间戳,字典序即时间序)。
+    /// 归档原本无限堆积;清理失败仅记日志,不影响主流程
+    private static func sweepArchives(at directory: URL) {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return }
+        let archives = entries
+            .filter { $0.hasPrefix("config.corrupt-") && $0.hasSuffix(".json") }
+            .sorted(by: >)
+        guard archives.count > archiveKeepCount else { return }
+        for name in archives.dropFirst(archiveKeepCount) {
+            try? fileManager.removeItem(at: directory.appendingPathComponent(name))
+        }
+        if archives.count - archiveKeepCount > 0 {
+            logger.info("已清扫 \(archives.count - archiveKeepCount) 份过期损坏归档")
+        }
+    }
+
+    private static let archiveKeepCount = 10
 
     private static func ensureDirectory(for url: URL) throws {
         try FileManager.default.createDirectory(

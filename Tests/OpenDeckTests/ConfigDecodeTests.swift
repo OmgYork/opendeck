@@ -169,3 +169,55 @@ extension ConfigDecodeTests {
         #expect(store.config.currentPageIndex == 0, "看 B 删 A 后应仍看 B: \(store.config.currentPageIndex)")
     }
 }
+
+// MARK: - §6.28 挂账清理轮:枚举前向宽容 + 归档清扫
+
+extension ConfigDecodeTests {
+    /// 高版本 app 写入的未知枚举 case 只降级**该键**(动作置空),整份配置照常解码——
+    /// 旧行为 rawValue 解码 throw → 归档 + 全量重置,回退旧版构建一次就丢全部配置
+    @Test("未知枚举 case:该键动作降级,配置主体存活")
+    @MainActor
+    func unknownEnumCaseDegradesSingleKey() throws {
+        let json = """
+        {
+          "scenes" : [ { "name" : "A", "pages" : [ { "keys" : [
+            { "title" : "新版本动作键", "backgroundColorHex" : "#BF616A", "action" : { "brandNewCase" : 7 } },
+            { "title" : "正常键", "backgroundColorHex" : "#3B4252" }
+          ] } ] } ],
+          "currentSceneIndex" : 0,
+          "currentPageIndex" : 0,
+          "brightness" : 80
+        }
+        """
+        let data = try #require(json.data(using: .utf8))
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        let keys = config.scenes[0].pages[0].keys
+        #expect(keys[0].action == nil, "未知 case 应降级为无动作")
+        #expect(keys[0].title == "新版本动作键", "键的其余字段不丢")
+        #expect(keys[1].title == "正常键", "其余键不受影响")
+    }
+
+    /// 损坏归档只保留最近 10 份,启动时清扫过期归档(此前无限堆积)
+    @Test("损坏归档清扫:超过 10 份删最旧")
+    @MainActor
+    func archiveSweepKeepsTen() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-sweep-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // 合法配置 + 12 份归档(时间戳递增,字典序 = 时间序)
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("config.json"))
+        for index in 0..<12 {
+            // 用插值而非 String(format:%d):%d 按 CInt(Int32) 截断,13 位毫秒值会变负数
+            let name = "config.corrupt-\(1_700_000_000_000 + index)-undecodable.json"
+            try Data("x".utf8).write(to: dir.appendingPathComponent(name))
+        }
+        _ = ConfigStore(contentsOf: dir.appendingPathComponent("config.json"))
+
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("config.corrupt-") }
+        #expect(remaining.count == 10, "应保留最近 10 份,实存 \(remaining.count) 名单:\(remaining.sorted())")
+        // 保留的应是时间戳最新的那批
+        #expect(remaining.contains("config.corrupt-1700000000011-undecodable.json"))
+        #expect(!remaining.contains("config.corrupt-1700000000000-undecodable.json"))
+    }
+}

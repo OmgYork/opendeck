@@ -138,9 +138,14 @@ public final class PluginRegistry: @unchecked Sendable {
             throw PluginInstallError.alreadyInstalled(destinationName)
         }
         do {
-            try FileManager.default.copyItem(at: sourceURL, to: destination)
+            // 原子安装:拷到同卷临时目录再 rename——中断只留暂存目录,插件根里不会出现
+            // 半截拷贝(坏 manifest 每次启动都进 broken 列表,还得手工清理)
+            let staging = pluginsRoot.appendingPathComponent(".installing-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: pluginsRoot, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: staging) }
+            try FileManager.default.copyItem(at: sourceURL, to: staging)
+            try FileManager.default.moveItem(at: staging, to: destination)
         } catch {
-            try? FileManager.default.removeItem(at: destination) // 半截拷贝回滚
             throw PluginInstallError.notAPlugin
         }
         return manifest
