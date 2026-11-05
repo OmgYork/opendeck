@@ -270,10 +270,29 @@ private struct MenuBarPanel: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Toggle("登录时启动", isOn: Binding(
-                get: { appModel.isLaunchAtLoginEnabled },
-                set: { appModel.setLaunchAtLogin($0) }
-            ))
+            HStack {
+                Text("启动方式")
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { appModel.launchMode },
+                    set: { appModel.setLaunchMode($0) }
+                )) {
+                    ForEach(LaunchMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 150)
+                .disabled(!appModel.isAppBundleForm)
+                .help(appModel.isAppBundleForm
+                      ? "崩溃自愈 = OpenDeck 意外退出时由系统自动重启(正常退出不重启)"
+                      : "开发直跑形态不支持启动方式设置")
+            }
+            Text("构建 \(appModel.buildFingerprint)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }

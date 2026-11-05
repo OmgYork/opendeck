@@ -3,7 +3,7 @@
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
 > **文档分工**:本文件 = 开发史与设计决策(根因/协议/里程碑);给其他 agent 的操作手册见 [AGENT-GUIDE.md](AGENT-GUIDE.md);状态灯接入见 [Scripts/状态灯接入指南.md](Scripts/状态灯接入指南.md);显示器动效设计见 [Design/MonitorInputIcon/README.md](Design/MonitorInputIcon/README.md)。
-> 最后更新:2026-11-06(性能守卫轮:扫摆阈值+冷却,13.1%→10.5%;164 测全绿)
+> 最后更新:2026-11-06(无人值守轮:崩溃自愈 LaunchAgent/构建指纹/doctor 脚本;167 测全绿)
 > **M3 队列已全部消费**:Property Inspector(✅ §6.9/§6.10)> 多页面(✅ §6.6)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13)> 多状态图标(✅ §6.15)> 登录自启与睡眠唤醒(✅ §6.16)> 状态灯置前(✅ §6.17)> Stats(✅ §6.18)> icon 偏移与 112 定案(✅ §6.19/§6.20)> 鲸鱼娘动画(✅ §6.21)> 显示器输入源动效(✅ §6.22)。**剩余挂账:官方 HTML 插件逐个视觉适配(time 等插件自身视图不渲染)。**
 
 ---
@@ -438,3 +438,12 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **剩余 +3.5% vs 旧基线的定性**:sample 采样无单点热点(最高线程 0.7%,总量由十余个 0.3–0.7% 周期任务摊薄)——v2 辉光渲染单帧更重(shadow blur)+ 动效系统更多(3 仪表+2 脉冲挂载+2 webview),属可解释的 diffuse 增长,无失控点;绝对值与「多动画键面」的现状相称。后续可选优化:fx 帧数减半、track 无辉光化(视觉取舍,待用户反馈)。
 - **顺带**:StatSampler 采样探针测试差分窗口 120ms→500ms(mach tick 粒度偶发 totalDelta=0,测试化)。
 - **验证**:164 测 3× 全绿零警告;30s 窗口实测 10.5%、内存 126MB(预算内)。
+
+### 6.37 无人值守可靠性 + Agent 可运维性轮(2026-11-06 凌晨,unknown-unknowns;167 测全绿)
+- **缘起**:用户指定做「OpenDeck 需要的、但用户不知道需要」的事。盘点锁定三个运维盲区:①崩溃 = 设备脑死(心跳断 ~9s 设备自重启进待机、插件 node 不被收割、settings 丢内存窗口,直到用户偶然发现);②「跑的是哪个构建」不可见(make-app.sh 早把 OpenDeckBuildCommit/State/Time 写进 Info.plist 但从未展示——本会话两次旧二进制误诊正中此坑);③无 doctor 类体检工具。
+- **A. 崩溃自愈(LaunchAgent)**:SystemIntegration 新增 `LaunchMode` 三态(关/登录项/崩溃自愈)+ `agentPlist(executablePath:)` 纯函数(Label=com.opendeck.app + RunAtLoad + **KeepAlive.SuccessfulExit=false**(崩溃/被杀重启、正常退出不重启)+ ThrottleInterval=5 + 环境标记)+ `resolveLaunchSteps` 决策矩阵(纯函数)。**互斥不变量**:登录项与 agent 至多一个生效(RunAtLoad 覆盖开机;双路径并存 = 每次开机单实例锁弹窗)。bootstrap 立即加载;bootout+删文件卸载。**真机 kill -9 实证**:launchd 自动重启(新 pid,上次退出 -9),干净退出不重启。
+- **踩坑:RunAtLoad 撞单实例锁**——安装时 app 已在跑,bootstrap 立即拉起第二实例 → 弹「已在运行」对话框。修复:agent plist 带 `EnvironmentVariables.OPDECK_LAUNCHED_BY_AGENT=1`,实例锁撞锁路径见到标记**静默 exit(0)**(用户手动双开才弹窗)。
+- **B. 构建指纹可见化**:`AppModel.buildFingerprint(info:)` 纯函数(commit·state time);启动时 appendLog 一行自检摘要(构建/场景/页/插件清单/启动方式);菜单栏面板 footer 常驻指纹小字——「运行中 = HEAD」截图即可判定。
+- **C. Scripts/opendeck-doctor.py**(新,零依赖只读):9 项体检(运行中构建指纹/config 健康与页数/插件完整性(载荷全字符串集合 vs 目录名交集匹配,吸收 KeyAction 关联值编码形状)/settings 孤儿/备份新鲜度/pending-import 残留/自愈 agent/近期错误计数(oslog **error/fault 可持久,info 不可——谓词必须带 `process == "OpenDeck"` 滤掉测试进程污染)/磁盘余量)。首轮 dogfood 即抓到自己插件 ID 提取 bug。
+- **不做(记录)**:应用内 --diagnose(InstanceLock/退出复杂度,doctor 已覆盖);虚拟设备模式(大工程,后续立项)。
+- **验证**:167 测 3× 全绿零警告(净增 4:plist 形状含环境标记/决策矩阵全边/指纹格式);真机:kill -9 自愈 ✓、干净退出不重启 ✓、doctor 9/9 ✓。面板三态 Picker 与指纹小字待用户目视。

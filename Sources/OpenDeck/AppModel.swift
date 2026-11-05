@@ -120,6 +120,26 @@ final class AppModel {
     let pressPulse = PressPulseAnimator()
     /// 瓷贴过渡帧(§6.33):睡眠锁扣开合
     let tileFX = TileFXPlayer()
+
+    // MARK: 启动方式与构建指纹(§6.37)
+
+    /// 当前启动方式(面板三态 Picker 绑定)
+    var launchMode: LaunchMode { system.launchMode }
+    var isAppBundleForm: Bool { system.isAppBundleForm }
+    func setLaunchMode(_ mode: LaunchMode) { system.setLaunchMode(mode) }
+
+    /// 构建指纹(commit·state 时间):Info.plist 由 make-app.sh 写入。
+    /// 「运行中 = HEAD」的肉眼/截图判定面——本会话两次被旧二进制误诊的解药
+    static func buildFingerprint(info: [String: Any]) -> String {
+        let commit = info["OpenDeckBuildCommit"] as? String ?? "?"
+        let state = info["OpenDeckBuildState"] as? String ?? "?"
+        let time = info["OpenDeckBuildTime"] as? String ?? "?"
+        return "\(commit)·\(state) \(time)"
+    }
+
+    var buildFingerprint: String {
+        Self.buildFingerprint(info: Bundle.main.infoDictionary ?? [:])
+    }
     /// 睡眠锁上次渲染的视觉态(翻转 → 播锁扣过渡)
     private var lastSleepGuardVisual: SleepGuardTileRenderer.VisualState?
     /// 内建读数键面:键盘热力图(KeyAnalyze)。同样是单实例,只服务当前页那一颗。
@@ -350,6 +370,11 @@ final class AppModel {
         case .acquired(let lock):
             instanceLock = lock // 持有到进程退出
         case .locked:
+            // 崩溃自愈 agent 的 RunAtLoad 在「安装时本实例已在跑」会拉起第二实例:
+            // 该形态静默退出(弹对话框会在每次安装时打扰用户);用户手动双开才弹窗
+            if ProcessInfo.processInfo.environment["OPDECK_LAUNCHED_BY_AGENT"] == "1" {
+                exit(0)
+            }
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "OpenDeck 已在运行"
@@ -408,6 +433,11 @@ final class AppModel {
             self?.appendLog(line)
         }
         pluginHost.start()
+        // 启动自检摘要(§6.37):构建指纹 + 配置/插件盘点,一行进运行日志——
+        // agent 与排障的第一眼事实(「跑的是哪个构建」曾两次误诊本会话)
+        let pluginNames = pluginHost.installedPlugins.map { $0.manifest.pluginUUID }
+            .joined(separator: ",")
+        appendLog("启动自检:构建 \(buildFingerprint) · 场景 \(config.sceneCount) 页 \(config.config.scenes.reduce(0) { $0 + $1.pages.count }) · 插件 \(pluginHost.installedPlugins.count)[\(pluginNames)] · 启动方式 \(launchMode.label)")
         // 启动自动备份(§6.30):配置自上次备份有变才打一份,滚动保留 10 份。
         // 延迟 2s 等插件清单装载完成(备份要带插件本体)
         Task { [weak self] in

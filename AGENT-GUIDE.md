@@ -12,8 +12,10 @@
 | `Scripts/状态灯接入指南.md` | 只做「agent 状态灯」的模板化步骤，照抄即可 |
 | `Design/MonitorInputIcon/README.md` | 显示器输入源动效键的设计与状态机 |
 
-> 事实基线：2026-11-06（六轮加固后，150 测全绿）。仓库已迁至 `/Users/yorkli/Projects/mirabox`。配置与槽位以运行中的 `config.json` 为准，本文的槽位表只是快照。
-> 新增事实：**单实例锁**（第二实例弹窗退出）；`pending-import/` 目录会被下次启动自动应用（导入暂存，勿手碰）；自动备份在 `backups/`；键面 112 与保留槽 13/14 规则不变。
+> 事实基线：2026-11-06（十一轮后，167 测全绿）。仓库已迁至 `/Users/yorkli/Projects/mirabox`。配置与槽位以运行中的 `config.json` 为准，本文的槽位表只是快照。
+> 新增事实：**单实例锁**（第二实例弹窗退出；LaunchAgent 拉起的实例带环境标记静默退出）；`pending-import/` 目录会被下次启动自动应用（导入暂存，勿手碰）；自动备份在 `backups/`；键面 112 与保留槽 13/14 规则不变。
+> **排障第一步用体检脚本**：`python3 /Users/yorkli/Projects/mirabox/Scripts/opendeck-doctor.py`（只读，输出运行中构建指纹/配置健康/插件完整性/备份新鲜度/近期错误，9 项 ✓/✗ 清单）。
+> **崩溃自愈**：面板「启动方式」= 关/登录启动/**登录+崩溃自愈**（LaunchAgent `~/Library/LaunchAgents/com.opendeck.app.plist`，KeepAlive.SuccessfulExit=false——崩溃自动重启、正常退出不重启；与登录项互斥，二者至多一个生效）。崩溃后 oslog 取证仅 error/fault 可持久（`log show` 不含 info 历史，§6.13）。
 
 ---
 
