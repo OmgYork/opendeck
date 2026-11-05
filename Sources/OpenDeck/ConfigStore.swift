@@ -325,6 +325,9 @@ final class ConfigStore {
     private(set) var isFreshInstall = false
 
     convenience init() {
+        // 暂存导入在**任何配置读取之前**应用:新实例从第一行代码起就是导入后的世界
+        // (§6.29;只挂默认路径入口,测试注入的 init(contentsOf:) 不受影响)
+        ConfigPorter.applyPendingImport(appSupport: ConfigPorter.appSupportRoot)
         self.init(contentsOf: Self.defaultFileURL)
     }
 

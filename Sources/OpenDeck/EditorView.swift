@@ -231,6 +231,18 @@ struct EditorView: View {
                 } label: {
                     Label("重新应用到设备", systemImage: "arrow.triangle.2.circlepath")
                 }
+                Divider()
+                Button {
+                    exportBackup()
+                } label: {
+                    Label("导出配置备份…", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    importBackup()
+                } label: {
+                    Label("导入配置备份…", systemImage: "square.and.arrow.down")
+                }
+                Divider()
                 Button {
                     showLogSheet = true
                 } label: {
@@ -242,6 +254,68 @@ struct EditorView: View {
                 Image(systemName: "ellipsis.circle")
             }
         }
+    }
+
+    // MARK: - 配置备份(§6.29)
+
+    /// 导出:SavePanel 选位置 → 整机打包。导出只读内存真相,对运行状态零影响
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.zip]
+        panel.nameFieldStringValue = Self.defaultBackupFileName()
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                _ = try appModel.exportBackup(to: url)
+            } catch {
+                Self.porterAlert(style: .critical, text: "导出失败", detail: error.localizedDescription)
+            }
+        }
+    }
+
+    /// 导入:OpenPanel 选 zip → 校验暂存 → 确认弹窗 → 自重启生效(取消则清暂存)
+    private func importBackup() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.zip]
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let summary = try appModel.stageBackupImport(from: url)
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "导入这份备份?"
+                alert.informativeText = """
+                将替换当前全部配置与插件,重启后生效:
+                · 场景 \(summary.sceneCount) 个 / 键位 \(summary.keyCount) 格
+                · 插件 \(summary.pluginCount) 个
+                · 插件参数文档 \(summary.settingsDocumentCount) 份\(summary.skippedSettingsFiles > 0 ? "(另有 \(summary.skippedSettingsFiles) 份损坏参数被跳过)" : "")
+                """
+                alert.addButton(withTitle: "退出并导入")
+                alert.addButton(withTitle: "取消")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    ConfigPorter.relaunchAfterPendingImport()
+                } else {
+                    ConfigPorter.cancelPendingImport()
+                }
+            } catch {
+                Self.porterAlert(style: .critical, text: "导入失败", detail: error.localizedDescription)
+            }
+        }
+    }
+
+    private static func defaultBackupFileName() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmm"
+        return "OpenDeck-backup-\(formatter.string(from: Date())).zip"
+    }
+
+    private static func porterAlert(style: NSAlert.Style, text: String, detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = style
+        alert.messageText = text
+        alert.informativeText = detail
+        alert.runModal()
     }
 
     /// 连接状态徽章

@@ -235,6 +235,25 @@ final class AppModel {
 
     var latestLog: String? { logs.latest }
 
+    // MARK: - 配置备份导出/导入(§6.29)
+
+    /// 导出整机备份(config + 插件参数 + 插件本体 + 图标)到用户指定的 zip
+    func exportBackup(to destination: URL) throws -> ConfigPorter.ExportReport {
+        let report = try ConfigPorter.exportConfig(
+            to: destination, config: config, pluginHost: pluginHost,
+            iconsBase: ConfigPorter.appSupportRoot
+        )
+        appendLog("备份已导出:\(destination.lastPathComponent) 插件 \(report.pluginCount) 个、参数文档 \(report.settingsDocumentCount) 份")
+        return report
+    }
+
+    /// 导入校验 + 暂存(不动运行中的实例;确认后重启生效)
+    func stageBackupImport(from archive: URL) throws -> ConfigPorter.ImportSummary {
+        let summary = try ConfigPorter.validateAndStageImport(from: archive)
+        appendLog("备份导入已暂存:场景 \(summary.sceneCount)、插件 \(summary.pluginCount) 个(重启后生效)")
+        return summary
+    }
+
     // MARK: - 生命周期
 
     /// 幂等启动:检测官方 app、接管按键回调、同步已存亮度、开始热插拔监控。

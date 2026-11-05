@@ -956,6 +956,11 @@ final class PluginHostModel {
         instances.values.contains { $0.pluginUUID == pluginUUID }
     }
 
+    /// 备份导出用:全部 settings 文档的值拷贝(内存真相,含尚未写盘的即时变更)
+    func exportSettingsDocuments() -> [String: PluginSettingsDocument] {
+        settingsDocs
+    }
+
     /// 推拍闸门与零实例回收:实例数归零时 HTML 运行时**整个回收**(WebContent 进程是
     /// 插件家族里最重的常驻,评估 JS 往返/canvas 重绘/文件桥读盘随之全停);仅熄屏抑制时
     /// 保留 webview 只停拍(夜间熄屏周期里回收+重生成的 churn 不值得)。node 进程两态都
