@@ -767,7 +767,7 @@ struct EditorView: View {
     }
 
     private var hint: some View {
-        Text("单击键帽编辑,保存后立即上屏")
+        Text("单击编辑 · 右键复制/粘贴/清除 · 拖调色盘磁贴落键")
             .font(.caption)
             .foregroundStyle(.tertiary)
     }
