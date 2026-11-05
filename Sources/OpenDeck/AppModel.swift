@@ -254,6 +254,62 @@ final class AppModel {
         return summary
     }
 
+    // MARK: - 键位剪贴板(右键复制/粘贴,官方 App 同款;§6.30)
+
+    /// 会话内存剪贴板(不进系统粘贴板:避免与通用 ⌘C/⌘V 语义互相踩)
+    @ObservationIgnored private(set) var keyClipboard: KeyConfig?
+
+    func copyKey(at index: Int) {
+        guard AppModel.reservedSlot(at: index) == nil else { return }
+        keyClipboard = AppModel.resolvedKeyConfig(at: index, config: config)
+        appendLog("已复制第 \(index + 1) 键(会话内有效)")
+    }
+
+    func pasteKey(at index: Int) {
+        guard let clip = keyClipboard, AppModel.reservedSlot(at: index) == nil else { return }
+        config.updateKey(Self.pastedConfig(clip: clip, onto: config.keyConfig(at: index)), at: index)
+        applyKey(at: index)
+        appendLog("已粘贴到第 \(index + 1) 键")
+    }
+
+    func clearKeyFromContextMenu(at index: Int) {
+        guard AppModel.reservedSlot(at: index) == nil else { return }
+        var key = config.keyConfig(at: index)
+        key.action = nil
+        key.animation = nil
+        key.title = ""
+        key.iconPath = nil
+        key.template = nil
+        config.updateKey(key, at: index)
+        applyKey(at: index)
+    }
+
+    /// 粘贴政策(纯函数,可测):整键复刻含底色;插件键生成新 contextID(克隆 = 独立实例,
+    /// 与 slot: 复刻同一条铁律——共享 contextID 会互抢实例表唯一身份)
+    static func pastedConfig(clip: KeyConfig, onto current: KeyConfig) -> KeyConfig {
+        var key = clip
+        if case .plugin(let pluginID, let actionUUID, _) = key.action {
+            key.action = .plugin(pluginID: pluginID, actionUUID: actionUUID,
+                                 contextID: UUID().uuidString)
+        }
+        return key
+    }
+
+    // MARK: - 启动自动备份(§6.30)
+
+    /// 自动备份目录(backups/,与 config.json 同级)
+    static var autoBackupRoot: URL {
+        ConfigPorter.appSupportRoot.appendingPathComponent("backups", isDirectory: true)
+    }
+
+    func runAutoBackupIfNeeded() {
+        ConfigPorter.runAutoBackupIfNeeded(
+            config: config, pluginHost: pluginHost,
+            backupRoot: Self.autoBackupRoot,
+            configFile: config.configFileURL
+        )
+    }
+
     // MARK: - 生命周期
 
     /// 幂等启动:检测官方 app、接管按键回调、同步已存亮度、开始热插拔监控。
@@ -320,6 +376,13 @@ final class AppModel {
             self?.appendLog(line)
         }
         pluginHost.start()
+        // 启动自动备份(§6.30):配置自上次备份有变才打一份,滚动保留 10 份。
+        // 延迟 2s 等插件清单装载完成(备份要带插件本体)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self else { return }
+            self.runAutoBackupIfNeeded()
+        }
         // 动效键面(animator)的帧回调已在 init 挂接,这里只启动各自的节拍
 
         device.onLog = { [weak self] line in

@@ -321,6 +321,8 @@ final class ConfigStore {
 
     /// 实际读写路径(测试注入临时文件用,默认即 defaultFileURL)
     private let fileURL: URL
+    /// 配置文件路径只读暴露(自动备份的变更检测哈希用)
+    var configFileURL: URL { fileURL }
     /// 全新安装(本次 init 时 config.json 不存在/不可解析):首启引导的判定依据
     private(set) var isFreshInstall = false
 
@@ -592,6 +594,42 @@ final class ConfigStore {
             if !config.scenes[sceneIndex].pages.indices.contains(config.currentPageIndex) {
                 config.currentPageIndex = max(0, config.scenes[sceneIndex].pages.count - 1)
             }
+        }
+        save()
+    }
+
+    /// 场景内页面重排序(from → to;from == to no-op)。
+    /// 当前指针按 Page.id 重新定位:移动的是当前页 → 指针跟过去;移动别的页跨过当前页 → 补偿。
+    /// 用 id 重定位比手推偏移可靠(两种移动方向的边界一次写对)
+    func movePage(sceneIndex: Int, from: Int, to: Int) {
+        guard config.scenes.indices.contains(sceneIndex),
+              config.scenes[sceneIndex].pages.indices.contains(from),
+              config.scenes[sceneIndex].pages.indices.contains(to),
+              from != to
+        else { return }
+        let currentPageID = sceneIndex == config.currentSceneIndex
+            ? config.scenes[sceneIndex].pages.indices.contains(config.currentPageIndex)
+                ? config.scenes[sceneIndex].pages[config.currentPageIndex].id
+                : nil
+            : nil
+        config.scenes[sceneIndex].pages.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        if sceneIndex == config.currentSceneIndex, let currentPageID,
+           let newIndex = config.scenes[sceneIndex].pages.firstIndex(where: { $0.id == currentPageID }) {
+            config.currentPageIndex = newIndex
+        }
+        save()
+    }
+
+    /// 场景重排序(from → to);当前场景指针按场景 id 重新定位(芯片顺序变了,视野场景不变)
+    func moveScene(from: Int, to: Int) {
+        guard config.scenes.indices.contains(from), config.scenes.indices.contains(to), from != to else { return }
+        let currentSceneID = config.scenes.indices.contains(config.currentSceneIndex)
+            ? config.scenes[config.currentSceneIndex].id
+            : nil
+        config.scenes.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        if let currentSceneID,
+           let newIndex = config.scenes.firstIndex(where: { $0.id == currentSceneID }) {
+            config.currentSceneIndex = newIndex
         }
         save()
     }

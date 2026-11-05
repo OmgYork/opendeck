@@ -121,6 +121,24 @@ final class SceneRouter {
         applyPage?()
     }
 
+    /// 当前页左/右移(offset = -1/+1):圆点顺序变化,内容不变;仅涉及当前场景才重放页面
+    func moveCurrentPage(offset: Int) {
+        let sceneIndex = config.config.currentSceneIndex
+        let from = config.config.currentPageIndex
+        let to = from + offset
+        guard config.config.scenes[sceneIndex].pages.indices.contains(to) else { return }
+        config.movePage(sceneIndex: sceneIndex, from: from, to: to)
+        applyPage?()
+    }
+
+    /// 场景左/右移:芯片顺序变化,视野场景不变(指针按 id 跟随),设备内容无涉,不重放
+    func moveScene(offset: Int) {
+        let from = config.config.currentSceneIndex
+        let to = from + offset
+        guard config.config.scenes.indices.contains(to) else { return }
+        config.moveScene(from: from, to: to)
+    }
+
     // MARK: - 场景联动(前台应用自动切换场景)
 
     /// 前台应用变化:优先切到绑定了该应用的场景;无绑定且设了默认场景则回默认场景

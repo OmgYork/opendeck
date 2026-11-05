@@ -242,6 +242,11 @@ struct EditorView: View {
                 } label: {
                     Label("导入配置备份…", systemImage: "square.and.arrow.down")
                 }
+                Button {
+                    NSWorkspace.shared.open(AppModel.autoBackupRoot)
+                } label: {
+                    Label("打开自动备份文件夹", systemImage: "shippingbox")
+                }
                 Divider()
                 Button {
                     showLogSheet = true
@@ -530,12 +535,30 @@ struct EditorView: View {
                 }
                 .disabled(appModel.config.currentPageIndex == 0 || scene.pages.count < 2)
                 .help(appModel.config.currentPageIndex == 0 ? "主页不可删除" : "删除正在查看的这页圆点")
+                // 圆点排序此前不可调:加多了只能靠删了重加
+                Button("当前页左移") {
+                    appModel.sceneRouter.moveCurrentPage(offset: -1)
+                }
+                .disabled(appModel.config.currentPageIndex == 0)
+                Button("当前页右移") {
+                    appModel.sceneRouter.moveCurrentPage(offset: 1)
+                }
+                .disabled(appModel.config.currentPageIndex >= scene.pages.count - 1)
             }
             Button("重命名") {
                 renameTargetID = scene.id
                 renameText = scene.name
                 renameAlertShown = true
             }
+            // 场景排序此前不可调:只能删了按顺序重建
+            Button("左移") {
+                appModel.sceneRouter.moveScene(offset: -1)
+            }
+            .disabled(offset == 0)
+            Button("右移") {
+                appModel.sceneRouter.moveScene(offset: 1)
+            }
+            .disabled(offset >= appModel.config.sceneCount - 1)
             Button("删除", role: .destructive) {
                 guard appModel.config.sceneCount > 1 else { return }
                 deleteTargetID = scene.id
@@ -646,6 +669,23 @@ struct EditorView: View {
                 .help(AppModel.reservedSlot(at: index) == nil
                       ? "编辑第 \(index + 1) 键"
                       : "保留键(不可编辑)")
+                .contextMenu {
+                    if AppModel.reservedSlot(at: index) == nil {
+                        Button("复制此键") {
+                            appModel.copyKey(at: index)
+                        }
+                        Button("粘贴到此处") {
+                            appModel.pasteKey(at: index)
+                        }
+                        .disabled(appModel.keyClipboard == nil)
+                        Divider()
+                        Button("清除此键", role: .destructive) {
+                            appModel.clearKeyFromContextMenu(at: index)
+                        }
+                        .disabled(key.action == nil && key.title.isEmpty && key.iconPath == nil
+                                  && key.animation == nil && key.template == nil)
+                    }
+                }
             }
         }
     }

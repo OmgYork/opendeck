@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import os
 import PluginHost
@@ -277,5 +278,42 @@ enum ConfigPorter {
 
     static var pendingImportDirectory: URL {
         appSupportRoot.appendingPathComponent(pendingImportDirName, isDirectory: true)
+    }
+
+    // MARK: - 自动滚动备份(§6.30)
+
+    /// 启动时自动备份:config.json 内容哈希与上次备份时不同(或无记录)才打一份,
+    /// 滚动保留最近 10 份。手动导出的备份不受影响(只清 auto-* 前缀)。
+    /// 与手动导出共用 exportConfig 管线(内存真相 + 插件本体 + 图标)。
+    static func runAutoBackupIfNeeded(
+        config: ConfigStore, pluginHost: PluginHostModel,
+        backupRoot: URL, configFile: URL, keepCount: Int = 10
+    ) {
+        let fileManager = FileManager.default
+        guard let data = try? Data(contentsOf: configFile) else { return }
+        let hash = Data(SHA256.hash(data: data))
+        try? fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
+        let hashFile = backupRoot.appendingPathComponent(".last-config-hash")
+        if let stored = try? Data(contentsOf: hashFile), stored == hash {
+            return // 配置自上次备份未变
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let destination = backupRoot.appendingPathComponent("auto-\(formatter.string(from: Date())).zip")
+        do {
+            _ = try exportConfig(to: destination, config: config, pluginHost: pluginHost)
+        } catch {
+            logger.fault("自动备份失败(不影响主流程):\(error, privacy: .public)")
+            return
+        }
+        try? hash.write(to: hashFile)
+        // 滚动清理:只动 auto- 前缀
+        if let entries = try? fileManager.contentsOfDirectory(atPath: backupRoot.path) {
+            let autoBackups = entries.filter { $0.hasPrefix("auto-") && $0.hasSuffix(".zip") }.sorted(by: >)
+            for name in autoBackups.dropFirst(keepCount) {
+                try? fileManager.removeItem(at: backupRoot.appendingPathComponent(name))
+            }
+        }
+        logger.info("配置已自动备份:\(destination.lastPathComponent, privacy: .public)")
     }
 }
