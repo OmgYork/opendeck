@@ -242,6 +242,10 @@ final class AppModel {
         guard !started else { return }
         started = true
 
+        // 熄屏/涂黑 → 插件推拍抑制:设备看不见的帧一帧都不用算
+        device.onOutputSuppressionChange = { [weak self] suppressed in
+            self?.pluginHost.setOutputSuppressed(suppressed)
+        }
         // 单实例守卫(见 InstanceLock):双实例并存会互相整文件覆盖配置,先于一切状态建立
         switch InstanceLock.acquire(path: Self.instanceLockPath) {
         case .acquired(let lock):

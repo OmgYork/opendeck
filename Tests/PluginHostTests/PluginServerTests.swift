@@ -200,3 +200,46 @@ extension PluginServerTests {
         server.stop()
     }
 }
+
+// MARK: - §6.27 性能收尾轮新增闸门
+
+extension PluginServerTests {
+    /// 管线化洪灌:单次 drain 上限 256 帧,超出部分重排队消化——
+    /// 全部帧必须最终到达(节流不得丢帧),且连接保持可用
+    @Test("入站洪泛节流:1000 条管线化帧全部送达,连接不断")
+    func pipelinedFloodThrottledButComplete() async throws {
+        let server = PluginServer()
+        final class Box: @unchecked Sendable {
+            var received = 0
+            var closed = false
+        }
+        let box = OSAllocatedUnfairLock(initialState: Box())
+        server.onMessage = { _, _ in box.withLock { $0.received += 1 } }
+        server.onClose = { _ in box.withLock { $0.closed = true } }
+        server.onError = { message in Issue.record("server error: \(message)") }
+
+        server.start()
+        for _ in 0..<150 where server.port == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(server.port != 0, "监听未就绪")
+
+        let client = try await connectAndHandshake(port: server.port)
+        let total = 1000
+        for index in 0..<total {
+            try sendMaskedText(client, "f\(index)")
+        }
+
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if box.withLock({ $0.received }) >= total { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let (received, closed) = box.withLock { ($0.received, $0.closed) }
+        #expect(received == total, "洪灌帧不得丢失:实收 \(received)/\(total)")
+        #expect(!closed, "节流是让出而非断连")
+
+        Darwin.close(client)
+        server.stop()
+    }
+}

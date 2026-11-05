@@ -54,6 +54,9 @@ public final class PluginServer: @unchecked Sendable {
     /// 握手前 header 专用上限:HTTP 升级头只有几百字节,迟迟不来 `\r\n\r\n` 的连接
     /// 到顶即断(否则 inbox 永远走不到握手后的 32MB 检查,可无界增长)
     private static let handshakeHeaderLimitBytes = 64 * 1024
+    /// 单次 drain 最多消化的帧数:管线化洪灌(死循环发微帧)的连接不得独占串行队列——
+    /// 到上限即让出(重排队继续消化剩余帧),其他连接的收发/accept/close 照常插队
+    private static let maxFramesPerDrain = 256
 
     public init() {}
 
@@ -247,8 +250,18 @@ public final class PluginServer: @unchecked Sendable {
             }
             serverLog.info("server: 握手完成 fd=\(connection.fileDescriptor)")
         }
+        var processed = 0
         while true {
+            if processed >= Self.maxFramesPerDrain {
+                // 让出串行队列;剩余帧已在本连接 inbox 内,重排队继续消化(连接已关则弃)
+                queue.async { [weak self] in
+                    guard let self, !connection.isClosed else { return }
+                    self.drainInbox(connection)
+                }
+                break
+            }
             guard let frame = parseFrame(connection) else { break }
+            processed += 1
             serverLog.info("server: 帧 fd=\(connection.fileDescriptor) op=\(frame.opcode) len=\(frame.payload.count) final=\(frame.isFinal)")
             switch frame.opcode {
             case 0x1, 0x2: // text / binary

@@ -457,3 +457,51 @@ extension MultiStateTests {
         model.shutdown()
     }
 }
+
+// MARK: - §6.27 性能收尾轮新增闸门
+
+extension MultiStateTests {
+    /// 零实例回收 + 重进页重生:HTML 插件最后一个实例摘除 → webview 回收(日志可证);
+    /// 重新分配键位 → 运行时重建(已拉起日志第二次出现)。node 家族不回收(常驻语义)
+    @Test("HTML 运行时零实例回收,重新分配重生")
+    func zeroInstanceTeardownAndRespawn() async throws {
+        let sandbox = try makeSandboxHTMLPlugin()
+        let model = PluginHostModel(pluginsRoot: sandbox.plugins, settingsRoot: sandbox.settings)
+        var logs: [String] = []
+        model.hooks.log = { logs.append($0) }
+        model.start()
+        try await waitUntil { model.port != 0 }
+
+        model.syncKey(at: 0, action: .plugin(
+            pluginID: Self.pluginUUID, actionUUID: Self.actionUUID, contextID: Self.contextID
+        ))
+        try await waitUntil { logs.contains { $0.contains("已拉起 HTML 插件页") } }
+
+        // 摘除唯一实例:webview 应回收
+        model.syncKey(at: 0, action: nil)
+        try await waitUntil { logs.contains { $0.contains("回收 HTML 运行时") } }
+
+        // 重新分配:运行时重建(第二次「已拉起」)
+        model.syncKey(at: 0, action: .plugin(
+            pluginID: Self.pluginUUID, actionUUID: Self.actionUUID, contextID: Self.contextID
+        ))
+        try await waitUntil {
+            logs.filter { $0.contains("已拉起 HTML 插件页") }.count >= 2
+        }
+        model.shutdown()
+    }
+
+    /// HTML 家族沙盒(CodePath=index.html;不真加载页面,只验运行时生命周期与日志)
+    private func makeSandboxHTMLPlugin() throws -> Sandbox {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-html-\(UUID().uuidString)")
+        let plugins = root.appendingPathComponent("plugins")
+        let settings = root.appendingPathComponent("pluginSettings")
+        let pluginDir = plugins.appendingPathComponent("\(Self.pluginUUID).sdPlugin")
+        try FileManager.default.createDirectory(at: pluginDir, withIntermediateDirectories: true)
+        let manifest = #"{"Name":"html","Version":"1.0","CodePath":"index.html","Actions":[{"UUID":"\#(Self.actionUUID)","Name":"A"}]}"#
+        try Data(manifest.utf8).write(to: pluginDir.appendingPathComponent("manifest.json"))
+        try Data("<html></html>".utf8).write(to: pluginDir.appendingPathComponent("index.html"))
+        return Sandbox(root: root, plugins: plugins, settings: settings)
+    }
+}

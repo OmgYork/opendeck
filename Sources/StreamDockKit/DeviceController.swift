@@ -18,6 +18,9 @@ public final class DeviceController {
     public var onKeyEvent: ((KeyEvent) -> Void)?
     /// 诊断日志(主线程)
     public var onLog: ((String) -> Void)?
+    /// 输出抑制态变化(熄屏或键面涂黑,主线程):设备此刻不显示任何插件内容,
+    /// 宿主据此暂停插件推拍(恢复时立即补一拍)。五个状态变更点统一经 notifyOutputSuppression 上报
+    public var onOutputSuppressionChange: ((Bool) -> Void)?
 
     /// 传输接缝:生产用 HIDTransport,测试用记录型假实现(状态机因此可测)
     private let transport: any DeviceTransport
@@ -103,6 +106,7 @@ public final class DeviceController {
         setKeysBlacked(true)
         isScreenOff = true
         transport.sendCommand(StreamDock293S.brightnessCommand(StreamDock293S.brightnessByte(percent: 0)))
+        notifyOutputSuppression()
         onLog?("熄屏:键面已黑、背光归零(心跳保持,按任意键即时唤醒)")
     }
 
@@ -114,8 +118,14 @@ public final class DeviceController {
         // 无条件重画:熄屏期间外部可能已解除涂黑记账(setKeysBlacked 只记账不写屏),
         // 不能依赖「记账差异」触发重画,否则唤醒后键面停留在黑帧
         keysBlacked = false
+        notifyOutputSuppression()
         redrawAll()
         onLog?("已从熄屏唤醒,键面已恢复")
+    }
+
+    /// 统一上报点:isScreenOff/keysBlacked 的每个变更出口调用(值由读取计算,免同步漂移)
+    private func notifyOutputSuppression() {
+        onOutputSuppressionChange?(isScreenOff || keysBlacked)
     }
 
     /// Mac 系统睡眠唤醒后的主动恢复:睡眠期间心跳中断,设备多半已自重启进待机,
@@ -126,6 +136,7 @@ public final class DeviceController {
         guard state == .running else { return }
         isScreenOff = false
         keysBlacked = false
+        notifyOutputSuppression()
         onLog?("系统唤醒:重新校准(握手→亮度→清屏→按缓存全量重画)")
         calibrate()
     }
@@ -137,6 +148,7 @@ public final class DeviceController {
     public func setKeysBlacked(_ black: Bool) {
         guard keysBlacked != black, state == .running else { return }
         keysBlacked = black
+        notifyOutputSuppression()
         guard !isScreenOff else { return }
         if black {
             blackoutKeys()

@@ -88,6 +88,9 @@ final class PluginHostModel {
     private var instances: [String: Instance] = [:]
     private var pluginByConnection: [UUID: String] = [:]
     private var serverStarted = false
+    /// 输出抑制(熄屏/键面涂黑,DeviceController.onOutputSuppressionChange 上报):
+    /// 全部 HTML 运行时停拍的第二闸门条件
+    private var outputSuppressed = false
     /// settings 内存真相:每插件一份文档,懒加载一次后进程内永不重载(唯一权威副本;
     /// 磁盘只是持久化汇)。一切变更经 mutateSettingsDoc 原地改 + 立即落盘——
     /// 禁止在别处持有副本写回(17:41 事故类:旧副本整份写回覆盖新数据)。
@@ -242,6 +245,11 @@ final class PluginHostModel {
         guard let runtime = ensureRuntime(pluginUUID: pluginID) else {
             hooks.log("插件未安装,动作暂不生效:\(pluginID)")
             return
+        }
+        // 零实例回收(HTML)或进程死亡后重进页:运行时已不在,重建
+        // (注册重放会把 willAppear/上次 state 带回,帧随后照常覆盖)
+        if !runtime.isAlive, serverStarted {
+            spawn(runtime)
         }
         let record = settingsDoc(pluginID).contexts[contextID] ?? PluginContextRecord()
         // 从盘加载的 state 同样钳制(与 setState 同策略,防历史脏数据/手编 settings 文件越界)
@@ -886,9 +894,9 @@ final class PluginHostModel {
             }
             runtime.wantsSpawn = false
             runtime.webview = webview
-            // 零实例时的补拉(如 reviveRuntimes)直接落在闸门关态,不空转推拍
+            // 闸门标志复位;是否关闸/回收由 syncKey 建完实例后的 syncPulseGate 统一评估
+            // ——spawn 时刻实例尚不存在,在这里评估会把刚建好的 webview 当场回收(踩过)
             runtime.pulseGated = false
-            syncPulseGate(pluginUUID: runtime.manifest.pluginUUID)
             hooks.log("已拉起 HTML 插件页:\(runtime.manifest.pluginUUID) @:\(port)")
             return
         }
@@ -948,16 +956,33 @@ final class PluginHostModel {
         instances.values.contains { $0.pluginUUID == pluginUUID }
     }
 
-    /// 推拍闸门:插件可见实例数 0↔>0 跳变时暂停/恢复 HTML 运行时的宿主推拍。
-    /// 换页后 contexts 为空时,每秒一次的 evaluateJavaScript 往返 + WebContent canvas
-    /// 重绘 + 文件桥读盘全是不产生任何可见产出的白烧。推拍所有权归宿主的 §6.13 契约
-    /// 不变——只是宿主侧暂停节拍;node 进程不关停(保持 Elgato 常驻语义与 respawn 预算)
+    /// 推拍闸门与零实例回收:实例数归零时 HTML 运行时**整个回收**(WebContent 进程是
+    /// 插件家族里最重的常驻,评估 JS 往返/canvas 重绘/文件桥读盘随之全停);仅熄屏抑制时
+    /// 保留 webview 只停拍(夜间熄屏周期里回收+重生成的 churn 不值得)。node 进程两态都
+    /// 常驻(Elgato 语义 + 避开 respawn×3 预算的边界效应)。推拍所有权归宿主的 §6.13 契约不变
     private func syncPulseGate(pluginUUID: String) {
-        guard let runtime = runtimes[pluginUUID], runtime.webview != nil else { return }
-        let shouldGate = !hasInstances(pluginUUID: pluginUUID)
-        guard runtime.pulseGated != shouldGate else { return }
-        runtime.pulseGated = shouldGate
-        runtime.webview?.setPulseEnabled(!shouldGate)
+        guard let runtime = runtimes[pluginUUID] else { return }
+        guard hasInstances(pluginUUID: pluginUUID) else {
+            if let webview = runtime.webview {
+                webview.close()
+                runtime.webview = nil
+                hooks.log("插件零实例,回收 HTML 运行时:\(pluginUUID)")
+            }
+            runtime.pulseGated = true
+            return
+        }
+        runtime.pulseGated = outputSuppressed
+        runtime.webview?.setPulseEnabled(!outputSuppressed)
+    }
+
+    /// 输出抑制(熄屏/键面涂黑):设备此刻不显示任何插件内容,全部 HTML 运行时停拍;
+    /// 恢复时各运行时立即补一拍(state 对账不等下一节拍)
+    func setOutputSuppressed(_ suppressed: Bool) {
+        guard outputSuppressed != suppressed else { return }
+        outputSuppressed = suppressed
+        for pluginUUID in runtimes.keys {
+            syncPulseGate(pluginUUID: pluginUUID)
+        }
     }
 
     // MARK: - 发送辅助

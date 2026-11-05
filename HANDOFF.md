@@ -3,7 +3,7 @@
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
 > **文档分工**:本文件 = 开发史与设计决策(根因/协议/里程碑);给其他 agent 的操作手册见 [AGENT-GUIDE.md](AGENT-GUIDE.md);状态灯接入见 [Scripts/状态灯接入指南.md](Scripts/状态灯接入指南.md);显示器动效设计见 [Design/MonitorInputIcon/README.md](Design/MonitorInputIcon/README.md)。
-> 最后更新:2026-11-06(深度审计加固轮:六专项审计 → 5 项 P1 + 约 20 项 P2/P3 修复;135 测全绿)
+> 最后更新:2026-11-06(性能收尾轮:推拍抑制/洪泛节流/零实例回收;JPEG 载荷实验被 A/B 否决;137 测全绿)
 > **M3 队列已全部消费**:Property Inspector(✅ §6.9/§6.10)> 多页面(✅ §6.6)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13)> 多状态图标(✅ §6.15)> 登录自启与睡眠唤醒(✅ §6.16)> 状态灯置前(✅ §6.17)> Stats(✅ §6.18)> icon 偏移与 112 定案(✅ §6.19/§6.20)> 鲸鱼娘动画(✅ §6.21)> 显示器输入源动效(✅ §6.22)。**剩余挂账:官方 HTML 插件逐个视觉适配(time 等插件自身视图不渲染)。**
 
 ---
@@ -356,3 +356,10 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **心跳逐拍日志移除**:7s 一条「心跳 tick:CONNECT 已入队」进 LogRing(50 条 ≈ 6 分钟历史)纯刷屏,正常 tick 静默,异常分支(句柄空)保留。AGENT-GUIDE 的 60s alive 日志是插件侧,不受影响。
 - **验证**:135 测 3× 连跑全绿零新警告;34 文件 +1117/−164;死代码扫描无新增;make-app 重建重启后日志流 12s 零 error/fault,插件 22KB 帧流正常,CPU 稳态 3.9%(基线持平;推拍闸门收益在熄屏/换页场景)。设备端键面/动画目视验收待用户。
 - **误报记录**:`Int(NSNumber(1.5))` 是否 trap——本工具链实测输出 1(deprecated 截断语义,非 SE-0170 精确转换),按 P2 修。
+
+### 6.27 性能收尾轮(2026-11-06 凌晨,审计轮性能报告的剩余优先序;137 测全绿)
+- **熄屏推拍抑制(宿主侧)**:DeviceController 新增 `onOutputSuppressionChange`(isScreenOff || keysBlacked 的五个变更出口统一经 notifyOutputSuppression 上报)→ AppModel 注线 → PluginHostModel.setOutputSuppressed → 全部 HTML 运行时停拍。夜间熄屏期间 evaluateJavaScript 往返 + WebContent canvas 重绘 + 文件桥读盘全停(此前 ~2–3% 主线程纯浪费);恢复时立即补一拍(state 对账不等节拍)。
+- **入站洪泛节流**:PluginServer drainInbox 单次最多消化 256 帧,超出即让出串行队列(重排队继续消化,连接不断)——管线化洪灌的连接不再能独占队列。测试:1000 条管线化帧全部送达且连接保持。
+- **HTML 运行时零实例回收**:syncPulseGate 升格——实例数归零时 webview.close() 整个回收(WebContent 是插件家族最重的常驻;node 进程两态都常驻,保持 Elgato 语义与 respawn 预算);syncKey 重进页时 `!runtime.isAlive && serverStarted` 补 spawn(注册重放带回 willAppear/上态)。**踩坑实录**:spawn 的 HTML 分支曾在建 webview 后立即调 syncPulseGate——spawn 时刻实例尚不存在,闸门判「零实例」把刚建好的 webview 当场回收,webview 全链测试 3× 连挂;且 MultiState 新测试因日志恰好满足断言而**假绿**(spawn→回收→重生→再回收,两次「已拉起」)。定案:spawn 内只复位 pulseGated 标志,闸门/回收统一由 syncKey 建完实例后的 syncPulseGate 评估;测试断言必须锚定不可伪造的状态序(回收恰好 1 次)而非日志包含性。教训:spawn/teardown 与实例表的生命周期耦合点必须单一。
+- **JPEG 载荷实验(否决回滚)**:whale.js 状态灯帧由 PNG 改「垫黑底 + toDataURL('image/jpeg',0.9)」(22.5KB→7.1KB,3.2×,HID 分块 18→7;键底色 #000000 视觉等价)。**同口径 A/B(30s cputime 增量,同在 agent working 态):JPEG 版主进程 9.2% vs PNG 版 6.9%——帧更小反而更贵,机制未明(主进程侧新增成本不在解析/解码,疑 ImageIO 路径或编码器行为),按奥卡姆剃刀回滚**,部署目录与仓库源码均还原 PNG。**测量口径教训(重要)**:昨夜记录的「稳态 3.9%」系 `ps pcpu` 终身均值(uptime 数小时摊薄启动峰),真实稳态(30s 窗口)本就 ~7%——「CPU 从 3.9 涨到 7」是口径假象,勿据此误判回归;以后 CPU 对比一律用 cputime 增量窗口,且 A/B 双方 agent 状态对齐。
+- **验证**:137 测 3× 全绿(净增 2);部署目录 index.html 同步还原(备份 index.html.bak-20261106-perf 保留);重启后日志流零 error/fault。
