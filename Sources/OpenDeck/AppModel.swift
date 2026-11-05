@@ -150,11 +150,21 @@ final class AppModel {
             heatmap: heatmap, monitorInput: monitorInput, pressPulse: pressPulse,
             brightness: brightness, sceneRouter: sceneRouter
         )
-        keyRouter.onNavTransition = { [weak self] index, kind, offset in
+        keyRouter.onNavTransition = { [weak self] index, kind, offset, fromIndex in
             guard let self else { return }
-            // 方向过渡帧:拨一下的滑移包络,收尾回静息(applyKey 已在 switch 内先跑完)
-            if let frames = NavTileRenderer.transitionFrames(kind: kind, offset: offset),
-               let final = NavTileRenderer.image(kind: kind) {
+            // 方向过渡帧:场景卡片拨动/页键辉光沿轨滑一档,收尾回新页态静息
+            // (applyKey 已在 switch 内先跑完,静息帧即新页态;过渡帧从旧位滑向它)
+            let pageCount = kind == .page ? self.config.currentScene.pages.count : 0
+            let final: CGImage?
+            if kind == .page {
+                final = NavTileRenderer.image(kind: kind, pageCount: pageCount,
+                                              pageIndex: self.config.currentPageIndex)
+            } else {
+                final = NavTileRenderer.image(kind: kind)
+            }
+            if let frames = NavTileRenderer.transitionFrames(kind: kind, offset: offset,
+                                                             pageCount: pageCount, fromIndex: fromIndex),
+               let final {
                 self.tileFX.play(index: index, frames: frames, final: final)
             }
         }
@@ -630,11 +640,15 @@ final class AppModel {
             }
             return
         }
-        // 导航键(场景/页,含保留槽):暗夜仪表专用渲染(§6.34,忽略底色/标题配置)
-        if let navKind = NavTileRenderer.Kind(action: key.action),
-           let image = NavTileRenderer.image(kind: navKind) {
-            setKeyImage(index: index, image: image)
-            return
+        // 导航键(场景/页,含保留槽):暗夜仪表专用渲染(§6.34,忽略底色/标题配置)。
+        // 页键带真实页态:点数 = 当前场景页数,辉光点 = 当前页(翻页跟随的视觉根源)
+        if let navKind = NavTileRenderer.Kind(action: key.action) {
+            let pageCount = navKind == .page ? config.currentScene.pages.count : 0
+            let pageIndex = config.currentPageIndex
+            if let image = NavTileRenderer.image(kind: navKind, pageCount: pageCount, pageIndex: pageIndex) {
+                setKeyImage(index: index, image: image)
+                return
+            }
         }
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
         let title: String?

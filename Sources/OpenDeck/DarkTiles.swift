@@ -400,32 +400,42 @@ enum NavTileRenderer {
         kind == .scene ? DarkTileStyle.gpuAccent : DarkTileStyle.offGray
     }
 
-    /// 静息帧
-    static func image(kind: Kind, side: Int = StreamDock293S.keySize(column: 0)) -> CGImage? {
-        render(kind: kind, side: side, slide: 0)
+    /// 静息帧。页键带真实页态:pageCount = 当前场景页数,pageIndex = 当前页(辉光点)。
+    /// glowOffset: 页键过渡用——辉光点位置 = pageIndex + glowOffset(模页数),0..1 一档
+    static func image(kind: Kind, side: Int = StreamDock293S.keySize(column: 0),
+                      pageCount: Int = 0, pageIndex: Int = 0, glowOffset: Double? = nil) -> CGImage? {
+        render(kind: kind, side: side, slide: 0,
+               pageCount: pageCount, pageIndex: pageIndex, glowOffset: glowOffset)
     }
 
-    /// 方向过渡帧:6 帧,内容沿行进方向滑移一档并回弹(offset 正 = 下/右)。
-    /// final 由调用方给(静息帧),帧序列不含静息
-    static func transitionFrames(kind: Kind, offset: Int,
+    /// 方向过渡帧:6 帧。场景键 = 卡片滑移包络(出去又回来);页键 = 辉光点沿轨滑移一档
+    /// (循环翻页绕轨端,模页数)。final 由调用方给(新页态静息帧),帧序列不含静息
+    static func transitionFrames(kind: Kind, offset: Int, pageCount: Int = 0, fromIndex: Int = 0,
                                  side: Int = StreamDock293S.keySize(column: 0)) -> [CGImage]? {
         guard offset != 0 else { return nil }
         let count = 6
         var frames: [CGImage] = []
         for step in 0..<count {
             let p = SleepGuardTileRenderer.easeOutCubic(Double(step + 1) / Double(count))
-            // 滑移包络:0 → 峰值(1) → 回 0(出去又回来,「拨一下」的手感)
-            let envelope = sin(p * .pi)
-            let slide = CGFloat(offset) * 14 * CGFloat(envelope)
-            if let image = render(kind: kind, side: side, slide: slide) {
-                frames.append(image)
+            let image: CGImage?
+            if kind == .page, pageCount > 0 {
+                image = render(kind: kind, side: side, slide: 0,
+                               pageCount: pageCount, pageIndex: fromIndex,
+                               glowOffset: Double(offset) * p)
+            } else {
+                // 场景键:滑移包络(sin,出去又回来)
+                let envelope = sin(p * .pi)
+                let slide = CGFloat(offset) * 14 * CGFloat(envelope)
+                image = render(kind: kind, side: side, slide: slide)
             }
+            if let image { frames.append(image) }
         }
         return frames.isEmpty ? nil : frames
     }
 
-    /// slide:内容整体位移(px,含方向);0 = 静息
-    private static func render(kind: Kind, side: Int, slide: CGFloat) -> CGImage? {
+    /// slide:场景卡内容整体位移(px,含方向);0 = 静息
+    private static func render(kind: Kind, side: Int, slide: CGFloat,
+                               pageCount: Int = 0, pageIndex: Int = 0, glowOffset: Double? = nil) -> CGImage? {
         guard let ctx = DarkTileCanvas.beginCanvas(side: side) else { return nil }
         let s = CGFloat(side) / 112
         let accent = accent(for: kind)
@@ -441,7 +451,10 @@ enum NavTileRenderer {
         case .scene:
             drawSceneCards(ctx: ctx, center: CGPoint(x: 56 * s + dx, y: 56 * s + dy), scale: s, accent: accent)
         case .page:
-            drawPageDots(ctx: ctx, center: CGPoint(x: 56 * s + dx, y: 56 * s + dy), scale: s, accent: accent)
+            let count = max(pageCount, 1)
+            let index = min(max(pageIndex, 0), count - 1)
+            drawPageDots(ctx: ctx, center: CGPoint(x: 56 * s + dx, y: 56 * s + dy), scale: s,
+                         accent: accent, pageCount: count, currentIndex: index, glowOffset: glowOffset)
         }
 
         guard let upright = ctx.makeImage() else { return nil }
@@ -477,23 +490,43 @@ enum NavTileRenderer {
                                    width: 6 * scale, height: 6 * scale))
     }
 
-    /// 页点滑轨:三枚竖排页点,当前(中)点亮辉光,上下点 dim——「多页串联」的直觉像
-    private static func drawPageDots(ctx: CGContext, center: CGPoint, scale: CGFloat, accent: CGColor) {
-        let spacing = 13 * scale
-        for offset in [-1, 0, 1] {
-            let dotCenter = CGPoint(x: center.x, y: center.y + CGFloat(offset) * spacing)
-            if offset == 0 {
-                ctx.setShadow(offset: .zero, blur: 7, color: accent)
-                ctx.setFillColor(accent)
-                ctx.fillEllipse(in: CGRect(x: dotCenter.x - 6 * scale, y: dotCenter.y - 6 * scale,
-                                           width: 12 * scale, height: 12 * scale))
-                ctx.setShadow(offset: .zero, blur: 0, color: nil)
-            } else {
-                ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.30))
-                ctx.setLineWidth(1.5 * scale)
-                ctx.strokeEllipse(in: CGRect(x: dotCenter.x - 4.5 * scale, y: dotCenter.y - 4.5 * scale,
-                                             width: 9 * scale, height: 9 * scale))
-            }
+    /// 页点滑轨:每页一枚点(轨距随页数自适应),当前页辉光实心、其余空心描边。
+    /// 阅读序 = 页 1 在顶部(CG 高 y),glowOffset 非 nil 时辉光点沿轨滑移一档
+    /// (循环翻页跨端按锯齿折返,视觉连续)
+    private static func drawPageDots(ctx: CGContext, center: CGPoint, scale: CGFloat, accent: CGColor,
+                                     pageCount: Int, currentIndex: Int, glowOffset: Double?) {
+        let usable = 58 * scale                       // 上下可用轨长
+        let spacing = min(13 * scale, usable / CGFloat(max(pageCount, 1)))
+        let railTop = center.y + spacing * CGFloat(pageCount - 1) / 2 // CG 高 y = 视觉顶
+
+        func dotY(_ position: Double) -> CGFloat {
+            railTop - spacing * CGFloat(position)     // 索引增 → 视觉下移
         }
+
+        for page in 0..<pageCount {
+            guard page != currentIndex else { continue } // 辉光点最后画(盖在描边点上)
+            let dotCenter = CGPoint(x: center.x, y: dotY(Double(page)))
+            ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.30))
+            ctx.setLineWidth(1.5 * scale)
+            ctx.strokeEllipse(in: CGRect(x: dotCenter.x - 4.5 * scale, y: dotCenter.y - 4.5 * scale,
+                                         width: 9 * scale, height: 9 * scale))
+        }
+        // 辉光点(当前页,或过渡中的滑移位;锯齿折返处理循环翻页的跨端)
+        let virtual = Double(currentIndex) + (glowOffset ?? 0)
+        let folded: Double
+        if let glowOffset, glowOffset.truncatingRemainder(dividingBy: 1) != 0 {
+            let period = Double(max(pageCount - 1, 1)) * 2
+            var v = virtual.truncatingRemainder(dividingBy: period)
+            if v < 0 { v += period }
+            folded = v <= Double(pageCount - 1) ? v : period - v
+        } else {
+            folded = virtual
+        }
+        let glowCenter = CGPoint(x: center.x, y: dotY(folded))
+        ctx.setShadow(offset: .zero, blur: 7, color: accent)
+        ctx.setFillColor(accent)
+        ctx.fillEllipse(in: CGRect(x: glowCenter.x - 6 * scale, y: glowCenter.y - 6 * scale,
+                                   width: 12 * scale, height: 12 * scale))
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
     }
 }

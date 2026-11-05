@@ -107,7 +107,26 @@ extension DarkTileTests {
     @Test("NavTile 过渡帧:方向非零 6 帧,零方向拒绝")
     func navTransitionFrames() {
         #expect(NavTileRenderer.transitionFrames(kind: .scene, offset: 1)?.count == 6)
-        #expect(NavTileRenderer.transitionFrames(kind: .page, offset: -1)?.count == 6)
+        #expect(NavTileRenderer.transitionFrames(kind: .page, offset: -1, pageCount: 3, fromIndex: 1)?.count == 6)
         #expect(NavTileRenderer.transitionFrames(kind: .page, offset: 0) == nil)
+    }
+
+    /// 页点跟随真实页位(§6.34 用户反馈修复):不同当前页渲染互异;
+    /// 过渡帧辉光滑移(中段位介于起讫);单页场景单点
+    @Test("页点跟随页位:不同页互异,过渡辉光滑移,单页单点")
+    func pageDotsTrackState() throws {
+        let page0 = try #require(NavTileRenderer.image(kind: .page, pageCount: 3, pageIndex: 0))
+        let page1 = try #require(NavTileRenderer.image(kind: .page, pageCount: 3, pageIndex: 1))
+        let page2 = try #require(NavTileRenderer.image(kind: .page, pageCount: 3, pageIndex: 2))
+        #expect(!Self.sameImage(page0, page1))
+        #expect(!Self.sameImage(page1, page2))
+        // 单页:唯一辉光点
+        let single = try #require(NavTileRenderer.image(kind: .page, pageCount: 1, pageIndex: 0))
+        #expect(!Self.sameImage(single, page0))
+        // 过渡中段帧:辉光位于起讫之间(与两端静息帧都不同)
+        let mid = try #require(try #require(NavTileRenderer.transitionFrames(kind: .page, offset: 1,
+                                                                            pageCount: 3, fromIndex: 0))[2])
+        #expect(!Self.sameImage(mid, page0))
+        #expect(!Self.sameImage(mid, page1))
     }
 }

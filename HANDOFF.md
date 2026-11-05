@@ -3,7 +3,7 @@
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
 > **文档分工**:本文件 = 开发史与设计决策(根因/协议/里程碑);给其他 agent 的操作手册见 [AGENT-GUIDE.md](AGENT-GUIDE.md);状态灯接入见 [Scripts/状态灯接入指南.md](Scripts/状态灯接入指南.md);显示器动效设计见 [Design/MonitorInputIcon/README.md](Design/MonitorInputIcon/README.md)。
-> 最后更新:2026-11-06(导航卡尺轮:槽14/15 重设计+方向滑移动效;162 测全绿)
+> 最后更新:2026-11-06(页点跟随轮:页面键点阵编码真实页位+辉光滑移;163 测全绿)
 > **M3 队列已全部消费**:Property Inspector(✅ §6.9/§6.10)> 多页面(✅ §6.6)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13)> 多状态图标(✅ §6.15)> 登录自启与睡眠唤醒(✅ §6.16)> 状态灯置前(✅ §6.17)> Stats(✅ §6.18)> icon 偏移与 112 定案(✅ §6.19/§6.20)> 鲸鱼娘动画(✅ §6.21)> 显示器输入源动效(✅ §6.22)。**剩余挂账:官方 HTML 插件逐个视觉适配(time 等插件自身视图不渲染)。**
 
 ---
@@ -425,3 +425,9 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **方向动效**:按压导航键 → 6 帧滑移包络(sin(pπ),出去又回来 =「拨一下」手感),场景横向、页面纵向,方向随 offset 镜像。触发链:KeyPressRouter.handleDeviceAction 四导航案 → 新回调 `onNavTransition(index,kind,offset)` → AppModel 以 NavTileRenderer.transitionFrames + tileFX.play 播放(applyKey 已在 switch 内先跑完,过渡帧不会被清场)。
 - **覆盖面**:保留槽 13/14 强制渲染 + 用户在普通键位绑定的 previousScene/nextScene/previousPage/nextPage 同享此设计;gotoPage/pageIndicator 走既有路径(页码指示键的动态标题不适用卡尺)。
 - **验证**:162 测 3× 全绿零警告(净增 2:静息帧互异 + Kind 识别 + 过渡帧契约);GUI 截图终验:场景/页面两键与整套暗夜仪表语言完全统一。设备端方向滑移待用户物理验收。
+
+### 6.35 页点跟随轮(2026-11-06 凌晨,§6.34 用户反馈修复;163 测全绿)
+- **反馈**:「翻页键上面的 dot 不会跟随变化」——§6.34 的页点滑轨是静态装饰(中点恒亮),不编码真实页位。
+- **修复**:页面键渲染带真实页态——**点数 = 当前场景页数,辉光点 = 当前页**(applyKey 从 config.currentScene.pages.count / currentPageIndex 取)。阅读序 = 页 1 在顶(CG 高 y;初版方向反了,CG y 轴向上与视觉直觉相反,截图对照修正)。轨距随页数自适应收缩;循环翻页跨端时辉光沿锯齿折返滑移,视觉连续。
+- **过渡**:翻页按压 → 辉光点从旧页位沿轨滑移一档至新页位(easeOutCubic 6 帧);fromIndex 在 switch **之前**捕获(switch 后 config 已是新页位,旧位无从得知——回调签名加 fromIndex,nav() 捕获顺序调整)。
+- **验证**:163 测 3× 全绿(净增 1:页点跟随/过渡滑移/单页契约);GUI 截图终验:5 页场景顶点辉光、4 空心点顺列;温色映射同帧佐证(87° 红弧)。
