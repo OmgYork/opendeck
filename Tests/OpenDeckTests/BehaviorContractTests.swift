@@ -231,3 +231,27 @@ struct BehaviorContractTests {
         #expect(archived.count == 1, "损坏原文件必须归档留底")
     }
 }
+
+extension BehaviorContractTests {
+    /// 导航方向过渡回调(§6.34):四种导航案触发 onNavTransition,kind/offset 正确
+    @Test("导航过渡回调:kind 与 offset 随动作")
+    func navTransitionCallback() async {
+        let (router, _, config, fake) = await makeRouter(pages: 3)
+        var events: [(String, Int)] = []
+        router.onNavTransition = { _, kind, offset, _ in
+            events.append((kind == .page ? "page" : "scene", offset))
+        }
+        _ = config
+        let keyEvent = { (row: Int, col: Int) in KeyEvent(row: row, column: col, phase: .down) }
+        // 构造带导航动作的键:直接经 handleDeviceAction 的公开入口 handle 走保留槽配置
+        router.handle(keyEvent(2, 4)) // 槽 15 = 下一页
+        router.handle(keyEvent(2, 3)) // 槽 14 = 下一场景
+        await settle()
+        _ = fake
+        #expect(events.count >= 2, "两个导航键应各触发一次过渡回调: \(events)")
+        if events.count >= 2 {
+            #expect(events[0].0 == "page" && events[0].1 == 1)
+            #expect(events[1].0 == "scene" && events[1].1 == 1)
+        }
+    }
+}

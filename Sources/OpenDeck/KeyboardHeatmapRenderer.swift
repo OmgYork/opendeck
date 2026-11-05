@@ -56,7 +56,6 @@ enum HeatmapGeometry {
 }
 
 enum HeatmapPalette {
-    static let background = "#1B1918"
     static let ink = "#FFFFFF"
     static let pink = "#F7A6AC"
     static let warn = "#F5BA4C"
