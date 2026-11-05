@@ -135,10 +135,12 @@ struct KeyConfig: Codable, Hashable {
 /// 与 Toggle Monitor 快捷指令配合:键面显示当前输入源,按压后播放信号迁移动效。
 enum KeyAnimation: String, Codable, Hashable, CaseIterable {
     case monitorInput
+    case pressPulse
 
     var label: String {
         switch self {
         case .monitorInput: return "显示器输入切换(Mac / PC)"
+        case .pressPulse: return "按压脉冲(闪亮 + 微放大)"
         }
     }
 }

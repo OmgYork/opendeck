@@ -25,6 +25,7 @@ final class KeyPressRouter {
     private let pluginHost: PluginHostModel
     private let heatmap: KeyboardHeatmapAnimator
     private let monitorInput: MonitorInputAnimator
+    private let pressPulse: PressPulseAnimator
     private let brightness: BrightnessCoordinator
     private let sceneRouter: SceneRouter
 
@@ -34,6 +35,7 @@ final class KeyPressRouter {
         pluginHost: PluginHostModel,
         heatmap: KeyboardHeatmapAnimator,
         monitorInput: MonitorInputAnimator,
+        pressPulse: PressPulseAnimator,
         brightness: BrightnessCoordinator,
         sceneRouter: SceneRouter
     ) {
@@ -42,6 +44,7 @@ final class KeyPressRouter {
         self.pluginHost = pluginHost
         self.heatmap = heatmap
         self.monitorInput = monitorInput
+        self.pressPulse = pressPulse
         self.brightness = brightness
         self.sceneRouter = sceneRouter
     }
@@ -97,6 +100,10 @@ final class KeyPressRouter {
         // 确定性输入命令(inputMac/inputPC)把命令目标传给动画器,别把「已在其位」演成失败回退
         if key.animation == .monitorInput {
             monitorInput.handlePress(command: action)
+        }
+        // 按压脉冲:纯视觉反馈,动作照常;在脉冲中连按不重起(会话自然跑完)
+        if key.animation == .pressPulse {
+            pressPulse.handlePress(index: index)
         }
         Task { await ActionRunner.run(action) }
     }

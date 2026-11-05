@@ -116,6 +116,8 @@ final class AppModel {
     let pluginHost = PluginHostModel()
     /// 内建动效键面:显示器输入源(Mac ↔ PC)。全局只有一路输入状态,故单实例。
     let monitorInput = MonitorInputAnimator()
+    /// 通用按压脉冲(§6.32):多键,静息帧 = 常规渲染产物,按压沿闪亮+微放大 0.66s
+    let pressPulse = PressPulseAnimator()
     /// 内建读数键面:键盘热力图(KeyAnalyze)。同样是单实例,只服务当前页那一颗。
     let heatmap = KeyboardHeatmapAnimator()
     /// Stats 瓷贴节拍器(CPU/GPU/温度,槽位随当前页配置对账,可放任意键位)
@@ -141,7 +143,7 @@ final class AppModel {
         sceneRouter = SceneRouter(config: config, device: device)
         keyRouter = KeyPressRouter(
             device: device, config: config, pluginHost: pluginHost,
-            heatmap: heatmap, monitorInput: monitorInput,
+            heatmap: heatmap, monitorInput: monitorInput, pressPulse: pressPulse,
             brightness: brightness, sceneRouter: sceneRouter
         )
         system.onLog = { [weak self] line in
@@ -352,6 +354,10 @@ final class AppModel {
         observeWorkspaceApplications()
 
         pluginHost.hooks.draw = { [weak self] index, image in
+            guard let self else { return }
+            self.setKeyImage(index: index, image: image)
+        }
+        pressPulse.onFrame = { [weak self] index, image in
             guard let self else { return }
             self.setKeyImage(index: index, image: image)
         }
@@ -574,6 +580,7 @@ final class AppModel {
         if case .stat(let kind) = key.action {
             heatmap.detach(ifIndex: index)
             monitorInput.detach(ifIndex: index)
+            pressPulse.detach(ifIndex: index)
             if let image = statTiles.placeholderTile(kind: kind) {
                 setKeyImage(index: index, image: image)
             }
@@ -583,12 +590,14 @@ final class AppModel {
         // 动效键改热力图键时旧 monitorInput 不摘会持续出帧打架(与 stat 分支同款,§6.25 修复①漏了这条)
         if case .keyboardHeatmap = key.action {
             monitorInput.detach(ifIndex: index)
+            pressPulse.detach(ifIndex: index)
             heatmap.attach(index: index, size: StreamDock293S.keySize(column: column))
             return
         }
         heatmap.detach(ifIndex: index)
         // 内建动效键:整帧由动画驱动,跳过常规「底色 + 底图 + 标题」渲染
         if key.animation == .monitorInput {
+            pressPulse.detach(ifIndex: index)
             monitorInput.attach(index: index, size: StreamDock293S.keySize(column: column))
             return
         }
@@ -649,6 +658,14 @@ final class AppModel {
         // 插件实例在则按当前态重渲(多状态动作上屏即显 manifest 默认图,盖过上方瓷砖)
         if case .plugin = key.action {
             pluginHost.redrawInstanceIfPresent(at: index)
+            pressPulse.detach(ifIndex: index) // 插件键帧由插件推,脉冲基帧不适用
+            return
+        }
+        // 按压脉冲键:常规渲染产物即基帧,挂给脉冲动画器(编辑/换页后重挂 = 基帧更新)
+        if key.animation == .pressPulse {
+            pressPulse.attach(index: index, base: image)
+        } else {
+            pressPulse.detach(ifIndex: index)
         }
     }
 

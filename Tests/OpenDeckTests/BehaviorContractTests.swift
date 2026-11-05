@@ -71,6 +71,7 @@ struct BehaviorContractTests {
             pluginHost: PluginHostModel(),
             heatmap: KeyboardHeatmapAnimator(),
             monitorInput: MonitorInputAnimator(),
+            pressPulse: PressPulseAnimator(),
             brightness: brightness,
             sceneRouter: SceneRouter(config: config, device: controller)
         )

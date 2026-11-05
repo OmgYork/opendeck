@@ -163,13 +163,25 @@ struct KeyEditView: View {
                     LabeledContent("颜色") { colorPicker }
                     LabeledContent("图标") { iconRow }
                     LabeledContent("动效") {
-                        Toggle("显示器输入切换", isOn: Binding(
-                            get: { animation == .monitorInput },
-                            set: { animation = $0 ? .monitorInput : nil }
-                        ))
+                        Picker("", selection: Binding(
+                            get: { animation },
+                            set: { animation = $0 }
+                        )) {
+                            Text("无").tag(KeyAnimation?.none)
+                            ForEach([KeyAnimation.monitorInput, .pressPulse], id: \.self) { option in
+                                Text(option.label).tag(KeyAnimation?.some(option))
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
                     }
                     if animation == .monitorInput {
                         Text("键面实时显示当前输入源(Mac / PC),按压时播放信号迁移动效。开启后标题与图标不再叠加。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if animation == .pressPulse {
+                        Text("按下时键面闪亮 + 轻微放大一小段(≈0.7s),静息帧与普通键相同。适配任意动作键。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
