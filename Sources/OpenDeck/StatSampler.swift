@@ -232,65 +232,92 @@ nonisolated final class StatSampler: @unchecked Sendable {
     }
 }
 
-/// 统计瓷贴渲染:112×112 深底 + 顶部标签 + 中央大值,末尾旋转 180°(设备方向;
-/// UI 镜像侧 KeycapView 会转回正立,与设备帧同源)。
-/// 文字用 CoreText 直绘(AppKit NSAttributedString.draw 在裸 CGContext 上坐标错乱,实测)
+/// 统计瓷贴渲染 v2(§6.33「暗夜仪表」):深底玻璃 + 270° 弧形仪表 + 白色大值带同色辉光
+/// + 左上小标签;温度弧色随值绿→琥珀→红连续映射。fraction(0..1) 驱动弧进度,
+/// sweepFrames 用旧→新 fraction 生成扫摆过渡帧(easeOutCubic)。文字 CoreText 直绘(实测)。
 enum StatTileRenderer {
-    static func tile(kind: StatKind, value: String) -> CGImage? {
-        let side = StreamDock293S.keySize(column: 0)
-        // 版式按 100→112 等比缩放,保持原设计比例
-        let s = CGFloat(side) / 100
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
-                                  bytesPerRow: side * 4, space: space,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        let (bgTop, bgBottom, accent): (String, String, String) = {
-            switch kind {
-            case .gpu: return ("#81A1C1", "#5E81AC", "#ECEFF4")
-            case .cpu: return ("#A3BE8C", "#8FBCBB", "#2E3440")
-            case .temp: return ("#D08770", "#BF616A", "#2E3440")
-            }
-        }()
-        // 深色底 + 顶部微提亮(与键帽拟真语言一致)
-        ctx.setFillColor(HexCGColor.opaque(bgBottom) ?? CGColor(gray: 0.18, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
-        ctx.setFillColor(HexCGColor.opaque(bgTop)?.copy(alpha: 0.22) ?? CGColor(gray: 0.25, alpha: 0.2))
-        ctx.fill(CGRect(x: 0, y: CGFloat(side) - 34 * s, width: CGFloat(side), height: 34 * s))
+    /// 值 → 弧进度(gpu/cpu = 百分比/100;温度映射 35–90° 区间)
+    static func fraction(kind: StatKind, celsiusOrPercent: Double) -> Double {
+        switch kind {
+        case .gpu, .cpu: return min(max(celsiusOrPercent / 100, 0), 1)
+        case .temp: return min(max((celsiusOrPercent - 35) / (90 - 35), 0), 1)
+        }
+    }
 
-        let accentColor = HexCGColor.opaque(accent) ?? CGColor(gray: 1, alpha: 1)
-        // 顶部标签
-        let labelFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 13 * s, weight: .semibold).fontName as CFString, 13 * s, nil)
-        centered(NSAttributedString(string: kind.label, attributes: [
-            .font: labelFont, .foregroundColor: accentColor,
-        ]), in: CGRect(x: 0, y: CGFloat(side) - 30 * s, width: CGFloat(side), height: 26 * s), ctx: ctx)
-        // 中央大值
-        let valueFont = CTFontCreateWithName(NSFont.systemFont(ofSize: 30 * s, weight: .bold).fontName as CFString, (value.count > 3 ? 24 : 30) * s, nil)
-        centered(NSAttributedString(string: value, attributes: [
-            .font: valueFont, .foregroundColor: accentColor,
-        ]), in: CGRect(x: 0, y: 18 * s, width: CGFloat(side), height: 52 * s), ctx: ctx)
+    static func tile(kind: StatKind, value: String, fraction: Double) -> CGImage? {
+        let side = StreamDock293S.keySize(column: 0)
+        let s = CGFloat(side) / 112
+        guard let ctx = DarkTileCanvas.beginCanvas(side: side) else { return nil }
+        let celsius: Double? = kind == .temp ? Double(value.replacingOccurrences(of: "°", with: "")) : nil
+        let accent = DarkTileStyle.accent(for: kind, tempCelsius: celsius)
+
+        // 左上标签(左对齐,弱辉光)
+        let labelRect = CGRect(x: 12 * s, y: CGFloat(side) - 32 * s, width: 60 * s, height: 18 * s)
+        DarkTileCanvas.drawText(kind.label, size: 13 * s, weight: .semibold,
+                                color: accent.copy(alpha: 0.9)!,
+                                rect: labelRect,
+                                ctx: ctx, align: .left)
+
+        // 270° 弧:开口朝下,起点左下 -225°,终点右上 45°(顺时针 270°)
+        let center = CGPoint(x: 56 * s, y: 52 * s)
+        let radius = 31 * s
+        let startAngle = Angle(-225), endAngle = Angle(45)
+        ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: DarkTileStyle.trackAlpha))
+        ctx.setLineWidth(7 * s)
+        ctx.setLineCap(.round)
+        ctx.addArc(center: center, radius: radius,
+                   startAngle: .pi * (startAngle.degrees / 180),
+                   endAngle: .pi * (endAngle.degrees / 180), clockwise: false)
+        ctx.strokePath()
+        // 进度弧(辉光)
+        let clamped = min(max(fraction, 0.001), 1)
+        let sweep = (endAngle.degrees - startAngle.degrees) * clamped
+        ctx.setStrokeColor(accent)
+        ctx.setShadow(offset: .zero, blur: 6, color: accent)
+        ctx.addArc(center: center, radius: radius,
+                   startAngle: .pi * (startAngle.degrees / 180),
+                   endAngle: .pi * ((startAngle.degrees + sweep) / 180), clockwise: false)
+        ctx.strokePath()
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+
+        // 中央大值(白 + accent 辉光);字数多自动缩
+        let valueSize: CGFloat = (value.count > 3 ? 21 : 26) * s
+        DarkTileCanvas.drawText(value, size: valueSize, weight: .bold,
+                                color: DarkTileStyle.valueWhite,
+                                rect: CGRect(x: 0, y: center.y - 16 * s, width: CGFloat(side), height: 32 * s),
+                                ctx: ctx)
 
         guard let upright = ctx.makeImage() else { return nil }
-        // 设备 180° 显示:预旋转输出(UI 镜像侧 KeycapView 会转回正立)。
-        // rotate 绕画布原点(左下角)旋转,必须先 translate 到对角再画,否则内容落到负坐标区只剩 1/4(实测)
-        guard let rotated = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
-                                      bytesPerRow: side * 4, space: space,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        rotated.translateBy(x: CGFloat(side), y: CGFloat(side))
-        rotated.rotate(by: .pi)
-        rotated.draw(upright, in: CGRect(x: 0, y: 0, width: CGFloat(side), height: CGFloat(side)))
-        return rotated.makeImage()
+        return DarkTileCanvas.finishRotated(upright, side: side, space: ctx.colorSpace)
     }
 
-    /// CoreText 居中绘制(垂直以行光学中线对齐)
-    private static func centered(_ text: NSAttributedString, in rect: CGRect, ctx: CGContext) {
-        let line = CTLineCreateWithAttributedString(text)
-        let width = CTLineGetTypographicBounds(line, nil, nil, nil)
-        let bounds = CTLineGetBoundsWithOptions(line, .useOpticalBounds)
-        ctx.textPosition = CGPoint(x: rect.midX - CGFloat(width) / 2,
-                                   y: rect.midY - bounds.midY + rect.origin.y)
-        CTLineDraw(line, ctx)
+    /// 旧签名兼容(占位帧/调色盘):fraction 未知按 0 画
+    static func tile(kind: StatKind, value: String) -> CGImage? {
+        tile(kind: kind, value: value, fraction: 0)
     }
 
+    /// 数值变化扫摆帧:from→new easeOutCubic 6 帧(不含旧帧,首帧即 ~16% 进度处)
+    static func sweepFrames(kind: StatKind, fromFraction: Double, toFraction: Double,
+                            value: String) -> [CGImage] {
+        let count = 6
+        var frames: [CGImage] = []
+        for step in 1...count {
+            let p = easeOutCubic(Double(step) / Double(count))
+            let fraction = fromFraction + (toFraction - fromFraction) * p
+            if let image = tile(kind: kind, value: value, fraction: fraction) {
+                frames.append(image)
+            }
+        }
+        return frames
+    }
+
+    static func easeOutCubic(_ p: Double) -> Double {
+        1 - pow(1 - min(max(p, 0), 1), 3)
+    }
+}
+
+/// 角度小助手(弧计算可读性)
+struct Angle {
+    let degrees: Double
+    init(_ degrees: Double) { self.degrees = degrees }
 }

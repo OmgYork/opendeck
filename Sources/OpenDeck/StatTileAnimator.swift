@@ -18,6 +18,17 @@ final class StatTileAnimator {
     private var slots: [(index: Int, kind: StatKind)] = []
     private let sampler = StatSampler()
     private var timer: Timer?
+    /// 过渡帧播放器(§6.33):值变化的弧线扫摆。onFrame 转发给自身回调——
+    /// 不接线的话 sweep 帧与终帧全部发往 nil,瓷贴永远停在 applyKey 的占位帧(踩过)
+    private let fx = TileFXPlayer()
+
+    init() {
+        fx.onFrame = { [weak self] index, image in
+            self?.onFrame?(index, image)
+        }
+    }
+    /// 上次渲染的值文本与弧分率(键位键控):变化检测 + 扫摆起点
+    private var lastValues: [Int: (text: String, fraction: Double)] = [:]
 
     /// 采样代数:后台采样完成时若已有更新一轮在采,旧结果丢弃(乱序覆盖会闪旧值)
     private var generation = 0
@@ -42,7 +53,8 @@ final class StatTileAnimator {
     func setSlots(_ slots: [(index: Int, kind: StatKind)]) {
         guard Self.slotsListChanged(self.slots, slots) else { return }
         self.slots = slots
-        lastValueTexts.removeAll()
+        lastValues.removeAll()
+        fx.stopAll()
         if slots.isEmpty {
             timer?.invalidate()
             timer = nil
@@ -111,11 +123,29 @@ final class StatTileAnimator {
         lastSample = sample
         for (index, kind) in slots {
             let text = valueText(kind)
-            guard lastValueTexts[index] != text else { continue }
-            guard let image = StatTileRenderer.tile(kind: kind, value: text) else { continue }
-            lastValueTexts[index] = text
-            onFrame?(index, image)
+            guard lastValues[index]?.text != text else { continue } // 值未变零成本(既有守卫)
+            let number = numericValue(text)
+            let fraction = StatTileRenderer.fraction(kind: kind, celsiusOrPercent: number ?? 0)
+            guard let image = StatTileRenderer.tile(kind: kind, value: text, fraction: fraction) else { continue }
+            let previous = lastValues[index]
+            lastValues[index] = (text, fraction)
+            // 扫摆:首帧采样从 0 填满(占位 "--" 也是 0 分率,衔接自然);等分率直接换帧
+            let fromFraction = previous?.fraction ?? 0
+            if fromFraction != fraction {
+                let frames = StatTileRenderer.sweepFrames(kind: kind, fromFraction: fromFraction,
+                                                          toFraction: fraction, value: text)
+                fx.play(index: index, frames: frames, final: image)
+            } else {
+                onFrame?(index, image)
+            }
         }
+    }
+
+    private func numericValue(_ text: String) -> Double? {
+        let cleaned = text
+            .replacingOccurrences(of: "%", with: "")
+            .replacingOccurrences(of: "°", with: "")
+        return Double(cleaned)
     }
 
     private func valueText(_ kind: StatKind) -> String {

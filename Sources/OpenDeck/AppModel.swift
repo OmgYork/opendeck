@@ -118,6 +118,10 @@ final class AppModel {
     let monitorInput = MonitorInputAnimator()
     /// 通用按压脉冲(§6.32):多键,静息帧 = 常规渲染产物,按压沿闪亮+微放大 0.66s
     let pressPulse = PressPulseAnimator()
+    /// 瓷贴过渡帧(§6.33):睡眠锁扣开合
+    let tileFX = TileFXPlayer()
+    /// 睡眠锁上次渲染的视觉态(翻转 → 播锁扣过渡)
+    private var lastSleepGuardVisual: SleepGuardTileRenderer.VisualState?
     /// 内建读数键面:键盘热力图(KeyAnalyze)。同样是单实例,只服务当前页那一颗。
     let heatmap = KeyboardHeatmapAnimator()
     /// Stats 瓷贴节拍器(CPU/GPU/温度,槽位随当前页配置对账,可放任意键位)
@@ -361,6 +365,10 @@ final class AppModel {
             guard let self else { return }
             self.setKeyImage(index: index, image: image)
         }
+        tileFX.onFrame = { [weak self] index, image in
+            guard let self else { return }
+            self.setKeyImage(index: index, image: image)
+        }
         pluginHost.hooks.backgroundColor = { [weak self] index in
             self?.config.keyConfig(at: index).backgroundColorHex ?? "#3B4252"
         }
@@ -571,6 +579,7 @@ final class AppModel {
         let column = index % StreamDock293S.columns
         // 固定导航键:无视配置,强制导航动作(配置里这两格的内容不渲染、不建实例)
         let key = Self.resolvedKeyConfig(at: index, config: config)
+        tileFX.stop(ifIndex: index) // 键变化清过渡场(睡眠锁/统计的过渡只属于自己的会话)
         pluginHost.syncKey(at: index, action: key.action)
         // 统计槽位对账:当前页的 .stat 键清单喂给节拍器(编辑/换页/切场景都会走到这里)
         syncStatSlots()
@@ -602,10 +611,21 @@ final class AppModel {
             return
         }
         monitorInput.detach(ifIndex: index) // 同页其它键/换页后的旧动效键
+        // 媒体键:暗夜仪表专用渲染(§6.33,忽略底色/标题配置);按压脉冲基帧 = 该渲染产物
+        if case .mediaKey(let mediaKind) = key.action,
+           let image = MediaTileRenderer.image(kind: mediaKind) {
+            setKeyImage(index: index, image: image)
+            if key.animation == .pressPulse {
+                pressPulse.attach(index: index, base: image)
+            } else {
+                pressPulse.detach(ifIndex: index)
+            }
+            return
+        }
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新
         let title: String?
         let iconPath: String?
-        var backgroundHex = key.backgroundColorHex
+        let backgroundHex = key.backgroundColorHex
         if case .pageIndicator = key.action {
             if let info = config.currentPagePositionInScene {
                 title = "\(info.position + 1)/\(info.count)"
@@ -614,26 +634,22 @@ final class AppModel {
             }
             iconPath = nil
         } else if case .sleepGuard = key.action {
-            // 合盖休眠锁:键面即状态。绿=已禁止合盖休眠,灰=正常休眠,
-            // 橙=未授权(sudoers 规则缺失,持续提示),蓝灰=尚未读到
-            if sleepGuardUnauthorized {
-                title = "睡眠锁 未授权"
-                backgroundHex = "#D08770"
-                iconPath = nil
-            } else {
-                switch sleepGuardEnabled {
-                case true:
-                    title = "睡眠锁 ON"
-                    backgroundHex = "#2E7D32"
-                case false:
-                    title = "睡眠锁 OFF"
-                    backgroundHex = "#3B4252"
-                case nil:
-                    title = "睡眠锁 ⋯"
-                    backgroundHex = "#4C566A"
+            // 暗夜仪表(§6.33):专用渲染,状态即视觉(忽略底色/标题配置)。
+            // 翻转时播锁扣开合过渡(unknown/unauthorized 涉及的切换直接换帧)
+            let visual = currentSleepGuardVisual()
+            if let image = SleepGuardTileRenderer.image(state: visual) {
+                let previous = lastSleepGuardVisual
+                lastSleepGuardVisual = visual
+                setKeyImage(index: index, image: image)
+                if let previous, previous != visual, visual != .unauthorized, previous != .unauthorized,
+                   let frames = SleepGuardTileRenderer.transitionFrames(from: previous, to: visual) {
+                    tileFX.play(index: index, frames: frames, final: image)
                 }
-                iconPath = nil
+                return
             }
+            // 渲染失败回落常规路径(理论上不可达)
+            title = nil
+            iconPath = nil
         } else {
             title = key.title.isEmpty ? nil : key.title
             iconPath = key.iconPath
@@ -694,8 +710,24 @@ final class AppModel {
         if case .keyboardHeatmap = key.action {
             return heatmap.previewImage(size: StreamDock293S.keySize(column: 0))
         }
+        if case .sleepGuard = key.action {
+            return SleepGuardTileRenderer.image(state: currentSleepGuardVisual())
+        }
+        if case .mediaKey(let kind) = key.action {
+            return MediaTileRenderer.image(kind: kind)
+        }
         guard key.animation == .monitorInput else { return nil }
         return monitorInput.previewImage(size: StreamDock293S.keySize(column: 0))
+    }
+
+    /// 睡眠锁当前视觉态(nil = 启动后尚未读到,显示 …)
+    private func currentSleepGuardVisual() -> SleepGuardTileRenderer.VisualState {
+        if sleepGuardUnauthorized { return .unauthorized }
+        switch sleepGuardEnabled {
+        case true: return .on
+        case false: return .off
+        case nil: return .unknown
+        }
     }
 
     /// 键面图像统一入口:设备写一份、对应单键镜像槽存一份(网格 KeycapView 据此与设备同源)
