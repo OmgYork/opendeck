@@ -89,23 +89,19 @@ enum HeatmapRenderer {
         ctx.saveGState()
         if scene.shake != 0 { ctx.translateBy(x: scene.shake, y: 0) }
 
-        if let background = HexCGColor.opaque(HeatmapPalette.background) {
-            ctx.setFillColor(background)
-            ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
-        }
-        if let warm = HexCGColor.opaque(HeatmapPalette.warn) {
-            let colors = [warm.copy(alpha: 0.10) ?? warm, warm.copy(alpha: 0) ?? warm] as CFArray
-            if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
-                                  colors: colors, locations: [0, 1]) {
-                ctx.drawRadialGradient(g,
-                                       startCenter: CGPoint(x: 20, y: flip(8)), startRadius: 2,
-                                       endCenter: CGPoint(x: 20, y: flip(8)), endRadius: 72,
-                                       options: [])
+        // 暗夜仪表统一底(§6.33 语言):冷调渐变 + 玻璃内衬——取代暖棕+暖黄底噪
+        if let space = CGColorSpace(name: CGColorSpace.sRGB) {
+            let colors = [DarkTileStyle.bgTop, DarkTileStyle.bgBottom] as CFArray
+            if let g = CGGradient(colorsSpace: space, colors: colors, locations: [0, 1]) {
+                ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 0), end: CGPoint(x: 0, y: S), options: [])
             }
-            // 全状态 6% 暖黄底噪
-            ctx.setFillColor(warm.copy(alpha: 0.06 * scene.wash) ?? warm)
-            ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
         }
+        let inset: CGFloat = 5, glassRadius: CGFloat = 15
+        let glassRect = CGRect(x: inset, y: inset, width: S - inset * 2, height: S - inset * 2)
+        ctx.setStrokeColor(DarkTileStyle.glassStroke)
+        ctx.setLineWidth(1.5)
+        ctx.addPath(CGPath(roundedRect: glassRect, cornerWidth: glassRadius, cornerHeight: glassRadius, transform: nil))
+        ctx.strokePath()
         if let white = HexCGColor.opaque("#FFFFFF") {
             let colors = [white.copy(alpha: 0.055) ?? white, white.copy(alpha: 0) ?? white] as CFArray
             if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
@@ -183,8 +179,7 @@ enum HeatmapRenderer {
 
     private static func drawPrompt(ctx: CGContext, text: String, alpha: CGFloat,
                                    size: CGFloat, color: CGColor?, flip: (CGFloat) -> CGFloat) {
-        let font = CTFontCreateWithName(NSFont.systemFont(ofSize: size, weight: .semibold).fontName as CFString,
-                                        size, nil)
+        let font = DarkTileCanvas.roundedFont(size: size, weight: .semibold)
         guard let ink = color ?? HexCGColor.opaque(HeatmapPalette.warn) else { return }
         let attr = NSAttributedString(string: text, attributes: [
             .font: font,
@@ -211,8 +206,7 @@ enum HeatmapRenderer {
         let baseTop: CGFloat = 70
         let baseY = flip(baseTop)
 
-        let font = CTFontCreateWithName(NSFont.systemFont(ofSize: size, weight: .semibold).fontName as CFString,
-                                        size, nil)
+        let font = DarkTileCanvas.roundedFont(size: size, weight: .semibold)
         func width(of text: String) -> CGFloat {
             let attr = NSAttributedString(string: text, attributes: [.font: font])
             return CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(attr), nil, nil, nil))
