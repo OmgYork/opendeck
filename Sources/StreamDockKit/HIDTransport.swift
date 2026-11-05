@@ -33,6 +33,8 @@ final class HIDTransport: @unchecked Sendable, DeviceTransport {
     private var heartbeatTimer: DispatchSourceTimer?
     private var started = false
 
+    /// 四个回调属性的赋值契约:必须在 start() 之前完成(DeviceController 于 init 注线,满足),
+    /// 且此后不得改写——它们无锁直读,运行中重设即数据竞争。运行期需要换行为时走 setWriteTrace 同款锁内赋值
     var onReport: (@Sendable ([UInt8]) -> Void)?
     var onDeviceAttached: (@Sendable () -> Void)?
     var onDeviceDetached: (@Sendable () -> Void)?
@@ -251,8 +253,9 @@ final class HIDTransport: @unchecked Sendable, DeviceTransport {
                 self.onLog?("心跳 tick:设备句柄为空,跳过")
                 return
             }
+            // 正常 tick 不出日志:7s 一条会把运行日志环(50 条)刷成纯心跳噪声,
+            // 心跳断链的可见症状是「设备重启黑屏/校准日志」,异常分支(句柄空)仍保留
             self.performWrite(StreamDock293S.commandPacket(StreamDock293S.heartbeatCommand))
-            self.onLog?("心跳 tick:CONNECT 已入队")
         }
         timer.resume()
         lock.lock()

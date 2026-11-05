@@ -244,3 +244,34 @@ struct LandingPolicyTests {
         }
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension FunctionPaletteTests {
+    /// 空首页槽整键复刻 = 把目标键静默清空:政策层必须拒绝(磁贴侧同步禁拖)
+    @Test("landingConfig 拒绝空镜像源:slot: 指向空槽返回 nil")
+    @MainActor
+    func slotPayloadRejectsEmptyMirrorSource() {
+        let empty = KeyConfig()
+        #expect(AppModel.isEmptyMirrorKey(empty), "全空配置应判为空镜像源")
+        let titled = KeyConfig(title: "状态灯", backgroundColorHex: "#BF616A")
+        #expect(!AppModel.isEmptyMirrorKey(titled))
+
+        let result = AppModel.landingConfig(
+            payload: "slot:2", targetIndex: 5,
+            current: KeyConfig(title: "会被清空的键"),
+            homeKey: { _ in empty },
+            draft: { _ in nil }
+        )
+        #expect(result == nil, "空槽复刻必须被拒绝,实际: \(result as Any)")
+
+        // 非空源照常整键复刻(既有语义不回归)
+        let ok = AppModel.landingConfig(
+            payload: "slot:2", targetIndex: 5,
+            current: KeyConfig(title: "目标"),
+            homeKey: { _ in titled },
+            draft: { _ in nil }
+        )
+        #expect(ok?.title == "状态灯")
+    }
+}

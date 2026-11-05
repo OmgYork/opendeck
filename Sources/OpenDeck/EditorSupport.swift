@@ -112,7 +112,12 @@ enum AppIconCache {
             ?? appPath.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
             ?? "app"
         let fileURL = dir.appendingPathComponent("\(key).png")
-        if fileManager.fileExists(atPath: fileURL.path) { return fileURL.path }
+        if let cached = NSImage(contentsOfFile: fileURL.path) {
+            // 读侧解码校验:半截 PNG(写一半崩溃/断电的旧缓存)不再粘滞——
+            // 解码失败即走重生成,iconPath 已进 config 的坏图自愈
+            _ = cached
+            return fileURL.path
+        }
 
         let side: CGFloat = 256
         let icon = NSWorkspace.shared.icon(forFile: appPath)
@@ -129,7 +134,8 @@ enum AppIconCache {
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else { return nil }
         try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        do { try png.write(to: fileURL) } catch { return nil }
+        // .atomic:写一半崩溃不留半截 PNG(非原子写 + 只判 fileExists 的旧组合会让坏缓存永久粘滞)
+        do { try png.write(to: fileURL, options: .atomic) } catch { return nil }
         return fileURL.path
     }
 }

@@ -43,12 +43,17 @@ public final class PluginServer: @unchecked Sendable {
     private var listenDescriptor: Int32 = -1
     private var readSource: DispatchSourceRead?
     private var connections: [UUID: Connection] = [:]
+    /// EMFILE/ENFILE 冷却标志:读源挂起期间为 true,恢复时置回(stop 前须 resume,否则挂起态 cancel 卡住 fd)
+    private var acceptThrottled = false
     private(set) public var port: UInt16 = 0
 
     /// 单连接缓冲上限:正常 setImage 帧 ~22KB,32MB 足够宽裕;对端喂超大帧头、
     /// 无 FIN 续帧或拒收时到顶即熔断断连(插件会被 respawn),防缓冲无界。
     /// 与 inbox 压缩互补:压缩治慢性增长,熔断兜异常对端。
     private static let bufferLimitBytes = 32 * 1024 * 1024
+    /// 握手前 header 专用上限:HTTP 升级头只有几百字节,迟迟不来 `\r\n\r\n` 的连接
+    /// 到顶即断(否则 inbox 永远走不到握手后的 32MB 检查,可无界增长)
+    private static let handshakeHeaderLimitBytes = 64 * 1024
 
     public init() {}
 
@@ -61,6 +66,11 @@ public final class PluginServer: @unchecked Sendable {
     public func stop() {
         queue.async { [weak self] in
             guard let self else { return }
+            // EMFILE 冷却中的挂起必须先配平 resume,cancel handler 才会执行(fd 得以关闭)
+            if self.acceptThrottled {
+                self.acceptThrottled = false
+                self.readSource?.resume()
+            }
             self.readSource?.cancel()
             self.readSource = nil
             for connection in self.connections.values {
@@ -163,13 +173,32 @@ public final class PluginServer: @unchecked Sendable {
                 accept(listenDescriptor, $0, &length)
             }
         }
-        guard descriptor >= 0 else { return } // EAGAIN = 没了
+        guard descriptor >= 0 else {
+            // fd 耗尽(EMFILE/ENFILE)时读源水平触发会立刻再进 accept,形成热循环空转;
+            // 挂起读源 1s 给对端时间关闭,期间其余串行队列任务照常
+            if (errno == EMFILE || errno == ENFILE), !acceptThrottled {
+                serverLog.error("server: accept fd 耗尽 errno=\(errno),读源挂起 1s")
+                acceptThrottled = true
+                readSource?.suspend()
+                queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    guard let self, self.acceptThrottled else { return }
+                    self.acceptThrottled = false
+                    self.readSource?.resume()
+                }
+            }
+            return // EAGAIN = 没了
+        }
 
         var nodelay: Int32 = 1
         setsockopt(descriptor, Int32(IPPROTO_TCP), TCP_NODELAY, &nodelay, socklen_t(MemoryLayout<Int32>.size))
         // 同监听端:已接受连接也要关 SIGPIPE(webview 重载/客户端断连后的写路径)
         var nosigpipe: Int32 = 1
         setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+        // 已接受 fd 必须显式设非阻塞:BSD 语义 accept 不继承监听端的 O_NONBLOCK,阻塞式
+        // socket 上对端停止读时 write 会直接挂死在串行队列(而非返回 EAGAIN 走写就绪源),
+        // 新连接/其他插件收发/stop() 全部排队卡死
+        let acceptedFlags = fcntl(descriptor, F_GETFL, 0)
+        _ = fcntl(descriptor, F_SETFL, acceptedFlags | O_NONBLOCK)
 
         let connection = Connection(id: UUID(), fileDescriptor: descriptor)
         connections[connection.id] = connection
@@ -208,7 +237,14 @@ public final class PluginServer: @unchecked Sendable {
     private func drainInbox(_ connection: Connection) {
         if !connection.isHandshaken {
             completeHandshakeIfNeeded(connection)
-            if !connection.isHandshaken { return } // 升级请求未收全
+            if !connection.isHandshaken {
+                // 握手前也要熔断:header 永远不来齐的连接在下方 32MB 检查之前就能吃满内存
+                if connection.inbox.count > Self.handshakeHeaderLimitBytes {
+                    serverLog.error("server: 握手前 inbox 超限 \(connection.inbox.count)B,熔断 fd=\(connection.fileDescriptor)")
+                    finish(connection)
+                }
+                return
+            }
             serverLog.info("server: 握手完成 fd=\(connection.fileDescriptor)")
         }
         while true {
@@ -376,6 +412,8 @@ public final class PluginServer: @unchecked Sendable {
             }
             if written > 0 {
                 connection.outbox.removeFirst(written)
+            } else if written < 0, errno == EINTR {
+                continue // 信号中断:同读路径语义,原样重试,不算对端故障
             } else if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
                 // 写缓冲满:挂写就绪源排空——隐藏的 webview 不产生读事件,靠读事件重试会永久滞留
                 armWriteSource(connection)

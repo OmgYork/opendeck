@@ -125,7 +125,8 @@ final class KeyboardHeatmapAnimator {
             app.terminate()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            guard let self else { return }
+            // detach 后不再拉起另一支 app 到前台(换页/摘键的 2.5s 窗口内不应有跨模块副作用)
+            guard let self, self.activeIndex != nil else { return }
             HeatmapProbe.openApp()
             self.startRetryTimer()
             self.renderStatic()
@@ -447,12 +448,22 @@ final class KeyboardHeatmapAnimator {
         onFrame?(image)
     }
 
-    /// 编辑器预览：当前相位的静息帧
+    /// 编辑器预览：当前相位的静息帧。
+    /// (phase, size) 键控单槽缓存:此路径被拉进 SwiftUI 每次求值(网格 15 键 × 每次物理
+    /// 按压/滑杆拖动都会重估),无缓存 = 每次全图 CoreGraphics+CoreText 重渲(镜像
+    /// MonitorInputAnimator.previewCache 的做法)
+    private var previewCache: (phase: Phase, size: Int, image: CGImage)?
+
     func previewImage(size: Int) -> CGImage? {
+        if let cache = previewCache, cache.phase == phase, cache.size == size {
+            return cache.image
+        }
         var scene = phaseLook()
         if phase == .retrying { scene.lampIntensity = 0.95 }
         if phase == .recovered { scene.lampIntensity = 0.95 }
-        return HeatmapRenderer.image(scene: scene, side: size)
+        guard let image = HeatmapRenderer.image(scene: scene, side: size) else { return nil }
+        previewCache = (phase, size, image)
+        return image
     }
 
     private func easeOut(_ p: CGFloat) -> CGFloat {

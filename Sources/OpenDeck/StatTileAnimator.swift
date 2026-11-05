@@ -21,17 +21,18 @@ final class StatTileAnimator {
 
     /// 采样代数:后台采样完成时若已有更新一轮在采,旧结果丢弃(乱序覆盖会闪旧值)
     private var generation = 0
+    /// 在飞标志:重叠采样只是重复 IO(SMC/注册表查询),单飞后完成时补一轮挂起的立即请求
+    private var inFlight = false
+    private var pendingRefresh = false
+    /// 上帧值文本(按 index 键控):温度常分钟级不变,值未变的重渲+JPEG+HID 是纯浪费。
+    /// setSlots 清单变化时整表作废(同键换指标 GPU→CPU 时文本可能相同,不能只比文本)
+    private var lastValueTexts: [Int: String] = [:]
 
-    /// 启动周期采样(幂等)。槽位清单随后由 setSlots 按当前页配置对账。
+    /// 启动周期采样(幂等)。定时器实际随槽位清单启停(setSlots 管理):
+    /// 零统计键时不空转(0.5 次/s 的定时器唤醒,原则:零件在盘上不通电)
     func start() {
-        guard timer == nil else { return }
-        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
-        }
-        // 趋势显示不需要精确节拍,允许系统合并定时器唤醒省电(与另两个 animator 一致)
-        timer.tolerance = 0.2
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        guard timer == nil, !slots.isEmpty else { return }
+        ensureTimer()
         refresh() // 立即采一轮,首帧不等待
     }
 
@@ -41,7 +42,14 @@ final class StatTileAnimator {
     func setSlots(_ slots: [(index: Int, kind: StatKind)]) {
         guard Self.slotsListChanged(self.slots, slots) else { return }
         self.slots = slots
-        refresh()
+        lastValueTexts.removeAll()
+        if slots.isEmpty {
+            timer?.invalidate()
+            timer = nil
+        } else {
+            ensureTimer()
+            refresh()
+        }
     }
 
     /// 清单是否变化(index 与 kind 都要比;供对账守卫与单测共用)
@@ -60,18 +68,40 @@ final class StatTileAnimator {
 
     // MARK: 私有
 
+    private func ensureTimer() {
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        // 趋势显示不需要精确节拍,允许系统合并定时器唤醒省电(与另两个 animator 一致)
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
     /// 采样是 IOKit/注册表 IO(SMC 枚举首次可达百毫秒级),后台执行
     private func refresh() {
-        generation += 1
-        // 磁贴未放置 = 不实际运行:当前页(乃至全部页)没有统计键就不采样,
-        // 定时器空转无害,IO 只在真的有键要看时才发生(原则:零件在盘上不通电)
         guard !slots.isEmpty else { return }
-        let generation = self.generation
+        if inFlight {
+            // 磁贴未放置 = 不实际运行;在飞未完 = 排队补一轮而非重叠采样
+            pendingRefresh = true
+            return
+        }
+        inFlight = true
+        let generation = self.generation + 1
+        self.generation = generation
         let sampler = sampler
         Task.detached(priority: .utility) { [weak self] in
             let sample = sampler.sample()
             await MainActor.run { [weak self] in
-                guard let self, self.generation == generation else { return }
+                guard let self else { return }
+                self.inFlight = false
+                // 先补挂起请求再应用结果:pending 的补采样会把更新槽位清单一起覆盖
+                if self.pendingRefresh {
+                    self.pendingRefresh = false
+                    self.refresh()
+                }
+                guard self.generation == generation else { return }
                 self.apply(sample)
             }
         }
@@ -80,9 +110,11 @@ final class StatTileAnimator {
     private func apply(_ sample: StatSample) {
         lastSample = sample
         for (index, kind) in slots {
-            if let image = StatTileRenderer.tile(kind: kind, value: valueText(kind)) {
-                onFrame?(index, image)
-            }
+            let text = valueText(kind)
+            guard lastValueTexts[index] != text else { continue }
+            guard let image = StatTileRenderer.tile(kind: kind, value: text) else { continue }
+            lastValueTexts[index] = text
+            onFrame?(index, image)
         }
     }
 

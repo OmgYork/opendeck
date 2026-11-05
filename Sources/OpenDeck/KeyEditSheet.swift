@@ -82,7 +82,7 @@ struct KeyEditView: View {
         var pluginActionUUID = ""
         var draftContextID = ""
         var monitorCommand = MonitorCommand.brightnessUp
-        var statKind = StatKind.gpu
+        let statKind = StatKind.gpu
         switch key.action {
         case .openApp(let path): kind = .openApp; appPath = path
         case .openURL(let url): kind = .openURL; urlString = url

@@ -22,7 +22,16 @@ public enum PluginImageDecoder {
         guard let data = Data(base64Encoded: payload, options: [.ignoreUnknownCharacters]),
               let source = CGImageSourceCreateWithData(data as CFData, nil)
         else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        // 位图按声明尺寸解码:插件可推 20000×20000 的 PNG 头,全量解码 ≈1.6GB 位图。
+        // Thumbnail API 把解码上限钉在 maxPixelSize(4× 键面,合成裁剪绰绰有余),
+        // 输出位图 ≤448²×4B;更小的图按原尺寸返回(不放大,合成侧 aspect-fill 照常)
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: false,
+            kCGImageSourceThumbnailMaxPixelSize: pixelSize * 4,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     /// SVG 解码:体载两型——percent-encoded(utf8 文本)或 base64。NSImage 交 CoreSVG

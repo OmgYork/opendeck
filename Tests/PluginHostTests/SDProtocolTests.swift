@@ -164,3 +164,18 @@ struct SDProtocolTests {
         #expect(text == #"{"event":"systemDidWakeUp"}"#)
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension SDProtocolTests {
+    /// NSNumber 精确转换:分数/超范围值不收编成 int(旧截断语义 1.5→1、1e20→饱和都属错误数据)
+    @Test("JSONValue 数值边界:小数与超范围归 double,整值归 int")
+    func jsonValueNumberBoundaries() {
+        #expect(JSONValue(any: NSNumber(value: 1.5)) == JSONValue.double(1.5))
+        #expect(JSONValue(any: NSNumber(value: 1e20)) == JSONValue.double(1e20))
+        #expect(JSONValue(any: NSNumber(value: 1.0)) == JSONValue.int(1))
+        let bigInt = Int64(1) << 62
+        #expect(JSONValue(any: NSNumber(value: bigInt)) == JSONValue.int(Int(bigInt)))
+        #expect(JSONValue(any: NSNumber(value: true)) == JSONValue.bool(true))
+    }
+}

@@ -115,9 +115,10 @@ extension JSONValue {
 }
 
 private extension NSNumber {
-    /// 整数值才返回 Int(1.0 视为 1,1.5 返回 nil)
+    /// 整数值才返回 Int(1.0 视为 1,1.5 / 超 Int 范围值返回 nil)。
+    /// 用 Int(exactly:) 而非 Int(NSNumber):后者是已弃用的截断语义(1.5→1、1e20→饱和),
+    /// 插件消息里的任何小数/大数都会被错误收编成 int;exactly 版不可表示即 nil
     var exactlyAsIntIfIntegral: Int? {
-        guard Double(self) == Double(Int(self)) else { return nil }
-        return Int(self)
+        Int(exactly: self)
     }
 }

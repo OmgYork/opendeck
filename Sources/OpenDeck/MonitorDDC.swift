@@ -45,12 +45,18 @@ nonisolated enum MonitorDDC {
     private static let addrDefault: UInt8 = 0x51
     private static let addrAlternate: UInt8 = 0x50
     private static let ddcWaitMicros: UInt32 = 10_000
+    /// 事务闸门:一次 apply = 多次读写往返,必须整体串行——并发事务会交错读写同一台显示器
+    /// (step 的读-改-写互相覆盖 = lost update,读帧拿到对方事务的应答)。异步信号量而非
+    /// 锁/串行队列:事务内含 Task.sleep 硬件节拍,等待方挂起不钉线程
+    private static let transactionGate = AsyncSemaphore(permits: 1)
 
     // MARK: 对外
 
     /// 执行一条语义动作：读当前值 → 算目标值 → 写 → 读回校验（并发池执行,勿在主线程同步等）
     @concurrent
     static func apply(_ command: MonitorCommand) async -> MonitorOutcome {
+        await transactionGate.wait()
+        defer { transactionGate.signal() }
         let spec = command.spec
         do {
             switch spec.op {
@@ -236,6 +242,64 @@ enum MonitorDDCError: Error {
             "回复帧异常（head=0x\(String(head, radix: 16)) op=0x\(String(op, radix: 16)) vcp=0x\(String(vcp, radix: 16))）"
         case .unsupported(let vcp, let status):
             "显示器不支持 0x\(String(vcp, radix: 16))（rc=\(status)）"
+        }
+    }
+}
+
+/// 异步信号量:挂起等待不占线程(与 NSCondition/锁同步等待的本质区别)。
+/// 供 DDC 事务闸门用——事务内的 Task.sleep 硬件节拍决定它必须能在挂起点让出执行权。
+/// nonisolated:OpenDeck target 默认 MainActor 隔离,不加标注则锁操作全被钉到主线程
+nonisolated final class AsyncSemaphore: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var permits: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(permits: Int) {
+        self.permits = permits
+    }
+
+    func wait() async {
+        if tryAcquire() { return }
+        await withCheckedContinuation { continuation in
+            enqueue(continuation) // 持锁注册;双检吸收「tryAcquire 失败后 signal 到来」的竞态
+        }
+    }
+
+    func signal() {
+        releaseOrResume()
+    }
+
+    // MARK: 同步原语(NSCondition 的 lock/unlock 不可在 async 函数体内直接调用)
+
+    private func tryAcquire() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        if permits > 0 {
+            permits -= 1
+            return true
+        }
+        return false
+    }
+
+    private func enqueue(_ continuation: CheckedContinuation<Void, Never>) {
+        condition.lock()
+        defer { condition.unlock() }
+        if permits > 0 {
+            permits -= 1
+            continuation.resume()
+            return
+        }
+        waiters.append(continuation)
+    }
+
+    private func releaseOrResume() {
+        condition.lock()
+        defer { condition.unlock() }
+        if waiters.isEmpty {
+            permits += 1
+        } else {
+            // 许可直接移交给最早等待者,不经过中间态
+            waiters.removeFirst().resume()
         }
     }
 }

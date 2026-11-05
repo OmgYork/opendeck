@@ -25,15 +25,18 @@ enum WebviewBootstrap {
         switch target {
         case .plugin(let port, let pluginUUID, let infoJSON):
             setup = "var app = \(infoJSON);"
+            // uuid 源自插件目录名(导入路径可控),单引号字符串里必须转义,否则引导 JS 语法错误、页面永不注册
+            let uuid = jsEscaped(pluginUUID)
             call = """
             window.connectElgatoStreamDeckSocket(
-                                '\(port)', '\(pluginUUID)', 'registerPlugin', JSON.stringify(app));
+                                '\(port)', '\(uuid)', 'registerPlugin', JSON.stringify(app));
             """
         case .propertyInspector(let port, let contextID, let appJSON, let actionInfoJSON):
             setup = "var app = \(appJSON);\n            var info = \(actionInfoJSON);"
+            let context = jsEscaped(contextID)
             call = """
             window.connectElgatoStreamDeckSocket(
-                                \(port), '\(contextID)', 'registerPropertyInspector',
+                                \(port), '\(context)', 'registerPropertyInspector',
                                 JSON.stringify(app), JSON.stringify(info));
             """
         }
@@ -52,5 +55,14 @@ enum WebviewBootstrap {
             }, 50);
         })();
         """
+    }
+
+    /// 单引号 JS 字符串字面量的最小转义(反斜杠/引号/换行;uuid 与 contextID 皆为受限字符集,余下不可能出现)
+    static func jsEscaped(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 }

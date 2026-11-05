@@ -86,13 +86,34 @@ final class MonitorInputAnimator {
 
     // MARK: - 按键
 
+    /// 乐观目标推导(纯函数,可测):确定性命令(inputMac/inputPC)取命令目标,
+    /// toggle/其余取磁盘状态取反
+    static func optimisticTarget(command: KeyAction?, disk: MonitorInputSource) -> MonitorInputSource {
+        if case .monitor(let cmd) = command {
+            switch cmd {
+            case .inputMac: return .mac
+            case .inputPC: return .pc
+            default: return disk.opposite
+            }
+        }
+        return disk.opposite
+    }
+
     /// 按下沿调用:立即可视反馈 + 乐观目标。真实动作由 AppModel 照常执行。
-    func handlePress() {
+    /// 确定性命令(inputMac/inputPC)的乐观目标 = 命令目标本身,toggle/其余 = 磁盘状态取反。
+    /// 旧逻辑一律取反:「已在 Mac 时按『切到 Mac』」会播反向迁移、3s 对账失败再播红色回退,
+    /// 一次成功的空操作被演成两段错误视觉
+    func handlePress(command: KeyAction? = nil) {
         guard activeIndex != nil else { return }
         let displayed = displayedSource
         // 以磁盘为准推导目标(脚本按文件状态取反),避免图标与真实输入错一拍
         let disk = Self.readState() ?? source
-        let target = disk.opposite
+        let target = Self.optimisticTarget(command: command, disk: disk)
+        if target == disk {
+            // 已在目标输入:不播迁移、不挂对账(动作照常执行,写盘幂等)
+            onLog?("显示器输入:已在 \(target.label),无需切换")
+            return
+        }
         pending = PendingSwitch(target: target, deadline: Date().addingTimeInterval(3.0))
         onLog?("显示器输入:按键 → \(target.label)(当前 \(displayed.label))")
 

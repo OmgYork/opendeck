@@ -84,6 +84,35 @@ struct KeyConfig: Codable, Hashable {
     var animation: KeyAnimation? = nil
     /// 待配置模板占位(可选,旧配置缺键可解码)。与 action 互斥:有 template 即无 action。
     var template: KeyTemplate? = nil
+
+    /// 手写解码:非可选 + 默认值的字段缺键时按默认兜底。
+    /// 合成 Codable 不使用属性默认值——手编 config.json 漏写某个 "title" 曾让整份解码
+    /// 失败 → 归档 + 全量重置,代价与损失完全不成比例
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        backgroundColorHex = try container.decodeIfPresent(String.self, forKey: .backgroundColorHex) ?? "#3B4252"
+        iconPath = try container.decodeIfPresent(String.self, forKey: .iconPath)
+        action = try container.decodeIfPresent(KeyAction.self, forKey: .action)
+        animation = try container.decodeIfPresent(KeyAnimation.self, forKey: .animation)
+        template = try container.decodeIfPresent(KeyTemplate.self, forKey: .template)
+    }
+
+    init(
+        title: String = "",
+        backgroundColorHex: String = "#3B4252",
+        iconPath: String? = nil,
+        action: KeyAction? = nil,
+        animation: KeyAnimation? = nil,
+        template: KeyTemplate? = nil
+    ) {
+        self.title = title
+        self.backgroundColorHex = backgroundColorHex
+        self.iconPath = iconPath
+        self.action = action
+        self.animation = animation
+        self.template = template
+    }
 }
 
 /// 键面内建动效。目前只有一种:LG 显示器输入源切换(Mac DP ↔ PC HDMI1)。
@@ -103,6 +132,19 @@ struct Page: Codable, Hashable {
     /// 稳定引用 id(「前往页面」动作兼容用);normalize 补齐
     var id: UUID? = nil
     var keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 15)  // index = row*5+column
+
+    /// 手写解码:缺 "keys" 按全空页兜底(手编 JSON 删掉 keys 曾引爆整份配置)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id)
+        keys = try container.decodeIfPresent([KeyConfig].self, forKey: .keys)
+            ?? Array(repeating: KeyConfig(), count: 15)
+    }
+
+    init(id: UUID? = nil, keys: [KeyConfig] = Array(repeating: KeyConfig(), count: 15)) {
+        self.id = id
+        self.keys = keys
+    }
 }
 
 /// 场景:页面芯片栏的一枚芯片。内含若干页(≥1);第一页为主页,其余为「圆点」延伸页。
@@ -114,6 +156,22 @@ struct DeckScene: Codable, Hashable {
     /// 绑定到本场景的应用 bundle id,最多 3 个,空串=未设
     var boundAppBundleIDs: [String]? = nil
     var pages: [Page] = [Page()]
+
+    /// 手写解码:name/pages 缺键按默认兜底(理由同 KeyConfig)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "场景"
+        boundAppBundleIDs = try container.decodeIfPresent([String].self, forKey: .boundAppBundleIDs)
+        pages = try container.decodeIfPresent([Page].self, forKey: .pages) ?? [Page()]
+    }
+
+    init(id: UUID? = nil, name: String = "场景", boundAppBundleIDs: [String]? = nil, pages: [Page] = [Page()]) {
+        self.id = id
+        self.name = name
+        self.boundAppBundleIDs = boundAppBundleIDs
+        self.pages = pages
+    }
 }
 
 /// 亮度胶囊布局参数(pt):调参模式实时可调
@@ -186,6 +244,37 @@ struct AppConfig: Codable {
     var templateDrafts: [String: KeyConfig]? = nil
     /// 首启引导已关闭(nil/缺省 = 未关闭)
     var onboardingDismissed: Bool? = nil
+
+    /// 手写解码:四个非可选骨架字段(scenes/双索引/亮度)缺键按默认兜底,理由同 KeyConfig
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        scenes = try container.decodeIfPresent([DeckScene].self, forKey: .scenes) ?? [DeckScene()]
+        currentSceneIndex = try container.decodeIfPresent(Int.self, forKey: .currentSceneIndex) ?? 0
+        currentPageIndex = try container.decodeIfPresent(Int.self, forKey: .currentPageIndex) ?? 0
+        brightness = try container.decodeIfPresent(Int.self, forKey: .brightness) ?? 80
+        followSystemBrightness = try container.decodeIfPresent(Bool.self, forKey: .followSystemBrightness)
+        layout = try container.decodeIfPresent(LayoutParams.self, forKey: .layout)
+        defaultSceneID = try container.decodeIfPresent(UUID.self, forKey: .defaultSceneID)
+        autoScreenOffMinutes = try container.decodeIfPresent(Int.self, forKey: .autoScreenOffMinutes)
+        navStyle = try container.decodeIfPresent(NavigationStyle.self, forKey: .navStyle)
+        sliderZeroBlacksKeys = try container.decodeIfPresent(Bool.self, forKey: .sliderZeroBlacksKeys)
+        glassOffset = try container.decodeIfPresent(GlassOffset.self, forKey: .glassOffset)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+        templateDrafts = try container.decodeIfPresent([String: KeyConfig].self, forKey: .templateDrafts)
+        onboardingDismissed = try container.decodeIfPresent(Bool.self, forKey: .onboardingDismissed)
+    }
+
+    init(
+        scenes: [DeckScene] = [DeckScene()],
+        currentSceneIndex: Int = 0,
+        currentPageIndex: Int = 0,
+        brightness: Int = 80
+    ) {
+        self.scenes = scenes
+        self.currentSceneIndex = currentSceneIndex
+        self.currentPageIndex = currentPageIndex
+        self.brightness = brightness
+    }
 }
 
 // MARK: - 配置存储
@@ -226,16 +315,24 @@ final class ConfigStore {
     /// 注入路径装载:测试用(临时文件);缺失/损坏走与默认路径完全同一套容错
     init(contentsOf url: URL) {
         fileURL = url
-        if var loaded = Self.loadConfiguration(from: url) {
+        switch Self.loadConfiguration(from: url) {
+        case .ok(var loaded):
             Self.normalize(&loaded)
             config = loaded
-        } else {
+        case .resetAllowed:
             isFreshInstall = true
             config = Self.defaultConfig()
-            // 首次启动(或配置损坏)立即落盘,保证后续启动读到的是真实文件
+            // 首次启动(或配置损坏且已成功归档)立即落盘,保证后续启动读到的是真实文件
             // normalize 补场景/页面 id 等派生字段,与读盘路径行为一致
             Self.normalize(&config)
             save()
+        case .resetBlocked:
+            // 损坏 + 归档失败:原文件是用户配置的唯一副本,绝不主动用默认配置覆盖。
+            // 内存回退默认让 app 能跑,现场留在磁盘上等用户处置(fault 日志已上报)
+            isFreshInstall = true
+            config = Self.defaultConfig()
+            Self.normalize(&config)
+            onAnomaly?("配置损坏且归档失败:\(url.path) 原文件保留未覆盖,本次会话使用默认配置")
         }
     }
 
@@ -467,6 +564,10 @@ final class ConfigStore {
         else { return }
         config.scenes[sceneIndex].pages.remove(at: pageIndex)
         if sceneIndex == config.currentSceneIndex {
+            // 删当前页之前的页:视图指针平移,否则删 [A,B,C] 的 A 而在看 B 会跳到 C
+            if pageIndex < config.currentPageIndex {
+                config.currentPageIndex -= 1
+            }
             if !config.scenes[sceneIndex].pages.indices.contains(config.currentPageIndex) {
                 config.currentPageIndex = max(0, config.scenes[sceneIndex].pages.count - 1)
             }
@@ -599,7 +700,8 @@ final class ConfigStore {
 
     // MARK: 持久化
 
-    /// 原子写盘:先写临时文件再换名
+    /// 原子写盘:先写临时文件再换名。失败经 onAnomaly 上升(LogSheet 可见),
+    /// 否则磁盘满/只读卷期间 UI 一切照常,重启丢变更且无痕
     func save() {
         do {
             let encoder = JSONEncoder()
@@ -610,21 +712,32 @@ final class ConfigStore {
             try data.write(to: fileURL, options: .atomic)
         } catch {
             Self.logger.error("配置保存失败:\(error, privacy: .public)")
+            onAnomaly?("配置保存失败(内存态未丢,磁盘未更新):\(error.localizedDescription)")
         }
     }
 
+    /// 异常上行钩子(保存失败/损坏归档失败等):AppModel 注线到运行日志环,
+    /// 让「静默失败时代结束」的可见错误通道覆盖配置域
+    var onAnomaly: ((String) -> Void)?
+
     // MARK: - 私有
 
-    /// 读取失败(缺失/损坏/结构不合法)返回 nil,由调用方回退默认配置
-    private static func loadConfiguration(from url: URL) -> AppConfig? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+    /// 载入结果:resetBlocked = 损坏且归档失败,原文件是用户配置的唯一副本,
+    /// 不得用默认配置覆盖(init 侧内存回退默认但不落盘,保住现场)
+    private enum LoadOutcome {
+        case ok(AppConfig)
+        case resetAllowed
+        case resetBlocked
+    }
+
+    private static func loadConfiguration(from url: URL) -> LoadOutcome {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .resetAllowed }
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch {
             logger.error("配置文件读取失败:\(error, privacy: .public)")
-            archiveCorruptFile(url: url, data: nil, reason: "unreadable")
-            return nil
+            return archiveCorruptFile(url: url, data: nil, reason: "unreadable") ? .resetAllowed : .resetBlocked
         }
         // 新旧格式探测:新模型字段有默认值,仅凭解码失败判旧格式不可靠,
         // 须按键名判定(有 pages 无 scenes = 旧单级结构,迁移为场景)
@@ -634,24 +747,24 @@ final class ConfigStore {
         {
             if let migrated = migrateLegacyConfig(from: data) {
                 logger.info("已从旧版单级页面配置迁移到场景结构(\(migrated.scenes.count) 场景)")
-                return migrated
+                return .ok(migrated)
             }
             logger.info("未触发旧格式迁移(非旧格式或迁移失败)")
         }
         do {
-            return try JSONDecoder().decode(AppConfig.self, from: data)
+            return .ok(try JSONDecoder().decode(AppConfig.self, from: data))
         } catch {
             logger.error("配置文件无法解析,归档后回退默认配置:\(error, privacy: .public)")
-            archiveCorruptFile(url: url, data: data, reason: "undecodable")
-            return nil
+            return archiveCorruptFile(url: url, data: data, reason: "undecodable") ? .resetAllowed : .resetBlocked
         }
     }
 
     /// 损坏配置归档:回退默认前先把原文件留底到同目录(config.corrupt-<时间戳>-<原因>.json)。
     /// 数据完整性最高优先级——手编 JSON 写错、外部工具写坏都属正常事故,
-    /// 宁可目录里多一个损坏文件,绝不悄悄覆掉用户配置。
-    private static func archiveCorruptFile(url: URL, data: Data?, reason: String) {
-        let stamp = Int(Date().timeIntervalSince1970)
+    /// 宁可目录里多一个损坏文件,绝不悄悄覆掉用户配置。返回 false = 归档失败(调用方必须护场)。
+    private static func archiveCorruptFile(url: URL, data: Data?, reason: String) -> Bool {
+        // 毫秒戳:秒级时间戳同秒碰撞会静默覆盖前一份归档
+        let stamp = Int(Date().timeIntervalSince1970 * 1000)
         let archiveURL = url.deletingLastPathComponent()
             .appendingPathComponent("config.corrupt-\(stamp)-\(reason).json")
         do {
@@ -661,9 +774,11 @@ final class ConfigStore {
                 try FileManager.default.copyItem(at: url, to: archiveURL)
             }
             logger.error("损坏配置已归档:\(archiveURL.path, privacy: .public)")
+            return true
         } catch {
             // 归档失败也绝不静默——这是数据完整性的最后防线
             logger.fault("损坏配置归档失败,原文件仍在 \(url.path, privacy: .public):\(error, privacy: .public)")
+            return false
         }
     }
 
@@ -739,15 +854,37 @@ final class ConfigStore {
         if config.scenes.isEmpty {
             config.scenes = [DeckScene(name: "默认页面", pages: [Page()])]
         }
+        // id 补齐 + 跨场景去重:手编文件可能造成重复 Page.id,pageLocation/pageIDInCurrentScene
+        // 都按 first 命中,重复 id 会让矩阵点按/圆点直达/gotoPage 落错页
+        var seenSceneIDs = Set<UUID>()
+        var seenPageIDs = Set<UUID>()
         for sceneIndex in config.scenes.indices {
-            if config.scenes[sceneIndex].id == nil { config.scenes[sceneIndex].id = UUID() }
+            let sceneID: UUID
+            switch config.scenes[sceneIndex].id {
+            case .some(let id) where seenSceneIDs.contains(id):
+                sceneID = UUID() // 重复场景 id 重生成,后者让位
+            case .some(let id):
+                sceneID = id
+            case nil:
+                sceneID = UUID()
+            }
+            config.scenes[sceneIndex].id = sceneID
+            seenSceneIDs.insert(sceneID)
             if config.scenes[sceneIndex].pages.isEmpty {
                 config.scenes[sceneIndex].pages = [Page()]
             }
             for pageIndex in config.scenes[sceneIndex].pages.indices {
-                if config.scenes[sceneIndex].pages[pageIndex].id == nil {
-                    config.scenes[sceneIndex].pages[pageIndex].id = UUID()
+                let pageID: UUID
+                switch config.scenes[sceneIndex].pages[pageIndex].id {
+                case .some(let id) where seenPageIDs.contains(id):
+                    pageID = UUID() // 重复页 id 同法处理
+                case .some(let id):
+                    pageID = id
+                case nil:
+                    pageID = UUID()
                 }
+                config.scenes[sceneIndex].pages[pageIndex].id = pageID
+                seenPageIDs.insert(pageID)
                 let count = config.scenes[sceneIndex].pages[pageIndex].keys.count
                 if count < keyCount {
                     config.scenes[sceneIndex].pages[pageIndex].keys += Array(repeating: KeyConfig(), count: keyCount - count)

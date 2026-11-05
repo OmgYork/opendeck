@@ -426,3 +426,34 @@ private final class FakeClient: @unchecked Sendable {
         }
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension MultiStateTests {
+    /// 插件/PI 发负值 setState:钳回 0 并持久化;旧实现负值沿「负下标订阅 manifest 数组」
+    /// 崩溃且随持久化形成启动即崩死循环
+    @Test("setState 负值:钳到 0,不崩宿主,持久化生效")
+    func negativeStateClampsToZero() async throws {
+        let sandbox = try makeSandbox(disableAutomaticStates: false)
+        let model = PluginHostModel(pluginsRoot: sandbox.plugins, settingsRoot: sandbox.settings)
+        model.start()
+        try await waitUntil { model.port != 0 }
+        model.syncKey(at: 0, action: .plugin(
+            pluginID: Self.pluginUUID, actionUUID: Self.actionUUID, contextID: Self.contextID
+        ))
+        let plugin = try await FakeClient.connect(port: model.port)
+        try plugin.send(#"{"uuid":"com.test.multistate","event":"registerPlugin"}"#)
+        _ = await plugin.readUntil(contains: "willAppear")
+
+        try plugin.send(#"{"event":"setState","context":"ctx-ms","payload":{"state":-5}}"#)
+        try await waitUntil { persistedState(sandbox, contextID: Self.contextID) == 0 }
+        #expect(persistedState(sandbox, contextID: Self.contextID) == 0)
+
+        // 钳制后实例仍在(宿主没死):再发合法值照常轮换
+        try plugin.send(#"{"event":"setState","context":"ctx-ms","payload":{"state":1}}"#)
+        try await waitUntil { persistedState(sandbox, contextID: Self.contextID) == 1 }
+
+        plugin.close()
+        model.shutdown()
+    }
+}

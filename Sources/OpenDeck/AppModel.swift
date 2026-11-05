@@ -77,7 +77,8 @@ final class AppModel {
         if payload.hasPrefix("slot:"),
            let source = Int(payload.dropFirst("slot:".count)),
            Self.reservedSlot(at: source) == nil,
-           let home = homeKey(source) {
+           let home = homeKey(source),
+           !isEmptyMirrorKey(home) {
             key = home
             if case .plugin(let pluginID, let actionUUID, _) = key.action {
                 key.action = .plugin(pluginID: pluginID, actionUUID: actionUUID,
@@ -102,6 +103,13 @@ final class AppModel {
         key.animation = item.animation
         key.template = item.template
         return key
+    }
+
+    /// 空键判定(slot: 复刻源专用):首页槽位是空的时整键复刻 = 把目标键静默清空,拒绝。
+    /// UI 侧(调色盘自定义磁贴)同步禁拖并压暗
+    static func isEmptyMirrorKey(_ key: KeyConfig) -> Bool {
+        key.action == nil && key.iconPath == nil && key.animation == nil
+            && key.template == nil && key.title.isEmpty
     }
 
     let config = ConfigStore()
@@ -213,6 +221,11 @@ final class AppModel {
     let onboardingNeeded: Bool
 
     private var started = false
+    /// 单实例锁(见 InstanceLock):acquired 后持有到进程退出
+    private var instanceLock: InstanceLock?
+    /// 实例锁文件路径(应用支持目录,与 config.json 同级)
+    static let instanceLockPath = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("OpenDeck/.instance.lock").path
     /// 观察者与进程同生命周期,无需移除;保留 token 仅为可测试性
     private var workspaceObservers: [NSObjectProtocol] = []
     /// App Nap 断言:菜单栏 app 长期无窗口时会被整进程挂起,插件 webview 的
@@ -228,6 +241,25 @@ final class AppModel {
     func start() {
         guard !started else { return }
         started = true
+
+        // 单实例守卫(见 InstanceLock):双实例并存会互相整文件覆盖配置,先于一切状态建立
+        switch InstanceLock.acquire(path: Self.instanceLockPath) {
+        case .acquired(let lock):
+            instanceLock = lock // 持有到进程退出
+        case .locked:
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "OpenDeck 已在运行"
+            alert.informativeText = "同一台 Mac 只允许一个 OpenDeck 实例——调试实例与正式版并存会互相覆盖配置文件。请先退出已运行的实例。"
+            alert.runModal()
+            exit(0)
+        case .unavailable:
+            appendLog("实例锁文件不可用,单实例防御未生效:\(Self.instanceLockPath)")
+        }
+        // 配置域异常(保存失败/损坏归档失败)上行到运行日志环:静默失败时代覆盖配置
+        config.onAnomaly = { [weak self] message in
+            self?.appendLog(message)
+        }
 
         activityToken = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated],
@@ -362,7 +394,17 @@ final class AppModel {
 
     /// 翻转合盖休眠锁:执行 → 回读 → 更新缓存并重画该键。
     /// 失败不静默:键面回落到真实状态,状态栏留日志,并提示一次授权问题。
+    /// 睡眠锁切换在飞标志:pmset 子进程 + 回读要几百毫秒,快速连按的两个并发 toggle
+    /// 会互相读到旧值(第二次按压「没反应」)。单飞:在飞期间的按压合并等待下一轮
+    private var sleepGuardToggleInFlight = false
+
     private func toggleSleepGuard(at index: Int) async {
+        guard !sleepGuardToggleInFlight else {
+            appendLog("合盖休眠锁切换进行中,忽略本次按压")
+            return
+        }
+        sleepGuardToggleInFlight = true
+        defer { sleepGuardToggleInFlight = false }
         switch await SleepGuard.toggle() {
         case .success(let enabled):
             sleepGuardEnabled = enabled
@@ -451,8 +493,10 @@ final class AppModel {
             }
             return
         }
-        // 热力图键:整帧由读数键的 animator 驱动,同样跳过常规渲染
+        // 热力图键:整帧由读数键的 animator 驱动,同样跳过常规渲染。
+        // 动效键改热力图键时旧 monitorInput 不摘会持续出帧打架(与 stat 分支同款,§6.25 修复①漏了这条)
         if case .keyboardHeatmap = key.action {
+            monitorInput.detach(ifIndex: index)
             heatmap.attach(index: index, size: StreamDock293S.keySize(column: column))
             return
         }
@@ -498,6 +542,12 @@ final class AppModel {
         } else {
             title = key.title.isEmpty ? nil : key.title
             iconPath = key.iconPath
+        }
+        // 插件键且有实例:syncKey 顶部的 redrawInstanceIfPresent 已出插件帧,
+        // 再渲瓷贴兜底帧就是白做一整趟「渲染+JPEG+HID」后立刻被盖掉;无实例(插件缺失)
+        // 才需要瓷贴帧提示「插件未安装」
+        if case .plugin = key.action, pluginHost.hasInstance(at: index) {
+            return
         }
         guard let image = IconRenderer.render(
             size: StreamDock293S.keySize(column: column),

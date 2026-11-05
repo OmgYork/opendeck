@@ -93,9 +93,10 @@ final class KeyPressRouter {
         }
         // 设备控制动作(页面/亮度/熄屏)本地消化,不经 ActionRunner
         if handleDeviceAction(action) { return }
-        // 动效键面:先起动画,再照常执行动作(乐观展示,状态文件随后对账)
+        // 动效键面:先起动画,再照常执行动作(乐观展示,状态文件随后对账);
+        // 确定性输入命令(inputMac/inputPC)把命令目标传给动画器,别把「已在其位」演成失败回退
         if key.animation == .monitorInput {
-            monitorInput.handlePress()
+            monitorInput.handlePress(command: action)
         }
         Task { await ActionRunner.run(action) }
     }

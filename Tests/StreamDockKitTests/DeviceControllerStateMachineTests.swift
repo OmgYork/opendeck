@@ -82,6 +82,9 @@ struct DeviceControllerStateMachineTests {
     /// 回调经 `Task { @MainActor }` 跳线程;断言前把主线程队列跑空
     private func settle() async {
         for _ in 0..<64 { await Task.yield() }
+        // drawKey 的 JPEG 编码已移入专用串行队列:纯 yield 不保证编码块完成,补一段
+        // 时常兜底(编码 ~2ms/帧,50ms 足够;测试的时序断言都跟在 settle 之后)
+        try? await Task.sleep(for: .milliseconds(50))
     }
 
     private func makeKeyImage() -> CGImage? {
@@ -206,6 +209,7 @@ struct DeviceControllerStateMachineTests {
         // 熄屏前先在两格有内容
         controller.drawKey(row: 0, column: 0, image: image)
         controller.drawKey(row: 2, column: 4, image: image)
+        controller.drainEncodeQueueForTesting() // 编码已异步化:先排空再重置写记录
         controller.screenOff()
         fake.resetWrites()
 
@@ -255,6 +259,7 @@ struct DeviceControllerStateMachineTests {
             return
         }
         controller.drawKey(row: 1, column: 2, image: image)
+        controller.drainEncodeQueueForTesting() // 编码已异步化:先排空再重置写记录
         fake.resetWrites()
 
         controller.setKeysBlacked(true)
@@ -265,6 +270,7 @@ struct DeviceControllerStateMachineTests {
         #expect(fake.commands.isEmpty, "同值涂黑不应重发: \(fake.commands.map(fake.label))")
 
         controller.setKeysBlacked(false)
+        controller.drainEncodeQueueForTesting() // 恢复重画也走编码队列,断言前排空
         let expectedId = StreamDock293S.keyId(row: 1, column: 2)
         #expect(fake.imageKeyIds == [expectedId].compactMap { $0 })
         #expect(!controller.keysBlacked)
@@ -306,6 +312,7 @@ struct DeviceControllerStateMachineTests {
             return
         }
         controller.drawKey(row: 1, column: 3, image: image)
+        controller.drainEncodeQueueForTesting() // 编码已异步化:先排空再重置写记录
         controller.screenOff()
         fake.resetWrites()
 

@@ -177,10 +177,12 @@ struct FunctionPaletteView: View {
     /// 不接 keyImageSlots 实时帧。零件语义:在任何场景/页打开,镜像都是同一份「我的常用键」;
     /// 源键的状态变化(睡眠锁 ON/OFF、插件推送图)不渗进调色盘;
     /// 拖拽载荷 "slot:<index>" → bindPayload 复刻首页该槽的**配置**。
+    @ViewBuilder
     private func customSlotTile(index: Int) -> some View {
         let config = appModel.homeKeyConfig(at: index) ?? KeyConfig()
         let payload = "slot:\(index)"
-        return KeycapView(
+        let isEmptySlot = AppModel.isEmptyMirrorKey(config)
+        let tile = KeycapView(
             config: config,
             interactive: false,
             staticFrame: appModel.animationPreviewFrame(for: config)
@@ -196,16 +198,23 @@ struct FunctionPaletteView: View {
                 .background(.black.opacity(0.55), in: Capsule())
                 .padding(5)
         }
+        .opacity(isEmptySlot ? 0.35 : 1) // 空槽镜像压暗:没有可复制的内容
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .draggable(payload) {
-            KeycapView(
-                config: config,
-                interactive: false,
-                staticFrame: appModel.animationPreviewFrame(for: config)
-            )
-            .frame(width: tileSide, height: tileSide)
+        if isEmptySlot {
+            // 空槽禁拖:整键复刻一份空配置 = 把目标键静默清空(政策层 landingConfig 亦有闸门)
+            tile.help("首页槽位 \(index + 1) 是空的,没有可复制的内容")
+        } else {
+            tile
+                .draggable(payload) {
+                    KeycapView(
+                        config: config,
+                        interactive: false,
+                        staticFrame: appModel.animationPreviewFrame(for: config)
+                    )
+                    .frame(width: tileSide, height: tileSide)
+                }
+                .help("复制首页槽位 \(index + 1) 的磁贴,拖到目标键位(整键复刻,含底色)")
         }
-        .help("复制首页槽位 \(index + 1) 的磁贴,拖到目标键位(整键复刻,含底色)")
     }
 
     // MARK: 显示器分类内容（复合 + 四组二级折叠，派生自 MonitorCommand / MonitorCompositeCatalog）

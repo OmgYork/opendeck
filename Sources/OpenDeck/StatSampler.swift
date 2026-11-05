@@ -60,6 +60,11 @@ nonisolated final class SMCTemperatureReader: @unchecked Sendable {
         var bytes: [UInt8] { Array(d[48..<80]) }
     }
 
+    deinit {
+        // 进程级单例基本不会走到,但失败重试/测试场景会重复建实例:连接要还
+        if connect != 0 { IOServiceClose(connect) }
+    }
+
     /// 打开连接并枚举 Tp* 温度键(一次性;失败返回 false,槽位显示 N/A)
     func open() -> Bool {
         if connect != 0 { return !tpKeys.isEmpty }
@@ -68,6 +73,7 @@ nonisolated final class SMCTemperatureReader: @unchecked Sendable {
             Self.log.notice("stats: AppleSMC 服务未找到")
             return false
         }
+        defer { IOObjectRelease(service) } // 匹配引用必须归还,失败重试不再累积
         let kr = IOServiceOpen(service, mach_task_self_, 0, &connect)
         guard kr == KERN_SUCCESS, connect != 0 else {
             Self.log.notice("stats: IOServiceOpen kr=0x\(String(kr, radix: 16))")
@@ -160,11 +166,19 @@ nonisolated final class SMCTemperatureReader: @unchecked Sendable {
 
 /// 采样器:CPU / GPU / 温度(nonisolated:在后台 Task 中采样,避免阻塞主线程)
 nonisolated final class StatSampler: @unchecked Sendable {
-    private var smc = SMCTemperatureReader()
-    private var prevTicks: host_cpu_load_info?
+    private struct State {
+        var smc = SMCTemperatureReader()
+        var prevTicks: host_cpu_load_info?
+    }
+    /// 采样可重叠(2s 定时器与 setSlots 触发各自起 Task):prevTicks 差分与 SMC open
+    /// 是无同步裸读写的真数据竞争,锁内串行同时起到「在飞单飞」效果
+    private let stateLock = OSAllocatedUnfairLock(initialState: State())
 
     func sample() -> StatSample {
-        StatSample(gpu: Self.gpuUtilization(), cpu: Self.cpuUtilization(previous: &prevTicks), temp: smc.hottestCPU())
+        let gpu = Self.gpuUtilization() // 注册表查询无共享状态,不进锁
+        return stateLock.withLock { state in
+            StatSample(gpu: gpu, cpu: Self.cpuUtilization(previous: &state.prevTicks), temp: state.smc.hottestCPU())
+        }
     }
 
     /// mach 系统调用:两次 host_statistics64 差分的非空闲占比

@@ -21,6 +21,9 @@ public final class DeviceController {
 
     /// 传输接缝:生产用 HIDTransport,测试用记录型假实现(状态机因此可测)
     private let transport: any DeviceTransport
+    /// JPEG 编码专用串行队列:动画帧的编码成本不占调用方线程;FIFO 保序,
+    /// 与 drawKey 相邻的 sendCommand 在传输层写队列里的次序不受影响
+    private let encodeQueue = DispatchQueue(label: "opendeck.device.encode")
     /// 已画键位缓存(原始未补偿帧):index = row * columns + column;
     /// 设备休眠唤醒/重插、对位调参后据此按当前补偿参数全量重画
     private var keyImageCache: [Int: CGImage] = [:]
@@ -234,7 +237,10 @@ public final class DeviceController {
         return context.makeImage()
     }
 
-    /// 画一个键:渲染责任在调用方(IconRenderer),此处负责 JPEG 编码+协议下发+缓存
+    /// 画一个键:渲染责任在调用方(IconRenderer),此处负责 JPEG 编码+协议下发+缓存。
+    /// 编码在专用串行队列执行:稳态动画 10 帧/s × 1–2.5ms 的 JPEG 编码不再钉住调用方
+    /// (MainActor);串行 FIFO 保序,与相邻 sendCommand 的设备写入次序不变。
+    /// 熄屏/断开的判定在入队前完成(与旧行为一致,判定与编码间的窗口同旧实现)
     public func drawKey(row: Int, column: Int, image: CGImage) {
         guard StreamDock293S.rowIds(indicesValid: row, column),
               let keyId = StreamDock293S.keyId(row: row, column: column)
@@ -250,20 +256,30 @@ public final class DeviceController {
         // 设备侧对位补偿:玻璃窗口相对 framebuffer 有偏心,仅对下发帧平移;
         // UI 镜像拿到的仍是未偏移帧(用户要求「软件不用偏移」)
         let frame = compensatedForGlass(image) ?? image
-        guard let jpeg = IconRenderer.jpeg(from: frame) else {
-            onLog?("JPEG 编码失败 r\(row)c\(column)")
-            return
+        let transport = self.transport
+        let log = transport.onLog
+        encodeQueue.async {
+            guard let jpeg = IconRenderer.jpeg(from: frame) else {
+                log?("JPEG 编码失败 r\(row)c\(column)")
+                return
+            }
+            transport.sendCommand(StreamDock293S.imageHeaderCommand(jpegSize: jpeg.count, keyId: keyId))
+            for chunk in StreamDock293S.imageChunks(jpeg) {
+                transport.sendRaw(chunk)
+            }
+            transport.sendCommand(StreamDock293S.refreshCommand)
         }
-        transport.sendCommand(StreamDock293S.imageHeaderCommand(jpegSize: jpeg.count, keyId: keyId))
-        for chunk in StreamDock293S.imageChunks(jpeg) {
-            transport.sendRaw(chunk)
-        }
-        transport.sendCommand(StreamDock293S.refreshCommand)
     }
 
     /// 诊断:追踪每个实际写入的报文(harness 与参考实现的字节流 diff 用)
     public func enableWriteTrace(_ trace: @escaping @Sendable ([UInt8]) -> Void) {
         transport.setWriteTrace(trace)
+    }
+
+    /// 测试接缝:同步等待编码队列排空。状态机测试在 drawKey 后立即重置写记录并断言,
+    /// 需要「设备写入已发生」的确定性时点;生产路径无此需求
+    func drainEncodeQueueForTesting() {
+        encodeQueue.sync {}
     }
 
     /// 唤醒屏幕并按缓存全量重画(设备自行休眠/重插后的恢复手段)
@@ -278,21 +294,30 @@ public final class DeviceController {
         sendCachedFrames()
     }
 
-    /// 缓存里存的是原始帧,发送前统一套用当前补偿参数
+    /// 缓存里存的是原始帧,发送前统一套用当前补偿参数;编码与 drawKey 同队列,次序与旧实现一致。
+    /// 按 index 升序:字典无序,不排序则重画次序随哈希漂移(测试与字节流 diff 都依赖确定性)
     private func sendCachedFrames() {
-        for index in keyImageCache.keys.sorted() {
-            let row = index / StreamDock293S.columns
-            let column = index % StreamDock293S.columns
+        let transport = self.transport
+        let snapshot: [(UInt8, CGImage)] = keyImageCache.keys.sorted().compactMap { index in
             guard let raw = keyImageCache[index],
-                  let keyId = StreamDock293S.keyId(row: row, column: column)
-            else { continue }
-            let frame = compensatedForGlass(raw) ?? raw
-            guard let jpeg = IconRenderer.jpeg(from: frame) else { continue }
-            transport.sendCommand(StreamDock293S.imageHeaderCommand(jpegSize: jpeg.count, keyId: keyId))
-            for chunk in StreamDock293S.imageChunks(jpeg) {
-                transport.sendRaw(chunk)
+                  let keyId = StreamDock293S.keyId(row: index / StreamDock293S.columns,
+                                                   column: index % StreamDock293S.columns)
+            else { return nil }
+            return (keyId, compensatedForGlass(raw) ?? raw)
+        }
+        let log = transport.onLog
+        encodeQueue.async {
+            for (keyId, frame) in snapshot {
+                guard let jpeg = IconRenderer.jpeg(from: frame) else {
+                    log?("JPEG 编码失败 keyId=\(keyId)")
+                    continue
+                }
+                transport.sendCommand(StreamDock293S.imageHeaderCommand(jpegSize: jpeg.count, keyId: keyId))
+                for chunk in StreamDock293S.imageChunks(jpeg) {
+                    transport.sendRaw(chunk)
+                }
+                transport.sendCommand(StreamDock293S.refreshCommand)
             }
-            transport.sendCommand(StreamDock293S.refreshCommand)
         }
     }
 

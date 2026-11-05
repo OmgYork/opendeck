@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreText
 import Foundation
 import ImageIO
+import os
 import UniformTypeIdentifiers
 
 /// 键面图渲染:背景色 + 可选底图(铺满)+ 居中标题 → CGImage → JPEG(自动压到设备限制内)。
@@ -96,11 +97,9 @@ public enum IconRenderer {
 
     /// CGImage → JPEG:质量 0.9 起步循环下调,仍超限则整体缩放后重试。
     /// 起点用上一张成功图的质量:键面帧尺寸/复杂度稳定时一步命中,
-    /// 每帧省掉逐档下调的重复全图编码。进程内调用方全在 MainActor
-    /// (DeviceController);StreamDeckHarness 是独立可执行进程,不共享。
-    // nonisolated(unsafe) 前提:render 的全部调用方都在主线程(设备/UI 同源),无并发写。
-    // 若渲染移出主线程,先给这个变量上锁
-    private nonisolated(unsafe) static var lastGoodQuality: Double = 0.9
+    /// 每帧省掉逐档下调的重复全图编码。编码现跑在 DeviceController 的专用编码队列
+    /// (不在主线程),起点状态须上锁;StreamDeckHarness 是独立可执行进程,不共享
+    private static let qualityLock = OSAllocatedUnfairLock<Double>(initialState: 0.9)
 
     public static func jpeg(from image: CGImage, maxBytes: Int = StreamDock293S.maxKeyJPEGBytes) -> Data? {
         var current = image
@@ -111,10 +110,11 @@ public enum IconRenderer {
                 // 右下角显示,呈现「左/上空隙大」的偏移(2026-10-18 用户实测定位)
                 current = restored
             }
-            var quality = min(0.9, max(0.1, Self.lastGoodQuality))
+            var quality = min(0.9, max(0.1, qualityLock.withLock { $0 }))
             while quality >= 0.1 {
                 if let data = encode(current, quality: quality), data.count <= maxBytes {
-                    Self.lastGoodQuality = quality
+                    let hitQuality = quality // withLock 闭包按并发代码检查,捕获 let 而非 var
+                    qualityLock.withLock { $0 = hitQuality }
                     return data
                 }
                 quality -= 0.15
@@ -169,9 +169,25 @@ public enum IconRenderer {
         return ctx.makeImage()
     }
 
+    /// 设备侧 iconPath 底图缓存(path+mtime 键控,容量上限)。此前每次渲染都开盘+全图解码,
+    /// 换页一次 = 15 次主线程磁盘读;mtime 进键使外部重生成(key-icons 更新)自动失效,
+    /// 全清式淘汰对「键面图标集小且稳定」的使用形态足够
+    private static let iconCacheLock = OSAllocatedUnfairLock(initialState: [String: CGImage]())
+    private static let iconCacheLimit = 32
+
     private static func loadImage(at path: String) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date)?
+            .timeIntervalSince1970 ?? 0
+        let key = "\(path)#\(mtime)"
+        if let cached = iconCacheLock.withLock({ $0[key] }) { return cached }
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        iconCacheLock.withLock { dictionary in
+            if dictionary.count >= iconCacheLimit { dictionary.removeAll(keepingCapacity: true) }
+            dictionary[key] = decoded
+        }
+        return decoded
     }
 
     private static func drawAspectFill(_ image: CGImage, in ctx: CGContext, square: CGSize) {

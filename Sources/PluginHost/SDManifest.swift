@@ -116,23 +116,45 @@ public struct SDManifest: Sendable, Equatable {
 
     // MARK: - 图片解析
 
+    /// 路径规范化(realpath 语义):存在的最长前缀逐组件解析符号链接,不存在的末段原样拼接。
+    /// 沙盒前缀校验必须两侧同法,否则 /var → /private/var 这类前缀符号链接会让校验随机失效
+    public static func canonicalPath(_ url: URL) -> String {
+        let full = url.path
+        var candidate = full
+        while candidate.count > 1 {
+            var buffer = [Int8](repeating: 0, count: 4096)
+            if realpath(candidate, &buffer) != nil {
+                let resolved = String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+                // 候选路径都是组件边界(删除末组件而来),余段以 "/" 开头,直接拼接
+                return resolved + full.dropFirst(candidate.count)
+            }
+            candidate = (candidate as NSString).deletingLastPathComponent
+        }
+        return URL(fileURLWithPath: full).standardizedFileURL.path
+    }
+
     /// manifest 图片路径 → 实际文件 URL。manifest 图标普遍无扩展名(如 "static/img/cate"),
     /// 按候选扩展名探测;返回 .svg 时调用方需自行决定是否支持(M2 不支持)。
     public static func resolveImageURL(pluginRoot: URL, manifestPath: String?) -> URL? {
         guard let manifestPath, !manifestPath.isEmpty else { return nil }
         let fileManager = FileManager.default
-        let base = manifestPath.hasPrefix("/")
-            ? URL(fileURLWithPath: manifestPath)
-            : pluginRoot.appendingPathComponent(manifestPath)
+        // 沙盒:manifest 是插件作者控制的输入,图片只许落在插件根内——
+        // 绝对路径直接拒;".." 穿越经 realpath 后越出插件根的同样拒
+        guard !manifestPath.hasPrefix("/") else { return nil }
+        let rootPath = canonicalPath(pluginRoot)
+        let base = canonicalPath(pluginRoot.appendingPathComponent(manifestPath))
+        guard base.hasPrefix(rootPath + "/") else { return nil }
 
-        if base.pathExtension.isEmpty {
+        if (manifestPath as NSString).pathExtension.isEmpty {
             for candidate in ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"] {
-                let url = base.appendingPathExtension(candidate)
-                if fileManager.fileExists(atPath: url.path) { return url }
+                let probe = base + "." + candidate
+                if fileManager.fileExists(atPath: probe) {
+                    return URL(fileURLWithPath: probe)
+                }
             }
             return nil
         }
-        return fileManager.fileExists(atPath: base.path) ? base : nil
+        return fileManager.fileExists(atPath: base) ? URL(fileURLWithPath: base) : nil
     }
 }
 

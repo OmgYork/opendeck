@@ -86,3 +86,86 @@ struct ConfigDecodeTests {
         #expect(round.glassOffset == GlassOffset(x: -3, y: 3, zoom: 108))
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension ConfigDecodeTests {
+    /// 手编 JSON 漏写非可选骨架键(曾令整份解码失败 → 归档 + 全量重置):
+    /// 现按默认兜底继续解码,数据不再被顶掉
+    @Test("缺骨架键按默认兜底:漏 title/keys/name/pages/scenes/brightness 均可解码")
+    @MainActor
+    func missingSkeletonKeysDecodeWithDefaults() throws {
+        // 键缺 title 与 backgroundColorHex
+        let keyMissing = """
+        { "iconPath" : null, "action" : null }
+        """
+        let key = try JSONDecoder().decode(KeyConfig.self, from: Data(keyMissing.utf8))
+        #expect(key.title == "")
+        #expect(key.backgroundColorHex == "#3B4252")
+
+        // 页缺 keys
+        let page = try JSONDecoder().decode(Page.self, from: Data("{ }".utf8))
+        #expect(page.keys.count == 15)
+
+        // 场景缺 name/pages
+        let scene = try JSONDecoder().decode(DeckScene.self, from: Data("{ }".utf8))
+        #expect(scene.name == "场景")
+        #expect(scene.pages.count == 1)
+
+        // 顶层缺 scenes/currentSceneIndex/currentPageIndex/brightness
+        let top = try JSONDecoder().decode(AppConfig.self, from: Data("{ }".utf8))
+        #expect(top.scenes.count == 1)
+        #expect(top.currentSceneIndex == 0)
+        #expect(top.currentPageIndex == 0)
+        #expect(top.brightness == 80)
+    }
+
+    /// 手编文件跨场景重复 Page.id:normalize 去重(后者重生成),
+    /// 否则 pageLocation/圆点直达按 first 命中会落错页
+    @Test("normalize 对重复 Page.id 去重")
+    @MainActor
+    func normalizeDeduplicatesPageIDs() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-dupid-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("config.json")
+        let same = "11111111-1111-1111-1111-111111111111"
+        let json = """
+        {
+          "scenes" : [
+            { "name" : "A", "pages" : [ { "id" : "\(same)", "keys" : [] }, { "id" : "\(same)", "keys" : [] } ] },
+            { "name" : "B", "pages" : [ { "id" : "\(same)", "keys" : [] } ] }
+          ],
+          "currentSceneIndex" : 0,
+          "currentPageIndex" : 0,
+          "brightness" : 80
+        }
+        """
+        try Data(json.utf8).write(to: url)
+        let store = ConfigStore(contentsOf: url)
+        let ids = store.config.scenes.flatMap { $0.pages.compactMap(\.id) }
+        #expect(Set(ids).count == ids.count, "去重后不应有重复: \(ids)")
+    }
+
+    /// 删除当前页之前的页:视图指针平移(旧实现只做越界钳制,看 B 删 A 会跳到 C)
+    @Test("deletePage 删当前页之前的页时平移 currentPageIndex")
+    @MainActor
+    func deletePageShiftsCurrentIndex() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-delpage-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("config.json")
+        let json = """
+        {
+          "scenes" : [ { "name" : "A", "pages" : [ { "keys" : [] }, { "keys" : [] }, { "keys" : [] } ] } ],
+          "currentSceneIndex" : 0,
+          "currentPageIndex" : 1,
+          "brightness" : 80
+        }
+        """
+        try Data(json.utf8).write(to: url)
+        let store = ConfigStore(contentsOf: url)
+        store.deletePage(sceneIndex: 0, pageIndex: 0) // 删正在看的 B(index 1)之前的 A
+        #expect(store.config.currentPageIndex == 0, "看 B 删 A 后应仍看 B: \(store.config.currentPageIndex)")
+    }
+}

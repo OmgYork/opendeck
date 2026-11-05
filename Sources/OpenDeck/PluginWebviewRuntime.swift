@@ -25,6 +25,9 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
     /// (2026-10-16 实测:1s 节拍 2 分钟后归零永不恢复),故由宿主定时器推拍,
     /// 页面定义 __opendeckPulse 即接入;Foundation 定时器不受页面节流影响
     private var pulseTimer: Timer?
+    /// 宿主侧推拍闸门:插件可见实例数归零时暂停(PluginHostModel.syncPulseGate 调用)——
+    /// 换页后页面不可见,evaluateJavaScript 往返 + WebContent canvas 重绘 + 文件桥读盘全是白烧
+    private var pulseEnabled = true
 
     init(pluginUUID: String, directoryURL: URL, entryURL: URL, port: UInt16, infoJSON: String, log: @escaping (String) -> Void) {
         self.pluginUUID = pluginUUID
@@ -190,7 +193,9 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
             return
         }
         if let kind = body["diag"] as? String {
-            log("HTML 插件页[\(kind)] \(pluginUUID): \(body["detail"] as? String ?? "")")
+            // detail 截断:页面上报通道绕过了 console 的 150/300 截断(可直接 postMessage),
+            // 不截的话带病页面能把 LogRing 单条放大到任意长度
+            log("HTML 插件页[\(kind)] \(pluginUUID): \((body["detail"] as? String ?? "").prefix(500))")
             return
         }
         guard let seq = body["seq"] as? Int,
@@ -201,18 +206,29 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
         // fetch polyfill 会传 file URL 的绝对 pathname(已 decodeURIComponent);相对路径按根拼接。
-        // 两种形态统一过 standardized + 根前缀校验,沙盒语义不变
-        let target: URL
-        if path.hasPrefix("/") {
-            target = URL(fileURLWithPath: path).standardizedFileURL
-        } else {
-            target = rootURL.appendingPathComponent(path).standardizedFileURL
-        }
-        guard target.path.hasPrefix(rootURL.path + "/") else { return reject("path escapes plugin root") }
-        guard let data = try? Data(contentsOf: target) else { return reject("notfound or unreadable") }
+        // 两种形态统一过「符号链接解析 + 根前缀校验」:standardized 是纯词法变换不解析软链,
+        // 插件包内预置 link -> /etc/passwd 即可越根读取(拷贝制安装保留符号链接),必须先 resolve
+        let target: URL = path.hasPrefix("/")
+            ? URL(fileURLWithPath: path)
+            : rootURL.appendingPathComponent(path)
+        let resolvedRoot = rootURL.resolvingSymlinksInPath().path
+        let resolvedTarget = target.resolvingSymlinksInPath()
+        guard resolvedTarget.path.hasPrefix(resolvedRoot + "/") else { return reject("path escapes plugin root") }
+        // 只许常规文件:/dev/zero 会无限读、FIFO 会永久阻塞读、目录无意义
+        guard let values = try? resolvedTarget.resourceValues(forKeys: [.isRegularFileKey]),
+              values.isRegularFile == true
+        else { return reject("not a regular file") }
+        // 大小上限 1MB:整读→base64(×1.33)→拼 JS 字符串→WebKit 再解析一份,峰值 ≈4× 体积,
+        // 主线程同步读的成本也随之有界(state.json/i18n/字体等真实用途都远小于此)
+        let byteCount = (try? resolvedTarget.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        guard byteCount > 0, byteCount <= Self.fileBridgeMaxBytes else { return reject("file too large or empty") }
+        guard let data = try? Data(contentsOf: resolvedTarget) else { return reject("notfound or unreadable") }
         let b64 = data.base64EncodedString()
         webView.evaluateJavaScript("__opendeckFileResolve(\(seq), true, '\(b64)', '')", completionHandler: nil)
     }
+
+    /// 文件桥单次读取上限
+    private static let fileBridgeMaxBytes = 1024 * 1024
 
     /// 宿主推拍:调页面 __opendeckPulse。evaluateJavaScript 不经 DOM 定时器队列,
     /// 不受隐藏页节流治理;单拍异常由下拍自愈(页面侧自链一断即永久死亡,不可用)。
@@ -225,7 +241,7 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
 
     private func schedulePulse(after seconds: TimeInterval) {
         pulseTimer?.invalidate()
-        guard !gone else { return }
+        guard !gone, pulseEnabled else { return }
         let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.gone else { return }
@@ -246,6 +262,19 @@ final class PluginWebviewRuntime: NSObject, WKNavigationDelegate {
         }
         RunLoop.main.add(timer, forMode: .common)
         pulseTimer = timer
+    }
+
+    /// 推拍闸门。暂停 = 撤当前拍且不再排新拍;恢复 = 立即补一拍
+    /// (暂停期间的 state 变化第一时间对账,不等下一节拍)
+    func setPulseEnabled(_ enabled: Bool) {
+        guard pulseEnabled != enabled, !gone else { return }
+        pulseEnabled = enabled
+        if enabled {
+            schedulePulse(after: 0.05)
+        } else {
+            pulseTimer?.invalidate()
+            pulseTimer = nil
+        }
     }
 
     // MARK: - WKNavigationDelegate

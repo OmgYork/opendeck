@@ -71,6 +71,8 @@ final class PluginHostModel {
         var registered = false
         var respawnAttempts = 0
         var wantsSpawn = false
+        /// 推拍闸门状态镜像:实例数归零置 true,恢复置 false(与 webview 同步,防重复调用)
+        var pulseGated = false
 
         init(manifest: SDManifest, directoryURL: URL) {
             self.manifest = manifest
@@ -223,6 +225,7 @@ final class PluginHostModel {
             if let existing {
                 sendWillDisappear(existing)
                 instances.removeValue(forKey: existing.contextID)
+                syncPulseGate(pluginUUID: existing.pluginUUID)
             }
             return
         }
@@ -233,6 +236,7 @@ final class PluginHostModel {
         if let existing {
             sendWillDisappear(existing) // 换了插件/动作:旧实例退场
             instances.removeValue(forKey: existing.contextID)
+            syncPulseGate(pluginUUID: existing.pluginUUID)
         }
 
         guard let runtime = ensureRuntime(pluginUUID: pluginID) else {
@@ -240,23 +244,34 @@ final class PluginHostModel {
             return
         }
         let record = settingsDoc(pluginID).contexts[contextID] ?? PluginContextRecord()
+        // 从盘加载的 state 同样钳制(与 setState 同策略,防历史脏数据/手编 settings 文件越界)
+        let stateCount = runtime.action(uuid: actionUUID)?.stateCount ?? 1
+        let loadedState = max(record.state, 0)
         instances[contextID] = Instance(
             contextID: contextID,
             pluginUUID: pluginID,
             actionUUID: actionUUID,
             keyIndex: index,
-            state: record.state
+            state: stateCount > 1 ? min(loadedState, stateCount - 1) : loadedState
         )
         redrawInstanceIfPresent(at: index) // 多状态动作上屏即显当前态 manifest 默认图(插件 setImage 者随后照常覆盖)
         if runtime.registered {
             sendWillAppear(instances[contextID]!, runtime: runtime)
         }
+        syncPulseGate(pluginUUID: pluginID)
     }
 
     /// 实例已存在时按当前状态重渲该键(AppModel.applyKey 在瓷贴绘制后调用,盖过静态瓷砖)
     func redrawInstanceIfPresent(at index: Int) {
         guard let instance = instances.values.first(where: { $0.keyIndex == index }) else { return }
         redraw(instance)
+    }
+
+    /// 该键位当前是否有插件实例。applyKey 用它决定是否跳过瓷贴兜底帧:
+    /// 实例存在时 syncKey 内的 redrawInstanceIfPresent 已出插件帧,先上瓷贴再盖一遍
+    /// = 每个插件键换页白做一整趟「渲染+JPEG+HID」
+    func hasInstance(at index: Int) -> Bool {
+        instances.values.contains { $0.keyIndex == index }
     }
 
     // MARK: - 多状态(编辑器展示与手动切换)
@@ -423,7 +438,8 @@ final class PluginHostModel {
         case .openURL(let url):
             hooks.open(URL(string: url) ?? URL(fileURLWithPath: "/dev/null"))
         case .logMessage(let text):
-            hooks.log("插件日志:\(text)")
+            // 环容量 50 条但单条不限长:带病插件每帧推大文本能把环放大到 GB 级,统一截断
+            hooks.log("插件日志:\(text.prefix(500))")
         case .unhandled(let event):
             hooks.log("插件事件(忽略):\(event)")
         case nil:
@@ -441,6 +457,12 @@ final class PluginHostModel {
         // (解码→合成→JPEG→HID 全免)。动画帧每帧不同,不受影响;设备侧重连/唤醒
         // 由 keyImageCache 全量重画兜底,不依赖插件重发。
         let slotKey = state.map { "s\($0)" } ?? "all"
+        if let state {
+            // 越界态永不显示(instance.state 已钳制),且不拦的话 lastImagePayloads 会按
+            // 任意 state 键无界累积(带病插件把时间戳塞进 state 字段 = 每帧一条载荷常驻)
+            let count = runtimes[instance.pluginUUID]?.action(uuid: instance.actionUUID)?.stateCount ?? 1
+            guard state >= 0, state < count else { return }
+        }
         let payload = image ?? ""
         if instance.lastImagePayloads[slotKey] == payload { return }
         instance.lastImagePayloads[slotKey] = payload
@@ -724,6 +746,8 @@ final class PluginHostModel {
         let index = instance.keyIndex
         let column = index % StreamDock293S.columns
         let size = StreamDock293S.keySize(column: column)
+        // stateImages 是字典,下标安全;真正能 trap 的是 manifestDefaultImage 里的
+        // manifest 数组下标(那边已加索引钳制),state 入口两侧也已钳制
         let base = instance.stateImages[instance.state]
             ?? instance.allStateImage
             ?? manifestDefaultImage(instance)
@@ -745,7 +769,7 @@ final class PluginHostModel {
         guard let runtime = runtimes[instance.pluginUUID],
               let action = runtime.action(uuid: instance.actionUUID)
         else { return nil }
-        let path = instance.state < action.stateImages.count ? action.stateImages[instance.state] : nil
+        let path = action.stateImages.indices.contains(instance.state) ? action.stateImages[instance.state] : nil
         guard let url = SDManifest.resolveImageURL(pluginRoot: runtime.directoryURL, manifestPath: path) else { return nil }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         guard let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
@@ -754,13 +778,25 @@ final class PluginHostModel {
     }
 
     private func setState(_ instance: Instance, _ state: Int) {
-        instance.state = state
+        // 插件/PI 可发任意 Int:负值/越界会以负下标订阅 stateImages 当场崩溃,
+        // 且 state 会持久化 → 重启复现「启动即崩」死循环,必须钳制
+        let clamped = clampedState(state, for: instance)
+        instance.state = clamped
         mutateSettingsDoc(instance.pluginUUID, caller: "setState") { document in
-            let unchanged = document.contexts[instance.contextID]?.state == state
-            document.contexts[instance.contextID, default: PluginContextRecord()].state = state
+            let unchanged = document.contexts[instance.contextID]?.state == clamped
+            document.contexts[instance.contextID, default: PluginContextRecord()].state = clamped
             return !unchanged
         }
         redraw(instance)
+    }
+
+    /// state 入口钳制:负值一律归 0(无合法语义,且会沿「负下标订阅 manifest 数组」崩溃并
+    /// 持久化成启动即崩死循环);多态动作(stateCount>1)再钳到 [0, count-1]。
+    /// 单态/无 States 声明的动作放行非负值——PI/插件用 setState 做自身记账是既有契约(PIFlow ⑦)
+    private func clampedState(_ state: Int, for instance: Instance) -> Int {
+        let count = runtimes[instance.pluginUUID]?.action(uuid: instance.actionUUID)?.stateCount ?? 1
+        let nonNegative = max(state, 0)
+        return count > 1 ? min(nonNegative, count - 1) : nonNegative
     }
 
     /// 唯一写入口:原地改内存真相 → diff 守卫(无变化零 I/O,吸收 OBS 式高频写)→ 立即原子落盘。
@@ -774,8 +810,12 @@ final class PluginHostModel {
             .sorted(by: { $0.key < $1.key })
             .map { "\($0.key.prefix(8)):k\(settingsKeyCount($0.value.settings))/st\($0.value.state)" }
             .joined(separator: ",")
-        hooks.log("settings 写盘[\(caller)][\(pluginUUID)] ctx=\(summary)")
-        settingsStore.persist(document, pluginUUID: pluginUUID)
+        // 先 persist 再按结果报告:原顺序「日志在落盘前」把意图当结果,排障误导
+        if settingsStore.persist(document, pluginUUID: pluginUUID) {
+            hooks.log("settings 写盘[\(caller)][\(pluginUUID)] ctx=\(summary)")
+        } else {
+            hooks.log("settings 落盘失败[\(caller)][\(pluginUUID)]:内存真相已更新,磁盘未写入,重启将丢失本次变更")
+        }
     }
 
     /// 内存真相访问:懒加载一次,此后进程内永不重载
@@ -846,6 +886,9 @@ final class PluginHostModel {
             }
             runtime.wantsSpawn = false
             runtime.webview = webview
+            // 零实例时的补拉(如 reviveRuntimes)直接落在闸门关态,不空转推拍
+            runtime.pulseGated = false
+            syncPulseGate(pluginUUID: runtime.manifest.pluginUUID)
             hooks.log("已拉起 HTML 插件页:\(runtime.manifest.pluginUUID) @:\(port)")
             return
         }
@@ -862,10 +905,12 @@ final class PluginHostModel {
             port: port,
             infoJSON: infoJSON
         )
-        process.onExit = { [weak self] _, code, tail in
+        process.onExit = { [weak self] exited, code, tail in
+            // 用闭包回传的进程参数判定身份,不强捕获 process:闭包被 onExit 属性强持有,
+            // 捕获即成 PluginProcess ↔ 闭包保留环,对象与诊断管道 fd 永不释放
             Task { @MainActor in
-                guard let self, let runtime = self.runtimes[process.pluginUUID],
-                      runtime.process === process
+                guard let self, let runtime = self.runtimes[exited.pluginUUID],
+                      runtime.process === exited
                 else { return } // 已被收割/替换
                 runtime.process = nil
                 self.hooks.log("插件进程退出 code=\(code)\(tail.isEmpty ? "" : " | \(tail.suffix(300))")")
@@ -901,6 +946,18 @@ final class PluginHostModel {
 
     private func hasInstances(pluginUUID: String) -> Bool {
         instances.values.contains { $0.pluginUUID == pluginUUID }
+    }
+
+    /// 推拍闸门:插件可见实例数 0↔>0 跳变时暂停/恢复 HTML 运行时的宿主推拍。
+    /// 换页后 contexts 为空时,每秒一次的 evaluateJavaScript 往返 + WebContent canvas
+    /// 重绘 + 文件桥读盘全是不产生任何可见产出的白烧。推拍所有权归宿主的 §6.13 契约
+    /// 不变——只是宿主侧暂停节拍;node 进程不关停(保持 Elgato 常驻语义与 respawn 预算)
+    private func syncPulseGate(pluginUUID: String) {
+        guard let runtime = runtimes[pluginUUID], runtime.webview != nil else { return }
+        let shouldGate = !hasInstances(pluginUUID: pluginUUID)
+        guard runtime.pulseGated != shouldGate else { return }
+        runtime.pulseGated = shouldGate
+        runtime.webview?.setPulseEnabled(!shouldGate)
     }
 
     // MARK: - 发送辅助

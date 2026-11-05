@@ -182,3 +182,45 @@ private extension String {
         hasSuffix(suffix) ? String(dropLast(suffix.count)) : self
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension SDManifestTests {
+    /// resolveImageURL 沙盒:绝对路径与 ".." 穿越一律拒(manifest 是插件作者控制的输入)
+    @Test("resolveImageURL 沙盒:相对可解析,绝对路径与穿越拒绝")
+    func resolveImageURLSandbox() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-manifest-sandbox-\(UUID().uuidString)")
+        let images = root.appendingPathComponent("images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        try Data([0x89]).write(to: images.appendingPathComponent("icon.png"))
+
+        // 相对路径:无扩展名探测命中
+        #expect(SDManifest.resolveImageURL(pluginRoot: root, manifestPath: "images/icon") != nil)
+        // 绝对路径:即使真实存在也拒
+        #expect(SDManifest.resolveImageURL(pluginRoot: root, manifestPath: "/etc/hosts") == nil)
+        // ".." 穿越越出插件根:拒
+        let outside = root.deletingLastPathComponent().appendingPathComponent("outside.png")
+        try Data([0x89]).write(to: outside)
+        #expect(SDManifest.resolveImageURL(pluginRoot: root, manifestPath: "images/../../outside") == nil)
+    }
+
+    /// canonicalPath:符号链接目录与真身同一路径;不存在的末段保留原样但前缀已解析
+    @Test("canonicalPath:软链等价 + 不存在末段保留")
+    func canonicalPathResolvesSymlinks() throws {
+        let real = FileManager.default.temporaryDirectory
+            .appendingPathComponent("opendeck-canonical-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let link = real.deletingLastPathComponent().appendingPathComponent("opendeck-canonical-link-\(UUID().uuidString)")
+        try? FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        #expect(SDManifest.canonicalPath(link) == SDManifest.canonicalPath(real))
+        // 末段不存在(realpath 逐级退化):前缀仍是真身路径
+        let ghost = link.appendingPathComponent("no/such/file.json")
+        let canonicalGhost = SDManifest.canonicalPath(ghost)
+        #expect(canonicalGhost.hasPrefix(SDManifest.canonicalPath(real)))
+        #expect(canonicalGhost.hasSuffix("no/such/file.json"))
+        try? FileManager.default.removeItem(at: link)
+    }
+}

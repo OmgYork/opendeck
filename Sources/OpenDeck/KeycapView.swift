@@ -7,20 +7,29 @@ import SwiftUI
 /// iconPath → NSImage 缓存。KeycapView 每次求值都读盘的话,按一次键(全格重估)
 /// 就是 15 次磁盘 IO;图标文件内容基本不变,按路径缓存即可(换图 = 换路径,天然失效;
 /// 同路径覆写内容不自动失效——当前无此场景,AppIconCache 同 bundleID 重生成亦视为同图)。
+/// 条目是解码位图(256pt 应用图标可达 0.25–1MB/张),LRU 上限防会话内无界增长
 @MainActor
 private enum KeycapImageCache {
     private static var images: [String: NSImage] = [:]
+    private static var order: [String] = [] // 命中序(FIFO 淘汰即可,无需精确 LRU)
+    private static let limit = 64
 
     static func image(at path: String) -> NSImage? {
         if let cached = images[path] { return cached }
         guard let image = NSImage(contentsOfFile: path) else { return nil }
+        if images.count >= limit, let oldest = order.first {
+            images.removeValue(forKey: oldest)
+            order.removeFirst()
+        }
         images[path] = image
+        order.append(path)
         return image
     }
 }
 
 /// GIF 底图视图:NSImageView 承载动画 GIF,`animates` 控制播放(悬停即播,离开停回首帧)。
 /// 设备端不受影响——IconRenderer 取 GIF 首帧画静态键面。
+/// 解码复用 KeycapImageCache(调色盘页签切换即重建子树,不缓存则每次整读+解码)
 struct GifImageView: NSViewRepresentable {
     let path: String
     let animates: Bool
@@ -28,7 +37,7 @@ struct GifImageView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSImageView {
         let view = NSImageView()
         view.imageScaling = .scaleProportionallyUpOrDown
-        view.image = NSImage(contentsOfFile: path)
+        view.image = KeycapImageCache.image(at: path)
         view.animates = animates
         return view
     }
@@ -109,7 +118,7 @@ struct KeycapView: View {
                         .scaledToFit()
                         .rotationEffect(.degrees(180))
                         .allowsHitTesting(false)
-                } else if let path = config.iconPath, path.hasSuffix(".gif") {
+                } else if let path = config.iconPath, path.lowercased().hasSuffix(".gif") {
                     // GIF 底图:常态显示首帧,悬停(交互态)播放——磁贴在盘上不通电原则
                     GifImageView(path: path, animates: hovering && interactive)
                         .allowsHitTesting(false)

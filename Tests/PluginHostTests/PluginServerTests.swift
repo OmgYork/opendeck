@@ -144,3 +144,59 @@ struct PluginServerTests {
         }
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension PluginServerTests {
+    /// 握手前的无界 inbox:header 永不来齐的连接在 64KB 专用上限处熔断。
+    /// 旧实现提前 return 跳过了握手后的 32MB 检查,本地进程可无界吃内存 + O(n²) 扫描
+    @Test("握手前 inbox 上限:不发 terminato 的洪水连接被断开")
+    func preHandshakeFloodBreaksConnection() async throws {
+        let server = PluginServer()
+        final class Box: @unchecked Sendable {
+            var closed = false
+        }
+        let box = OSAllocatedUnfairLock(initialState: Box())
+        server.onClose = { _ in box.withLock { $0.closed = true } }
+        server.onError = { _ in } // 熔断本身会报非法升级请求,不按错误断言
+
+        server.start()
+        for _ in 0..<150 where server.port == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(server.port != 0, "监听未就绪")
+
+        // 裸 socket,不发升级头,只灌无 terminator 的字节
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        try #require(descriptor >= 0)
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_port = server.port.bigEndian
+        address.sin_addr = in_addr(s_addr: INADDR_LOOPBACK.bigEndian)
+        let connectResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr>.size))
+            }
+        }
+        try #require(connectResult == 0)
+        var timeout = timeval(tv_sec: 3, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        try sendAll(descriptor, Data(repeating: UInt8(ascii: "A"), count: 80 * 1024))
+
+        // 服务端熔断 → close → 读到 EOF(0)或 ECONNRESET
+        var sawClose = false
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            let count = read(descriptor, &buffer, buffer.count)
+            if count <= 0 { sawClose = true; break }
+            try sendAll(descriptor, Data(repeating: UInt8(ascii: "A"), count: 16 * 1024))
+            if box.withLock({ $0.closed }) { sawClose = true; break }
+        }
+        #expect(sawClose || box.withLock({ $0.closed }), "洪水连接应被服务端熔断")
+        Darwin.close(descriptor)
+        server.stop()
+    }
+}

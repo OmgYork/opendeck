@@ -63,3 +63,22 @@ struct MonitorCommandTests {
         #expect(decoded == .inputToggle)
     }
 }
+
+// MARK: - §6.26 深度审计轮新增闸门
+
+extension MonitorCommandTests {
+    /// 确定性输入命令的乐观目标 = 命令目标本身;toggle/其余 = 磁盘状态取反。
+    /// 旧逻辑一律取反:「已在 Mac 按『切到 Mac』」被演成反向迁移 + 红色回退
+    @Test("MonitorInput 乐观目标:确定性命令取命令方向")
+    @MainActor
+    func optimisticTargetFollowsDeterministicCommand() {
+        // 已在 Mac 时按「切到 Mac」:目标 = Mac(不播反向迁移,按压方按「已在目标」处理)
+        #expect(MonitorInputAnimator.optimisticTarget(command: .monitor(.inputMac), disk: .mac) == .mac)
+        #expect(MonitorInputAnimator.optimisticTarget(command: .monitor(.inputMac), disk: .pc) == .mac)
+        #expect(MonitorInputAnimator.optimisticTarget(command: .monitor(.inputPC), disk: .pc) == .pc)
+        // toggle 仍取反
+        #expect(MonitorInputAnimator.optimisticTarget(command: .monitor(.inputToggle), disk: .mac) == .pc)
+        // 无命令(旧调用方)保持取反语义
+        #expect(MonitorInputAnimator.optimisticTarget(command: nil, disk: .pc) == .mac)
+    }
+}
