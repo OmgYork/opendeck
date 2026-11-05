@@ -374,3 +374,126 @@ enum MediaTileRenderer {
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
     }
 }
+
+// MARK: - 导航卡尺(槽 14/15 保留键,§6.34)
+
+/// 场景/页导航键专用渲染:场景 = 层叠卡片(切换 = 卡片交换),页面 = 竖排页点滑轨
+/// (翻页 = 点阵滑移)。保留槽强制导航动作,用户在普通键位绑的同款动作同享此设计
+@MainActor
+enum NavTileRenderer {
+    enum Kind: Equatable {
+        case scene
+        case page
+
+        init?(action: KeyAction?) {
+            switch action {
+            case .nextScene, .previousScene: self = .scene
+            case .nextPage, .previousPage: self = .page
+            default: return nil
+            }
+        }
+
+        var label: String { self == .scene ? "场景" : "页面" }
+    }
+
+    static func accent(for kind: Kind) -> CGColor {
+        kind == .scene ? DarkTileStyle.gpuAccent : DarkTileStyle.offGray
+    }
+
+    /// 静息帧
+    static func image(kind: Kind, side: Int = StreamDock293S.keySize(column: 0)) -> CGImage? {
+        render(kind: kind, side: side, slide: 0)
+    }
+
+    /// 方向过渡帧:6 帧,内容沿行进方向滑移一档并回弹(offset 正 = 下/右)。
+    /// final 由调用方给(静息帧),帧序列不含静息
+    static func transitionFrames(kind: Kind, offset: Int,
+                                 side: Int = StreamDock293S.keySize(column: 0)) -> [CGImage]? {
+        guard offset != 0 else { return nil }
+        let count = 6
+        var frames: [CGImage] = []
+        for step in 0..<count {
+            let p = SleepGuardTileRenderer.easeOutCubic(Double(step + 1) / Double(count))
+            // 滑移包络:0 → 峰值(1) → 回 0(出去又回来,「拨一下」的手感)
+            let envelope = sin(p * .pi)
+            let slide = CGFloat(offset) * 14 * CGFloat(envelope)
+            if let image = render(kind: kind, side: side, slide: slide) {
+                frames.append(image)
+            }
+        }
+        return frames.isEmpty ? nil : frames
+    }
+
+    /// slide:内容整体位移(px,含方向);0 = 静息
+    private static func render(kind: Kind, side: Int, slide: CGFloat) -> CGImage? {
+        guard let ctx = DarkTileCanvas.beginCanvas(side: side) else { return nil }
+        let s = CGFloat(side) / 112
+        let accent = accent(for: kind)
+        let dx = slide * (kind == .scene ? 1 : 0)
+        let dy = slide * (kind == .page ? 1 : 0)
+
+        DarkTileCanvas.drawText(kind.label, size: 12 * s, weight: .semibold,
+                                color: accent.copy(alpha: 0.85)!,
+                                rect: CGRect(x: 14 * s, y: CGFloat(side) - 30 * s, width: 84 * s, height: 16 * s),
+                                ctx: ctx, align: .left, glow: false)
+
+        switch kind {
+        case .scene:
+            drawSceneCards(ctx: ctx, center: CGPoint(x: 56 * s + dx, y: 56 * s + dy), scale: s, accent: accent)
+        case .page:
+            drawPageDots(ctx: ctx, center: CGPoint(x: 56 * s + dx, y: 56 * s + dy), scale: s, accent: accent)
+        }
+
+        guard let upright = ctx.makeImage() else { return nil }
+        return DarkTileCanvas.finishRotated(upright, side: side, space: ctx.colorSpace)
+    }
+
+    /// 层叠卡片:后卡(dim)右下偏移,前卡(accent 辉光)居中——「多场景堆叠」的直觉像
+    private static func drawSceneCards(ctx: CGContext, center: CGPoint, scale: CGFloat, accent: CGColor) {
+        let cardW = 34 * scale, cardH = 30 * scale
+        // 后卡
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.14))
+        let back = CGPath(roundedRect: CGRect(x: center.x - cardW / 2 + 7 * scale, y: center.y - cardH / 2 - 6 * scale,
+                                              width: cardW, height: cardH),
+                          cornerWidth: 6 * scale, cornerHeight: 6 * scale, transform: nil)
+        ctx.addPath(back)
+        ctx.fillPath()
+        // 前卡(辉光描边 + 微填充)
+        ctx.setShadow(offset: .zero, blur: 7, color: accent)
+        ctx.setStrokeColor(accent)
+        ctx.setLineWidth(2.5 * scale)
+        let front = CGPath(roundedRect: CGRect(x: center.x - cardW / 2 - 3 * scale, y: center.y - cardH / 2 + 2 * scale,
+                                               width: cardW, height: cardH),
+                           cornerWidth: 6 * scale, cornerHeight: 6 * scale, transform: nil)
+        ctx.addPath(front)
+        ctx.strokePath()
+        ctx.setFillColor(accent.copy(alpha: 0.16)!)
+        ctx.addPath(front)
+        ctx.fillPath()
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+        // 前卡中心小圆点(场景芯)
+        ctx.setFillColor(accent)
+        ctx.fillEllipse(in: CGRect(x: center.x - 3 * scale - 3 * scale, y: center.y + 2 * scale - 3 * scale,
+                                   width: 6 * scale, height: 6 * scale))
+    }
+
+    /// 页点滑轨:三枚竖排页点,当前(中)点亮辉光,上下点 dim——「多页串联」的直觉像
+    private static func drawPageDots(ctx: CGContext, center: CGPoint, scale: CGFloat, accent: CGColor) {
+        let spacing = 13 * scale
+        for offset in [-1, 0, 1] {
+            let dotCenter = CGPoint(x: center.x, y: center.y + CGFloat(offset) * spacing)
+            if offset == 0 {
+                ctx.setShadow(offset: .zero, blur: 7, color: accent)
+                ctx.setFillColor(accent)
+                ctx.fillEllipse(in: CGRect(x: dotCenter.x - 6 * scale, y: dotCenter.y - 6 * scale,
+                                           width: 12 * scale, height: 12 * scale))
+                ctx.setShadow(offset: .zero, blur: 0, color: nil)
+            } else {
+                ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.30))
+                ctx.setLineWidth(1.5 * scale)
+                ctx.strokeEllipse(in: CGRect(x: dotCenter.x - 4.5 * scale, y: dotCenter.y - 4.5 * scale,
+                                             width: 9 * scale, height: 9 * scale))
+            }
+        }
+    }
+}

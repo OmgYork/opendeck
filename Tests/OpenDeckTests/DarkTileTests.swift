@@ -89,3 +89,25 @@ extension DarkTileTests {
         #expect(second.cpu != nil, "第二次采样 CPU 应出值,实际 \(String(describing: second.cpu))")
     }
 }
+
+extension DarkTileTests {
+    /// 导航卡尺(§6.34):静息/过渡帧契约
+    @Test("NavTile:场景/页静息帧互异;从 action 识别 Kind")
+    func navRestFrames() throws {
+        let scene = try #require(NavTileRenderer.image(kind: .scene))
+        let page = try #require(NavTileRenderer.image(kind: .page))
+        #expect(scene.width == 112)
+        #expect(!Self.sameImage(scene, page))
+        #expect(NavTileRenderer.Kind(action: .nextScene) == .scene)
+        #expect(NavTileRenderer.Kind(action: .previousPage) == .page)
+        #expect(NavTileRenderer.Kind(action: .gotoPage(pageID: UUID())) == nil, "gotoPage 走既有路径,不入导航卡尺")
+        #expect(NavTileRenderer.Kind(action: nil) == nil)
+    }
+
+    @Test("NavTile 过渡帧:方向非零 6 帧,零方向拒绝")
+    func navTransitionFrames() {
+        #expect(NavTileRenderer.transitionFrames(kind: .scene, offset: 1)?.count == 6)
+        #expect(NavTileRenderer.transitionFrames(kind: .page, offset: -1)?.count == 6)
+        #expect(NavTileRenderer.transitionFrames(kind: .page, offset: 0) == nil)
+    }
+}

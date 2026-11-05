@@ -3,7 +3,7 @@
 > 供总设计师(做架构决策)与执行 agent(写代码)共用的一页式上下文包。
 > 所有事实均已本机实测或溯源到可查实现,**不要重新调查,直接在此之上设计**。
 > **文档分工**:本文件 = 开发史与设计决策(根因/协议/里程碑);给其他 agent 的操作手册见 [AGENT-GUIDE.md](AGENT-GUIDE.md);状态灯接入见 [Scripts/状态灯接入指南.md](Scripts/状态灯接入指南.md);显示器动效设计见 [Design/MonitorInputIcon/README.md](Design/MonitorInputIcon/README.md)。
-> 最后更新:2026-11-06(暗夜仪表轮:槽4-8 重设计+变化动效;160 测全绿)
+> 最后更新:2026-11-06(导航卡尺轮:槽14/15 重设计+方向滑移动效;162 测全绿)
 > **M3 队列已全部消费**:Property Inspector(✅ §6.9/§6.10)> 多页面(✅ §6.6)> HTML 家族(✅ §6.11)> 自研 ZCode 状态灯(✅ §6.12/§6.13)> 多状态图标(✅ §6.15)> 登录自启与睡眠唤醒(✅ §6.16)> 状态灯置前(✅ §6.17)> Stats(✅ §6.18)> icon 偏移与 112 定案(✅ §6.19/§6.20)> 鲸鱼娘动画(✅ §6.21)> 显示器输入源动效(✅ §6.22)。**剩余挂账:官方 HTML 插件逐个视觉适配(time 等插件自身视图不渲染)。**
 
 ---
@@ -415,3 +415,13 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **重大踩坑:StatTileAnimator.fx.onFrame 从未接线**——扫摆帧与终帧全部发往 nil,瓷贴永远停在 applyKey 的占位帧(fraction 0 空弧)。症状极具迷惑性:三键都有值(GPU/温度的占位帧带 lastSample 实时文本)唯独 CPU 显 "--"(其占位定格在启动时 lastSample 尚无 cpu 的时刻),且日志显示 apply/update/fx.play 全链「健康」。四层插桩(refresh→task→apply per-slot→fx play/final)才定位到「帧发了没人接」。修复 = init 里 fx.onFrame 转发自身 onFrame。**教训:新引出的发射器,接线断言必须与发射器同时落地——「回调可选链不报错」恰是这类 bug 的完美藏身处**。
 - **调试方法论**:本机 GUI 自动化(computer-use)截图验收 + oslog 分层插桩(release 可用,勿用 #if DEBUG 包 Logger)组合,四轮定位一轮修复;`grep -c` 在 `&&` 链中因零匹配退出码 1 会静默短路后续命令(本轮 make-app 曾被跳过,错把旧二进制当新构建诊断)。
 - **验证**:160 测 3× 全绿零警告(净增 7:温色映射/弧分率/扫摆帧/睡眠锁三态/锁扣过渡/媒体六种/采样探针);GUI 截图终验:GPU 77% 蓝弧、CPU 53% 绿弧、温度 73° 琥珀弧、辉光挂锁、媒体环全部同源渲染。设备端弧线扫摆与锁扣开合待用户物理验收。
+
+### 6.34 导航卡尺轮(2026-11-06 凌晨,槽 14/15 重设计+方向动效;162 测全绿)
+- **需求**:用户「为槽位 14 和 15 也做升级」——保留导航键(下一场景/下一页)是最后的粉彩实心块。
+- **设计**(NavTileRenderer 追加进 DarkTiles.swift,「暗夜仪表」语言):
+  - **场景键 = 层叠卡片**:后卡 dim 右下偏移 + 前卡 accent 辉光描边含场景芯圆点——「多场景堆叠」直觉像;
+  - **页面键 = 页点滑轨**:三枚竖排页点,当前点辉光实心、上下点空心描边——「多页串联」直觉像;
+  - 深底 + 玻璃内衬 + 左上「场景/页面」标签,同语言零例外。
+- **方向动效**:按压导航键 → 6 帧滑移包络(sin(pπ),出去又回来 =「拨一下」手感),场景横向、页面纵向,方向随 offset 镜像。触发链:KeyPressRouter.handleDeviceAction 四导航案 → 新回调 `onNavTransition(index,kind,offset)` → AppModel 以 NavTileRenderer.transitionFrames + tileFX.play 播放(applyKey 已在 switch 内先跑完,过渡帧不会被清场)。
+- **覆盖面**:保留槽 13/14 强制渲染 + 用户在普通键位绑定的 previousScene/nextScene/previousPage/nextPage 同享此设计;gotoPage/pageIndicator 走既有路径(页码指示键的动态标题不适用卡尺)。
+- **验证**:162 测 3× 全绿零警告(净增 2:静息帧互异 + Kind 识别 + 过渡帧契约);GUI 截图终验:场景/页面两键与整套暗夜仪表语言完全统一。设备端方向滑移待用户物理验收。

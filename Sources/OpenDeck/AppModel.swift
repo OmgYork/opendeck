@@ -150,6 +150,14 @@ final class AppModel {
             heatmap: heatmap, monitorInput: monitorInput, pressPulse: pressPulse,
             brightness: brightness, sceneRouter: sceneRouter
         )
+        keyRouter.onNavTransition = { [weak self] index, kind, offset in
+            guard let self else { return }
+            // 方向过渡帧:拨一下的滑移包络,收尾回静息(applyKey 已在 switch 内先跑完)
+            if let frames = NavTileRenderer.transitionFrames(kind: kind, offset: offset),
+               let final = NavTileRenderer.image(kind: kind) {
+                self.tileFX.play(index: index, frames: frames, final: final)
+            }
+        }
         system.onLog = { [weak self] line in
             self?.appendLog(line)
         }
@@ -620,6 +628,12 @@ final class AppModel {
             } else {
                 pressPulse.detach(ifIndex: index)
             }
+            return
+        }
+        // 导航键(场景/页,含保留槽):暗夜仪表专用渲染(§6.34,忽略底色/标题配置)
+        if let navKind = NavTileRenderer.Kind(action: key.action),
+           let image = NavTileRenderer.image(kind: navKind) {
+            setKeyImage(index: index, image: image)
             return
         }
         // 页面指示键:标题动态显示 "N/M",随页面切换自动刷新

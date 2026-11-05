@@ -19,6 +19,8 @@ final class KeyPressRouter {
     var onPressedChange: ((_ index: Int, _ down: Bool) -> Void)?
     /// 合盖休眠锁:要跑 sudo、回读并弹窗,留在 AppModel,由它决定异步路径
     var onSleepGuard: ((_ index: Int) -> Void)?
+    /// 导航键方向过渡(§6.34):场景/页切换后播滑移动画(index/类/方向)
+    var onNavTransition: ((_ index: Int, _ kind: NavTileRenderer.Kind, _ offset: Int) -> Void)?
 
     private let device: DeviceController
     private let config: ConfigStore
@@ -95,7 +97,7 @@ final class KeyPressRouter {
             return
         }
         // 设备控制动作(页面/亮度/熄屏)本地消化,不经 ActionRunner
-        if handleDeviceAction(action) { return }
+        if handleDeviceAction(action, index: index) { return }
         // 动效键面:先起动画,再照常执行动作(乐观展示,状态文件随后对账);
         // 确定性输入命令(inputMac/inputPC)把命令目标传给动画器,别把「已在其位」演成失败回退
         if key.animation == .monitorInput {
@@ -111,12 +113,15 @@ final class KeyPressRouter {
     // MARK: - 私有
 
     /// 页面/亮度/熄屏类动作:纯本地状态操作。返回 true 表示已消化
-    private func handleDeviceAction(_ action: KeyAction) -> Bool {
+    private func handleDeviceAction(_ action: KeyAction, index: Int) -> Bool {
+        func nav(_ kind: NavTileRenderer.Kind, _ offset: Int) {
+            onNavTransition?(index, kind, offset)
+        }
         switch action {
-        case .previousPage: sceneRouter.switchPage(offset: -1)
-        case .nextPage: sceneRouter.switchPage(offset: 1)
-        case .previousScene: sceneRouter.switchScene(offset: -1)
-        case .nextScene: sceneRouter.switchScene(offset: 1)
+        case .previousPage: sceneRouter.switchPage(offset: -1); nav(.page, -1)
+        case .nextPage: sceneRouter.switchPage(offset: 1); nav(.page, 1)
+        case .previousScene: sceneRouter.switchScene(offset: -1); nav(.scene, -1)
+        case .nextScene: sceneRouter.switchScene(offset: 1); nav(.scene, 1)
         case .gotoPage(let pageID):
             // 兼容旧配置的动作:跨场景按 Page.id 定位
             sceneRouter.gotoLegacyPage(pageID)
