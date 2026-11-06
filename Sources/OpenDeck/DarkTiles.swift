@@ -248,9 +248,13 @@ enum SleepGuardTileRenderer {
         let lift = shackleLift
         let halfGap: CGFloat = (shackleOpen ? 6.5 : 9) * scale
         let archTop = bodyRect.maxY + (shackleOpen ? 4 * scale : 8 * scale) + lift
-        ctx.move(to: CGPoint(x: center.x - halfGap, y: bodyRect.maxY - 1 * scale))
+        // 锁梁 = 连续路径:左腿自锁体上行 → 上拱(CG y 轴向上,π→0 过顶必须
+        // clockwise:true,§6.35 方向坑) → 右腿下行扎回锁体。双腿都触体,无悬空端
+        ctx.addLine(to: CGPoint(x: center.x - halfGap, y: bodyRect.maxY + 1 * scale))
+        ctx.addLine(to: CGPoint(x: center.x - halfGap, y: archTop))
         ctx.addArc(center: CGPoint(x: center.x, y: archTop),
-                   radius: halfGap, startAngle: .pi, endAngle: 0, clockwise: false)
+                   radius: halfGap, startAngle: .pi, endAngle: 0, clockwise: true)
+        ctx.addLine(to: CGPoint(x: center.x + halfGap, y: bodyRect.maxY + 1 * scale))
         ctx.strokePath()
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
