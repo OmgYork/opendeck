@@ -132,6 +132,11 @@ enum DarkTileCanvas {
 /// 睡眠锁专用渲染:深底 + 辉光挂锁,状态即视觉(ON 绿闭合 / OFF 灰开扣 / 未授权琥珀)。
 /// 忽略键位底色配置——本键的设计语言由状态色驱动
 @MainActor
+// MARK: - 合盖模式徽章(槽 5;原「睡眠锁」——锁的意象有歧义,§6.40 改为合盖+灯缝)
+
+/// 合盖模式键渲染:深底玻璃 + 合盖笔记本剪影,盖缝透光 = 机器还醒着。
+/// 事实源 pmset SleepDisabled(经 AppModel.sleepGuardEnabled);
+/// 文案直接陈述合盖行为(合盖不休眠/合盖休眠),不用 ON/OFF(挂在「睡眠锁」名下有歧义)。
 enum SleepGuardTileRenderer {
     enum VisualState: Equatable {
         case on, off, unauthorized
@@ -146,36 +151,6 @@ enum SleepGuardTileRenderer {
         }
     }
 
-    /// stateText 随状态;lockOpen 随 ON/OFF(unauthorized 画闭合锁 + 右下警示点)
-    static func image(state: VisualState, side: Int = StreamDock293S.keySize(column: 0)) -> CGImage? {
-        guard let ctx = DarkTileCanvas.beginCanvas(side: side) else { return nil }
-        let s = CGFloat(side) / 112
-        let accent = accent(state)
-
-        let labelRect = CGRect(x: 14 * s, y: CGFloat(side) - 30 * s, width: 84 * s, height: 16 * s)
-        DarkTileCanvas.drawText("睡眠锁", size: 12 * s, weight: .semibold,
-                                color: accent.copy(alpha: 0.85)!,
-                                rect: labelRect,
-                                ctx: ctx, align: .left, glow: false)
-
-        // 挂锁:锁体圆角矩形 + shackle 弧。open 时 shackle 上移并倾斜(开扣)
-        let open = state == .off
-        drawPadlock(ctx: ctx, center: CGPoint(x: 56 * s, y: 56 * s), scale: s,
-                    accent: accent, shackleOpen: open, warn: state == .unauthorized)
-
-        let statusText = Self.statusText(for: state)
-        let statusRect = CGRect(x: 0, y: 12 * s, width: CGFloat(side), height: 18 * s)
-        DarkTileCanvas.drawText(statusText, size: 12 * s, weight: .bold,
-                                color: accent,
-                                rect: statusRect,
-                                ctx: ctx)
-
-        guard let upright = ctx.makeImage() else { return nil }
-        return DarkTileCanvas.finishRotated(upright, side: side, space: ctx.colorSpace)
-    }
-
-    /// 状态文案:直接陈述合盖行为(「ON/OFF」挂在「睡眠锁」名下有歧义——
-    /// 锁的是睡眠还是开关?行为陈述不可误读)
     static func statusText(for state: VisualState) -> String {
         switch state {
         case .on: return "合盖不休眠"
@@ -185,93 +160,110 @@ enum SleepGuardTileRenderer {
         }
     }
 
-    /// 状态翻转过渡帧:shackle 开合 8 帧(shackle 垂直位移 + 角度插值)。
-    /// from == to / unauthorized 涉及时返回 nil(直接换帧,不做开合动画)
+    /// 静息帧
+    static func image(state: VisualState, side: Int = StreamDock293S.keySize(column: 0)) -> CGImage? {
+        render(state: state, side: side, lightAmount: nil)
+    }
+
+    /// 状态翻转过渡帧:on↔off = 灯缝渐熄/渐亮 8 帧(easeInOut);涉 unauthorized/unknown 直接换帧
     static func transitionFrames(from: VisualState, to: VisualState,
                                  side: Int = StreamDock293S.keySize(column: 0)) -> [CGImage]? {
-        guard from != to, from != .unauthorized, to != .unauthorized else { return nil }
+        guard from != to, from != .unauthorized, to != .unauthorized,
+              from != .unknown, to != .unknown else { return nil }
         let count = 8
         var frames: [CGImage] = []
         for step in 0..<count {
-            let p = easeOutCubic(Double(step) / Double(count - 1))
-            let startOpen = from == .off
-            let openAmount = startOpen ? 1 - p : p // 闭合方向 vs 开启方向
-            guard let image = image(state: to, side: side, shackleOverride: openAmount) else { continue }
-            frames.append(image)
+            let p = SleepGuardTileRenderer.easeOutCubic(Double(step + 1) / Double(count))
+            // 灯缝强度:from 的亮度 → to 的亮度线性插值(on=1/off=0)
+            let fromLight: CGFloat = from == .on ? 1 : 0
+            let toLight: CGFloat = to == .on ? 1 : 0
+            let light = fromLight + (toLight - fromLight) * CGFloat(p)
+            if let image = render(state: to, side: side, lightAmount: light) {
+                frames.append(image)
+            }
         }
         return frames.isEmpty ? nil : frames
     }
 
-    /// shackleOverride: nil = 按 state 画;0..1 = 开扣程度(过渡帧插值用)
-    private static func image(state: VisualState, side: Int, shackleOverride: Double?) -> CGImage? {
+    /// lightAmount: 缝光强度 0..1(过渡插值);nil = 按 state 取(on=1/其余=0)
+    private static func render(state: VisualState, side: Int, lightAmount: CGFloat?) -> CGImage? {
         guard let ctx = DarkTileCanvas.beginCanvas(side: side) else { return nil }
         let s = CGFloat(side) / 112
         let accent = accent(state)
-        let open = shackleOverride.map { $0 > 0.5 } ?? (state == .off)
+        let awake = state == .on
+        let light = lightAmount ?? (awake ? 1 : 0)
 
-        let labelRect2 = CGRect(x: 14 * s, y: CGFloat(side) - 30 * s, width: 84 * s, height: 16 * s)
-        DarkTileCanvas.drawText("睡眠锁", size: 12 * s, weight: .semibold,
+        let labelRect = CGRect(x: 14 * s, y: CGFloat(side) - 30 * s, width: 84 * s, height: 16 * s)
+        DarkTileCanvas.drawText("合盖模式", size: 12 * s, weight: .semibold,
                                 color: accent.copy(alpha: 0.85)!,
-                                rect: labelRect2,
+                                rect: labelRect,
                                 ctx: ctx, align: .left, glow: false)
-        let padlockCenter = CGPoint(x: 56 * s, y: 56 * s)
-        let shackleLift: CGFloat = shackleOverride.map { CGFloat($0) * 6 * s } ?? (open ? 4 * s : 0)
-        drawPadlock(ctx: ctx, center: padlockCenter, scale: s,
-                    accent: accent, shackleOpen: open,
-                    warn: state == .unauthorized,
-                    shackleLift: shackleLift)
-        DarkTileCanvas.drawText(state == .unauthorized ? "未授权" : (state == .on ? "ON" : "OFF"),
-                                size: 12 * s, weight: .bold,
+
+        drawClamshell(ctx: ctx, center: CGPoint(x: 56 * s, y: 52 * s), scale: s,
+                      accent: accent, awake: awake,
+                      warn: state == .unauthorized, lightAmount: Double(light))
+
+        let statusRect = CGRect(x: 0, y: 12 * s, width: CGFloat(side), height: 18 * s)
+        DarkTileCanvas.drawText(statusText(for: state), size: 12 * s, weight: .bold,
                                 color: accent,
-                                rect: CGRect(x: 0, y: 12 * s, width: CGFloat(side), height: 18 * s),
+                                rect: statusRect,
                                 ctx: ctx)
+
         guard let upright = ctx.makeImage() else { return nil }
         return DarkTileCanvas.finishRotated(upright, side: side, space: ctx.colorSpace)
     }
 
-    /// 挂锁几何:锁体 30×24 圆角矩形,shackle 为上拱弧;辉光 = 同色 shadow
-    private static func drawPadlock(ctx: CGContext, center: CGPoint, scale: CGFloat,
-                                    accent: CGColor, shackleOpen: Bool, warn: Bool,
-                                    shackleLift: CGFloat = 0) {
-        let bodyW: CGFloat = 30 * scale, bodyH: CGFloat = 24 * scale
-        let bodyRect = CGRect(x: center.x - bodyW / 2, y: center.y - bodyH / 2 - 4 * scale,
-                              width: bodyW, height: bodyH)
-        ctx.setShadow(offset: .zero, blur: 7, color: accent)
-        ctx.setFillColor(accent)
-        let body = CGPath(roundedRect: bodyRect, cornerWidth: 5 * scale, cornerHeight: 5 * scale, transform: nil)
-        ctx.addPath(body)
+    static func easeOutCubic(_ p: Double) -> Double {
+        1 - pow(1 - min(max(p, 0), 1), 3)
+    }
+
+    /// 合盖笔记本:盖子(横圆角条)+ 底座(宽薄条),中缝为状态光源。
+    /// awake = 盖子带 accent 微光;lightAmount = 缝光强度(过渡插值)。
+    /// warn = 未授权琥珀角标。
+    private static func drawClamshell(ctx: CGContext, center: CGPoint, scale: CGFloat,
+                                      accent: CGColor, awake: Bool, warn: Bool,
+                                      lightAmount: Double) {
+        let lidW: CGFloat = 40 * scale, lidH: CGFloat = 11 * scale
+        let baseW: CGFloat = 48 * scale, baseH: CGFloat = 6 * scale
+        let lidRect = CGRect(x: center.x - lidW / 2, y: center.y - 4 * scale,
+                             width: lidW, height: lidH)
+        let baseRect = CGRect(x: center.x - baseW / 2, y: lidRect.minY - 5 * scale,
+                              width: baseW, height: baseH)
+
+        // 底座(dim 白描边)
+        ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.30))
+        ctx.setLineWidth(1.5 * scale)
+        ctx.addPath(CGPath(roundedRect: baseRect, cornerWidth: 3 * scale, cornerHeight: 3 * scale, transform: nil))
+        ctx.strokePath()
+
+        // 盖子:awake 时 accent 微填充 + 辉光描边(活着);off 暗灰
+        let lidColor = awake ? accent : DarkTileStyle.offGray
+        if awake {
+            ctx.setShadow(offset: .zero, blur: 6, color: lidColor)
+        }
+        ctx.setFillColor(lidColor.copy(alpha: awake ? 0.30 : 0.22)!)
+        let lidPath = CGPath(roundedRect: lidRect, cornerWidth: 5 * scale, cornerHeight: 5 * scale, transform: nil)
+        ctx.addPath(lidPath)
         ctx.fillPath()
-
-        // 锁孔(深底挖色)
-        ctx.setShadow(offset: .zero, blur: 0, color: nil)
-        ctx.setFillColor(DarkTileStyle.bgBottom)
-        ctx.fillEllipse(in: CGRect(x: center.x - 3.5 * scale, y: bodyRect.midY - 3.5 * scale + 1 * scale,
-                                   width: 7 * scale, height: 7 * scale))
-        ctx.fill(CGRect(x: center.x - 1.5 * scale, y: bodyRect.minY + 3 * scale,
-                        width: 3 * scale, height: 7 * scale))
-
-        // shackle:开扣时上移 + 收窄(几何插值足够传达,不做真旋转)
-        let lineWidth = 4.5 * scale
-        ctx.setStrokeColor(accent)
-        ctx.setLineWidth(lineWidth)
-        ctx.setLineCap(.round)
-        ctx.setShadow(offset: .zero, blur: 7, color: accent)
-        let lift = shackleLift
-        let halfGap: CGFloat = (shackleOpen ? 6.5 : 9) * scale
-        let archTop = bodyRect.maxY + (shackleOpen ? 4 * scale : 8 * scale) + lift
-        // 锁梁 = 连续路径:左腿自锁体上行 → 上拱(CG y 轴向上,π→0 过顶必须
-        // clockwise:true,§6.35 方向坑) → 右腿下行扎回锁体。双腿都触体,无悬空端
-        ctx.addLine(to: CGPoint(x: center.x - halfGap, y: bodyRect.maxY + 1 * scale))
-        ctx.addLine(to: CGPoint(x: center.x - halfGap, y: archTop))
-        ctx.addArc(center: CGPoint(x: center.x, y: archTop),
-                   radius: halfGap, startAngle: .pi, endAngle: 0, clockwise: true)
-        ctx.addLine(to: CGPoint(x: center.x + halfGap, y: bodyRect.maxY + 1 * scale))
+        ctx.setStrokeColor(lidColor)
+        ctx.setLineWidth(2 * scale)
+        ctx.addPath(lidPath)
         ctx.strokePath()
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
+        // 盖缝透光:盖与底座之间的缝,亮线 + 大范围辉光(状态的核心可读元素)
+        if lightAmount > 0.01 {
+            ctx.setAlpha(CGFloat(min(max(lightAmount, 0), 1)))
+            ctx.setShadow(offset: .zero, blur: 9, color: accent)
+            ctx.setFillColor(accent)
+            ctx.fill(CGRect(x: lidRect.minX + 4 * scale, y: lidRect.minY - 3.5 * scale,
+                            width: lidW - 8 * scale, height: 2 * scale))
+            ctx.setAlpha(1)
+            ctx.setShadow(offset: .zero, blur: 0, color: nil)
+        }
+
         if warn {
-            // 右下警示角标:琥珀圆 + 感叹
-            let warnCenter = CGPoint(x: center.x + 17 * scale, y: center.y - 17 * scale)
+            let warnCenter = CGPoint(x: center.x + 21 * scale, y: center.y - 19 * scale)
             ctx.setFillColor(DarkTileStyle.amber)
             ctx.fillEllipse(in: CGRect(x: warnCenter.x - 7 * scale, y: warnCenter.y - 7 * scale,
                                        width: 14 * scale, height: 14 * scale))
@@ -282,11 +274,8 @@ enum SleepGuardTileRenderer {
                                     ctx: ctx, glow: false)
         }
     }
-
-    static func easeOutCubic(_ p: Double) -> Double {
-        1 - pow(1 - min(max(p, 0), 1), 3)
-    }
 }
+
 
 // MARK: - 媒体徽章(槽 4 及全部 mediaKey 键)
 
