@@ -48,6 +48,7 @@ def main():
         pass
     if app_proc:
         fingerprint = "?"
+        running_commit = None
         m = app_proc.replace("Contents/MacOS/OpenDeck", "").rstrip("/ ") or ""
         info_plist = os.path.join(m, "Contents", "Info.plist") if m else ""
         if info_plist and os.path.exists(info_plist):
@@ -58,9 +59,21 @@ def main():
                     f"{info.get('OpenDeckBuildCommit', '?')}·{info.get('OpenDeckBuildState', '?')} "
                     f"{info.get('OpenDeckBuildTime', '?')}"
                 )
+                running_commit = info.get("OpenDeckBuildCommit")
             except Exception as e:
                 fingerprint = f"Info.plist 读取失败({e})"
-        check("OpenDeck 运行中", True, f"pid={pid} 构建 {fingerprint}")
+        # 与 git HEAD 对账(仓库内运行时):「旧二进制」从肉眼判定升级为机器判定
+        stale_note = ""
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=os.path.dirname(os.path.abspath(__file__)),
+            ).stdout.strip()
+            if head and running_commit and head != running_commit:
+                stale_note = f" ⚠落后 HEAD({head}),记得 make-app 重建+重启"
+        except Exception:
+            pass
+        check("OpenDeck 运行中", True, f"pid={pid} 构建 {fingerprint}{stale_note}")
     else:
         check("OpenDeck 运行中", False, "进程未找到 — 设备处于无人管理状态")
         print("  (未运行时后续设备相关检查仅覆盖文件面)")
