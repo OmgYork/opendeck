@@ -6,10 +6,11 @@
 
 | 你是 | 读 |
 |---|---|
-| 第一次接触本项目的 agent | [`AGENT-GUIDE.md`](AGENT-GUIDE.md)（操作手册：路径、规矩、插件契约、部署、排障） |
+| 第一次接触本项目的 agent | [`AGENTS.md`](AGENTS.md)（agent 入口）→ [`AGENT-GUIDE.md`](AGENT-GUIDE.md)（操作手册：路径、规矩、插件契约、部署、排障） |
 | 要改 OpenDeck 源码 | [`HANDOFF.md`](HANDOFF.md)（开发史、协议实测、设计决策、各里程碑根因） |
 | 只想给 agent 接一个状态灯 | [`Scripts/状态灯接入指南.md`](Scripts/状态灯接入指南.md)（模板化步骤） |
 | 要看显示器输入源动效 | [`Design/MonitorInputIcon/README.md`](Design/MonitorInputIcon/README.md) |
+| 想知道这版多了什么 | [`CHANGELOG.md`](CHANGELOG.md)（面向用户的变更摘要） |
 
 ## 快速开始
 
