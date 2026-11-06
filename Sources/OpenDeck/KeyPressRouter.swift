@@ -87,6 +87,12 @@ final class KeyPressRouter {
             Task { await ActionRunner.runHotkey(keyCode: keyCode, modifiers: modifiers, down: event.phase == .down) }
             return
         }
+        // 图像模式 toggle:自包含(无需 action,动画器自发 DDC),必须在下方
+        // 「action 为 nil 即返回」守卫之前——槽上动作清空时此键依然完整工作
+        if key.animation == .picModeToggle {
+            if event.phase == .down { picMode.handlePress(index: index) }
+            return
+        }
         // 其余动作只在按下沿触发,抬起沿不重复执行
         guard event.phase == .down, let action else { return }
         // 热力图键:读数与状态都在 animator 里,按下只转发给它自己的入口
@@ -109,11 +115,6 @@ final class KeyPressRouter {
         // 按压脉冲:纯视觉反馈,动作照常;在脉冲中连按不重起(会话自然跑完)
         if key.animation == .pressPulse {
             pressPulse.handlePress(index: index)
-        }
-        // 图像模式 toggle:先播扫动 + 动画器记目标档,动作(preserves 原样绑定的单档
-        // 命令)照常执行——若绑定档与 toggle 目标不一致,轮询对账以 DDC 实际结果为准
-        if key.animation == .picModeToggle {
-            picMode.handlePress(index: index)
         }
         Task { await ActionRunner.run(action) }
     }
