@@ -168,7 +168,9 @@ struct KeyEditView: View {
                             set: { animation = $0 }
                         )) {
                             Text("无").tag(KeyAnimation?.none)
-                            ForEach([KeyAnimation.monitorInput, .pressPulse], id: \.self) { option in
+                            // allCases 而非手写清单:新 case 落地即自动出现在选项
+                            // (picModeToggle 曾漏在这里,配置值无 tag 匹配 → Picker 显空)
+                            ForEach(KeyAnimation.allCases, id: \.self) { option in
                                 Text(option.label).tag(KeyAnimation?.some(option))
                             }
                         }
@@ -182,6 +184,11 @@ struct KeyEditView: View {
                     }
                     if animation == .pressPulse {
                         Text("按下时键面闪亮 + 轻微放大一小段(≈0.7s),静息帧与普通键相同。适配任意动作键。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if animation == .picModeToggle {
+                        Text("键面显示当前图像模式(玩家1/阅读,事实源 lg_pic_mode),按压切换到另一档。动作建议绑「图像·玩家1」或「图像·阅读」其一。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
