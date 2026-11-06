@@ -290,7 +290,8 @@ private struct MenuBarPanel: View {
             }
             Text("构建 \(appModel.buildFingerprint)")
                 .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
+                // dirty = 工作区有未提交改动(构建可能早于/晚于 HEAD),提示性着色
+                .foregroundStyle(appModel.buildFingerprint.contains("dirty") ? Color.orange.opacity(0.8) : Color.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
