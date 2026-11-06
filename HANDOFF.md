@@ -452,3 +452,11 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **自主工作段**(用户授权持续运行至 08:59):槽 13 热力图键是最后一块非统一瓷贴(暖棕 #1B1918 + 6% 暖黄底噪,与冷调暗夜语言割裂)。
 - **最小对齐**(保留全部动效机制——滚动数字/灯带/闪/抖/提示一个不动):底色换暗夜渐变(#1B202B→#0F1218)+ 玻璃内衬描边;数字与提示字体换 SF Rounded(与仪表大值同语);暖黄底噪与径向暖光移除。HeatmapPalette.background 已无消费者(保留常量待清理或复用)。
 - **验证**:GUI 截图终验——4565 滚数键与整套语言完全统一;15 键中除 2 颗用户自定义图像键外全部同语。167 测 3× 全绿零警告(渲染器无像素断言测试,机制层零改动)。
+
+### 6.38 持续运行段补遗(2026-11-06 晨与晚,自主工作;168 测全绿)
+- **AGENTS.md**(新):工具链自动发现的 agent 冷启动入口(30 秒事实/工作循环/硬规矩/文档地图);**CHANGELOG.md**(新):面向用户的十二轮变更摘要(与 agent 向的 HANDOFF 分工);README 链接两者。
+- **doctor 增强**:运行中构建指纹 vs **git HEAD 对账**(仓库内运行时机器判定「旧二进制」,落后即提示 make-app 重建+重启——本段曾自证抓到运行实例落后两笔提交);`--json` 机器可读模式。
+- **面板指纹 dirty 着色**:工作区有未提交改动时橙色提示。
+- **VirtualTransport**(新,StreamDockKit):DeviceTransport 的无 HID 实现——虚拟设备连接/校准/插件宿主全链照跑,报文丢弃(commandCount/rawByteCount 统计)。入口 `OPDECK_VIRTUAL=1`(环境变量)或 Info.plist OpenDeckUseVirtualDevice;AppModel.makeDevice 分流,init 局部变量贯穿构造(两段式初始化:全部存储属性就位前不读 self——lazy var = Self.factory() 在 Swift 6 默认隔离下的解析怪癖绕行)。**用途**:无硬件 UI 验证/演示(真机独占,开发不再抢设备)。真机验证:退出 dist → 虚拟实例全链(校准/亮度/HTML 插件页/推拍)→ 恢复 dist 接管。
+- **热力图键冷调对齐**(§6.38 首段):槽 13 暖棕底+暖黄底噪 → 暗夜渐变+玻璃内衬+SF Rounded(机制零改动)——15 键除 2 颗用户自定义图像键外全部统一暗夜语言。
+- **EditorView 拆分**:TemplateConfigSheet 独立文件(942→803);subsystem-integration §1.1 非周期帧驱动形态入册;BehaviorContractTests 补导航过渡回调契约。

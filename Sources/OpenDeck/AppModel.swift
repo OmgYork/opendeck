@@ -11,7 +11,16 @@ final class AppModel {
     /// 官方 StreamDock.app 的 bundle id(定义在 SystemIntegration)
     static let officialBundleID = SystemIntegration.officialBundleID
 
-    let device = DeviceController()
+    /// 设备控制器:生产 = HIDTransport;虚拟模式(OPDECK_VIRTUAL=1) = VirtualTransport
+    /// (无硬件全状态机,报文丢弃——UI 验证/演示不再抢真机)
+    private(set) var device: DeviceController
+
+    private static func makeDevice() -> DeviceController {
+        if useVirtualDevice {
+            return DeviceController(transport: VirtualTransport())
+        }
+        return DeviceController()
+    }
     // MARK: - 固定保留槽(策略见 ReservedSlots)
 
     /// 保留槽类型(EditorView 以「== nil」判断用户槽，故保留同名 typealias)
@@ -115,6 +124,13 @@ final class AppModel {
     let config = ConfigStore()
     let pluginHost = PluginHostModel()
     /// 内建动效键面:显示器输入源(Mac ↔ PC)。全局只有一路输入状态,故单实例。
+    /// 虚拟设备模式(无硬件开发/UI 验证):环境变量 OPDECK_VIRTUAL=1 或
+    /// Info.plist OpenDeckUseVirtualDevice 触发。设备层全状态机照跑,报文丢弃
+    static let useVirtualDevice: Bool = {
+        if ProcessInfo.processInfo.environment["OPDECK_VIRTUAL"] == "1" { return true }
+        return Bundle.main.infoDictionary?["OpenDeckUseVirtualDevice"] as? Bool == true
+    }()
+
     let monitorInput = MonitorInputAnimator()
     /// 通用按压脉冲(§6.32):多键,静息帧 = 常规渲染产物,按压沿闪亮+微放大 0.66s
     let pressPulse = PressPulseAnimator()
@@ -161,6 +177,9 @@ final class AppModel {
     /// 会先于 `.task { start() }` 调 `applyPageToDevice()`,若等到 start() 才接 hook,
     /// 首次 attach 的帧会被丢掉。三个 animator 同一时机,不在此处区分。
     init() {
+        // 设备层先行;局部变量贯穿构造(两段式初始化:全部存储属性就位前不读 self)
+        let device = Self.makeDevice()
+        self.device = device
         onboardingNeeded = config.isFreshInstall
         // 先构造全部协调器(捕获 self 的前提是存储属性已全部初始化),再统一挂钩子
         brightness = BrightnessCoordinator(device: device, config: config)
