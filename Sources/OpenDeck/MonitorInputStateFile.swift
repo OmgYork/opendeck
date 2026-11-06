@@ -12,3 +12,22 @@ enum MonitorInputStateFile {
     /// `~/.cache/lg_input`(展开后的绝对路径,运行时解析一次)
     nonisolated static let path = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/lg_input")
 }
+
+/// LG 显示器「当前图像模式」状态文件(~/.cache/lg_pic_mode)。
+/// 取值 `game` / `read`(OpenDeck 写入;与 picModeToggle 动效键配套,VCP 0x15 两档)。
+/// 独立文件的缘由同 lg_input:文件系统契约不归渲染器/DDC 持有。
+enum MonitorPicModeStateFile {
+    nonisolated static let path = (NSHomeDirectory() as NSString).appendingPathComponent(".cache/lg_pic_mode")
+
+    /// 原子写入(tmp+rename,与 lg_input 同规)
+    static func write(_ value: String) {
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? value.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    static func read() -> String? {
+        try? String(contentsOfFile: path, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}

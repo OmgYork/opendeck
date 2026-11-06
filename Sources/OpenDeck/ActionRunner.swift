@@ -229,6 +229,14 @@ enum ActionRunner {
             logger.info("monitor \(command.rawValue, privacy: .public) → \(String(describing: outcome), privacy: .public)")
             if case .failed(let message) = outcome {
                 report(ActionError.processFailed(command: "DDC \(command.rawValue)", exitCode: -1, stderr: message))
+            } else {
+                // 图像模式状态文件(picModeToggle 动效键的对账事实源):
+                // DDC 成功后记录当前档;其它模式值清文件(键面回落 "--" 待再切换)
+                switch command {
+                case .picGame1: MonitorPicModeStateFile.write("game")
+                case .picReader: MonitorPicModeStateFile.write("read")
+                default: break
+                }
             }
         case .hotkey, .plugin, .previousPage, .nextPage, .previousScene, .nextScene, .gotoPage, .pageIndicator, .screenOff, .sleepGuard, .stat, .keyboardHeatmap:
             break // 热键由 AppModel 两沿直调 runHotkey(按住槽位=按住该键);插件动作走 PluginHostModel;设备控制动作走 AppModel.handleDeviceAction;统计键纯显示(StatTileAnimator 整帧驱动);热力图键走 KeyboardHeatmapAnimator

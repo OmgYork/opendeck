@@ -51,7 +51,7 @@ struct PressPulseTests {
         let data = try JSONEncoder().encode(key)
         let back = try JSONDecoder().decode(KeyConfig.self, from: data)
         #expect(back.animation == .pressPulse)
-        #expect(Set(KeyAnimation.allCases) == [.monitorInput, .pressPulse])
+        #expect(Set(KeyAnimation.allCases) == [.monitorInput, .pressPulse, .picModeToggle])
     }
 }
 

@@ -136,11 +136,13 @@ struct KeyConfig: Codable, Hashable {
 enum KeyAnimation: String, Codable, Hashable, CaseIterable {
     case monitorInput
     case pressPulse
+    case picModeToggle
 
     var label: String {
         switch self {
         case .monitorInput: return "显示器输入切换(Mac / PC)"
         case .pressPulse: return "按压脉冲(闪亮 + 微放大)"
+        case .picModeToggle: return "图像模式切换(玩家1 ↔ 阅读)"
         }
     }
 }

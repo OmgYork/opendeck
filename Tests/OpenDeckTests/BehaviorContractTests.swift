@@ -72,6 +72,7 @@ struct BehaviorContractTests {
             heatmap: KeyboardHeatmapAnimator(),
             monitorInput: MonitorInputAnimator(),
             pressPulse: PressPulseAnimator(),
+            picMode: PicModeAnimator(),
             brightness: brightness,
             sceneRouter: SceneRouter(config: config, device: controller)
         )

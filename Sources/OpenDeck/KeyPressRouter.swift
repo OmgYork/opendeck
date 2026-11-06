@@ -28,6 +28,7 @@ final class KeyPressRouter {
     private let heatmap: KeyboardHeatmapAnimator
     private let monitorInput: MonitorInputAnimator
     private let pressPulse: PressPulseAnimator
+    private let picMode: PicModeAnimator
     private let brightness: BrightnessCoordinator
     private let sceneRouter: SceneRouter
 
@@ -38,6 +39,7 @@ final class KeyPressRouter {
         heatmap: KeyboardHeatmapAnimator,
         monitorInput: MonitorInputAnimator,
         pressPulse: PressPulseAnimator,
+        picMode: PicModeAnimator,
         brightness: BrightnessCoordinator,
         sceneRouter: SceneRouter
     ) {
@@ -47,6 +49,7 @@ final class KeyPressRouter {
         self.heatmap = heatmap
         self.monitorInput = monitorInput
         self.pressPulse = pressPulse
+        self.picMode = picMode
         self.brightness = brightness
         self.sceneRouter = sceneRouter
     }
@@ -106,6 +109,11 @@ final class KeyPressRouter {
         // 按压脉冲:纯视觉反馈,动作照常;在脉冲中连按不重起(会话自然跑完)
         if key.animation == .pressPulse {
             pressPulse.handlePress(index: index)
+        }
+        // 图像模式 toggle:先播扫动 + 动画器记目标档,动作(preserves 原样绑定的单档
+        // 命令)照常执行——若绑定档与 toggle 目标不一致,轮询对账以 DDC 实际结果为准
+        if key.animation == .picModeToggle {
+            picMode.handlePress(index: index)
         }
         Task { await ActionRunner.run(action) }
     }

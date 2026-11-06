@@ -530,3 +530,178 @@ enum NavTileRenderer {
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
     }
 }
+
+// MARK: - 图像模式徽章(§6.39,picModeToggle 动效键)
+
+/// 图像模式 toggle 键渲染:深底玻璃 + 当前模式符号(玩家 🎮 蓝 / 阅读 绿)
+/// + 底部目标模式提示条。读 ~/.cache/lg_pic_mode(缺失/其它值 = "--" 待切换)
+@MainActor
+enum PicModeTileRenderer {
+    enum Mode: Equatable {
+        case game
+        case read
+        case unknown
+
+        init(stateFile: String?) {
+            switch stateFile {
+            case "game": self = .game
+            case "read": self = .read
+            default: self = .unknown
+            }
+        }
+
+        var accent: CGColor {
+            switch self {
+            case .game: return DarkTileStyle.gpuAccent
+            case .read: return DarkTileStyle.cpuAccent
+            case .unknown: return DarkTileStyle.offGray
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .game: return "玩家1"
+            case .read: return "阅读"
+            case .unknown: return "--"
+            }
+        }
+
+        /// toggle 目标(unknown 首按落 game)
+        var flipped: Mode {
+            switch self {
+            case .game: return .read
+            case .read: return .game
+            case .unknown: return .game
+            }
+        }
+    }
+
+    static func currentStateFile() -> String? {
+        MonitorPicModeStateFile.read()
+    }
+
+    /// 静息帧:当前模式符号 + 底部「↔ 目标」提示
+    static func image(mode: Mode, side: Int = StreamDock293S.keySize(column: 0)) -> CGImage? {
+        render(mode: mode, side: side, slide: 0)
+    }
+
+    /// 切换过渡帧:6 帧横向扫动(内容从当前侧滑出、目标侧滑入,sin 包络)
+    static func transitionFrames(from: Mode, to: Mode,
+                                 side: Int = StreamDock293S.keySize(column: 0)) -> [CGImage]? {
+        guard from != to else { return nil }
+        let count = 6
+        var frames: [CGImage] = []
+        for step in 0..<count {
+            let p = SleepGuardTileRenderer.easeOutCubic(Double(step + 1) / Double(count))
+            let envelope = sin(p * .pi)
+            let direction: CGFloat = to == .read ? -1 : 1 // 阅读↔玩家 符号横滑方向感
+            if let image = render(mode: to, side: side, slide: 26 * direction * CGFloat(envelope),
+                                  crossFadeFrom: from, fade: CGFloat(envelope)) {
+                frames.append(image)
+            }
+        }
+        return frames.isEmpty ? nil : frames
+    }
+
+    /// slide:符号横滑位移;crossFadeFrom/fade:切换时旧符号残影淡出
+    private static func render(mode: Mode, side: Int, slide: CGFloat,
+                               crossFadeFrom: Mode? = nil, fade: CGFloat = 0) -> CGImage? {
+        guard let ctx = DarkTileCanvas.beginCanvas(side: side) else { return nil }
+        let s = CGFloat(side) / 112
+        let accent = mode.accent
+
+        DarkTileCanvas.drawText("图像模式", size: 12 * s, weight: .semibold,
+                                color: accent.copy(alpha: 0.85)!,
+                                rect: CGRect(x: 14 * s, y: CGFloat(side) - 30 * s, width: 84 * s, height: 16 * s),
+                                ctx: ctx, align: .left, glow: false)
+
+        // 当前模式符号(横滑位移 + 辉光)
+        let symbolCenter = CGPoint(x: 56 * s + slide, y: 54 * s)
+        switch mode {
+        case .game:
+            drawGamepadGlyph(ctx: ctx, center: symbolCenter, scale: s, color: accent)
+        case .read:
+            drawBookGlyph(ctx: ctx, center: symbolCenter, scale: s, color: accent)
+        case .unknown:
+            DarkTileCanvas.drawText("--", size: 26 * s, weight: .bold,
+                                    color: DarkTileStyle.offGray,
+                                    rect: CGRect(x: 0, y: 40 * s, width: CGFloat(side), height: 30 * s),
+                                    ctx: ctx)
+        }
+
+        // 切换中的旧符号残影(淡出)
+        if let crossFadeFrom, fade > 0.01 {
+            ctx.setAlpha(0.35 * (1 - fade))
+            let ghostCenter = CGPoint(x: 56 * s - slide, y: 54 * s)
+            switch crossFadeFrom {
+            case .game:
+                drawGamepadGlyph(ctx: ctx, center: ghostCenter, scale: s, color: DarkTileStyle.offGray)
+            case .read:
+                drawBookGlyph(ctx: ctx, center: ghostCenter, scale: s, color: DarkTileStyle.offGray)
+            case .unknown:
+                break
+            }
+            ctx.setAlpha(1)
+        }
+
+        // 底部提示:↔ 目标模式(toggle 的另一半)
+        let target = mode.flipped
+        DarkTileCanvas.drawText("↔ \(target.label)", size: 12 * s, weight: .medium,
+                                color: DarkTileStyle.valueWhite.copy(alpha: 0.55)!,
+                                rect: CGRect(x: 0, y: 12 * s, width: CGFloat(side), height: 18 * s),
+                                ctx: ctx, glow: false)
+
+        guard let upright = ctx.makeImage() else { return nil }
+        return DarkTileCanvas.finishRotated(upright, side: side, space: ctx.colorSpace)
+    }
+
+    /// 手柄符号:圆角胶囊 + 十字键 + 双钮(自绘,无 SF Symbol 依赖)
+    private static func drawGamepadGlyph(ctx: CGContext, center: CGPoint, scale: CGFloat, color: CGColor) {
+        ctx.setShadow(offset: .zero, blur: 7, color: color)
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(2.5 * scale)
+        let body = CGPath(roundedRect: CGRect(x: center.x - 17 * scale, y: center.y - 12 * scale,
+                                              width: 34 * scale, height: 24 * scale),
+                          cornerWidth: 10 * scale, cornerHeight: 10 * scale, transform: nil)
+        ctx.addPath(body)
+        ctx.strokePath()
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+        // 十字键(左)
+        ctx.setFillColor(color)
+        let cx = center.x - 8 * scale, cy = center.y
+        ctx.fill(CGRect(x: cx - 1.5 * scale, y: cy - 5 * scale, width: 3 * scale, height: 10 * scale))
+        ctx.fill(CGRect(x: cx - 5 * scale, y: cy - 1.5 * scale, width: 10 * scale, height: 3 * scale))
+        // 双钮(右)
+        ctx.fillEllipse(in: CGRect(x: center.x + 7 * scale, y: cy + 1 * scale, width: 3.5 * scale, height: 3.5 * scale))
+        ctx.fillEllipse(in: CGRect(x: center.x + 10 * scale, y: cy - 4 * scale, width: 3.5 * scale, height: 3.5 * scale))
+    }
+
+    /// 书本符号:翻开的双页(自绘)
+    private static func drawBookGlyph(ctx: CGContext, center: CGPoint, scale: CGFloat, color: CGColor) {
+        ctx.setShadow(offset: .zero, blur: 7, color: color)
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(2.5 * scale)
+        ctx.setLineJoin(.round)
+        // 左页
+        ctx.move(to: CGPoint(x: center.x, y: center.y - 10 * scale))
+        ctx.addCurve(to: CGPoint(x: center.x - 14 * scale, y: center.y - 8 * scale),
+                     control1: CGPoint(x: center.x - 6 * scale, y: center.y - 13 * scale),
+                     control2: CGPoint(x: center.x - 10 * scale, y: center.y - 11 * scale))
+        ctx.addLine(to: CGPoint(x: center.x - 14 * scale, y: center.y + 9 * scale))
+        ctx.addCurve(to: CGPoint(x: center.x, y: center.y + 10 * scale),
+                     control1: CGPoint(x: center.x - 10 * scale, y: center.y + 7 * scale),
+                     control2: CGPoint(x: center.x - 6 * scale, y: center.y + 8 * scale))
+        ctx.strokePath()
+        // 右页(镜像)
+        ctx.move(to: CGPoint(x: center.x, y: center.y - 10 * scale))
+        ctx.addCurve(to: CGPoint(x: center.x + 14 * scale, y: center.y - 8 * scale),
+                     control1: CGPoint(x: center.x + 6 * scale, y: center.y - 13 * scale),
+                     control2: CGPoint(x: center.x + 10 * scale, y: center.y - 11 * scale))
+        ctx.addLine(to: CGPoint(x: center.x + 14 * scale, y: center.y + 9 * scale))
+        ctx.addCurve(to: CGPoint(x: center.x, y: center.y + 10 * scale),
+                     control1: CGPoint(x: center.x + 10 * scale, y: center.y + 7 * scale),
+                     control2: CGPoint(x: center.x + 6 * scale, y: center.y + 8 * scale))
+        ctx.strokePath()
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+    }
+}

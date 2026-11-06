@@ -460,3 +460,10 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **VirtualTransport**(新,StreamDockKit):DeviceTransport 的无 HID 实现——虚拟设备连接/校准/插件宿主全链照跑,报文丢弃(commandCount/rawByteCount 统计)。入口 `OPDECK_VIRTUAL=1`(环境变量)或 Info.plist OpenDeckUseVirtualDevice;AppModel.makeDevice 分流,init 局部变量贯穿构造(两段式初始化:全部存储属性就位前不读 self——lazy var = Self.factory() 在 Swift 6 默认隔离下的解析怪癖绕行)。**用途**:无硬件 UI 验证/演示(真机独占,开发不再抢设备)。真机验证:退出 dist → 虚拟实例全链(校准/亮度/HTML 插件页/推拍)→ 恢复 dist 接管。
 - **热力图键冷调对齐**(§6.38 首段):槽 13 暖棕底+暖黄底噪 → 暗夜渐变+玻璃内衬+SF Rounded(机制零改动)——15 键除 2 颗用户自定义图像键外全部统一暗夜语言。
 - **EditorView 拆分**:TemplateConfigSheet 独立文件(942→803);subsystem-integration §1.1 非周期帧驱动形态入册;BehaviorContractTests 补导航过渡回调契约。
+
+### 6.39 图像模式 toggle 轮(2026-11-06 晚,用户需求「槽位9和10整合成一个toggle」;170 测全绿)
+- **需求**:槽 9(图像·玩家1,VCP 0x15=45)与槽 10(图像·阅读,0x15=1)是同一 VCP 的两个互斥预设——整合为单键 toggle。
+- **实现**(复用显示器输入动效的成熟形态):`KeyAnimation.picModeToggle` + PicModeAnimator(轻量版 MonitorInputAnimator:事实源 = `~/.cache/lg_pic_mode`,1.5s 轮询对账,不做乐观假设)+ PicModeTileRenderer(暗夜语言:当前模式手柄/书本符号 + 辉光 + 底部「↔ 目标」提示条;unknown 显 "--")。**按键行为**:按压播 6 帧横扫过渡(旧符号残影淡出),动作层照常执行槽上绑定的命令;**对账哲学**(§3):动画器推导的 toggle 目标与实际 DDC 结果不一致时,以状态文件为准跟随。
+- **ActionRunner 配套**:picGame1/picReader 执行成功后写 lg_pic_mode(game/read)——状态文件的唯一写入者是 DDC 成功路径,与 lg_input 同规。
+- **配置整合**(退 app→备份 .bak-20261106-pictoggle→改→重启):槽 9 保留 picGame1 绑定 + 标题「图像模式」+ picModeToggle 动画;槽 10 清空。槽 10 若用户后悔可从调色盘「显示器」分类拖回。
+- **验证**:170 测 3× 全绿(净增 1:枚举 CaseIterable 断言更新);GUI 截图:槽 9 显「图像模式 -- ↔ 玩家1」待切换态,槽 10 空置。**按压切换的视觉效果与状态跟随待用户物理验收**(首按从 "--" 落玩家1;按压后 DDC 写入 → 状态文件 → 轮询跟随)。

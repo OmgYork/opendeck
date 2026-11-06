@@ -136,6 +136,8 @@ final class AppModel {
     let pressPulse = PressPulseAnimator()
     /// 瓷贴过渡帧(§6.33):睡眠锁扣开合
     let tileFX = TileFXPlayer()
+    /// 图像模式 toggle 键(§6.39):玩家1 ↔ 阅读,静息显当前档,按压切换播扫动
+    let picMode = PicModeAnimator()
 
     // MARK: 启动方式与构建指纹(§6.37)
 
@@ -187,7 +189,7 @@ final class AppModel {
         keyRouter = KeyPressRouter(
             device: device, config: config, pluginHost: pluginHost,
             heatmap: heatmap, monitorInput: monitorInput, pressPulse: pressPulse,
-            brightness: brightness, sceneRouter: sceneRouter
+            picMode: picMode, brightness: brightness, sceneRouter: sceneRouter
         )
         keyRouter.onNavTransition = { [weak self] index, kind, offset, fromIndex in
             guard let self else { return }
@@ -431,6 +433,13 @@ final class AppModel {
             guard let self else { return }
             self.setKeyImage(index: index, image: image)
         }
+        picMode.onFrame = { [weak self] index, image in
+            guard let self else { return }
+            self.setKeyImage(index: index, image: image)
+        }
+        picMode.onLog = { [weak self] line in
+            self?.appendLog(line)
+        }
         pluginHost.hooks.backgroundColor = { [weak self] index in
             self?.config.keyConfig(at: index).backgroundColorHex ?? "#3B4252"
         }
@@ -657,6 +666,7 @@ final class AppModel {
             heatmap.detach(ifIndex: index)
             monitorInput.detach(ifIndex: index)
             pressPulse.detach(ifIndex: index)
+            picMode.detach(ifIndex: index)
             if let image = statTiles.placeholderTile(kind: kind) {
                 setKeyImage(index: index, image: image)
             }
@@ -667,6 +677,7 @@ final class AppModel {
         if case .keyboardHeatmap = key.action {
             monitorInput.detach(ifIndex: index)
             pressPulse.detach(ifIndex: index)
+            picMode.detach(ifIndex: index)
             heatmap.attach(index: index, size: StreamDock293S.keySize(column: column))
             return
         }
@@ -674,10 +685,18 @@ final class AppModel {
         // 内建动效键:整帧由动画驱动,跳过常规「底色 + 底图 + 标题」渲染
         if key.animation == .monitorInput {
             pressPulse.detach(ifIndex: index)
+            picMode.detach(ifIndex: index)
             monitorInput.attach(index: index, size: StreamDock293S.keySize(column: column))
             return
         }
         monitorInput.detach(ifIndex: index) // 同页其它键/换页后的旧动效键
+        // 图像模式 toggle 键(§6.39):整帧由专用动画器驱动(显当前档,轮询对账)
+        if key.animation == .picModeToggle {
+            pressPulse.detach(ifIndex: index)
+            picMode.attach(index: index)
+            return
+        }
+        picMode.detach(ifIndex: index) // 键不再是图像模式键:摘动画器
         // 媒体键:暗夜仪表专用渲染(§6.33,忽略底色/标题配置);按压脉冲基帧 = 该渲染产物
         if case .mediaKey(let mediaKind) = key.action,
            let image = MediaTileRenderer.image(kind: mediaKind) {
@@ -752,6 +771,7 @@ final class AppModel {
         if case .plugin = key.action {
             pluginHost.redrawInstanceIfPresent(at: index)
             pressPulse.detach(ifIndex: index) // 插件键帧由插件推,脉冲基帧不适用
+            picMode.detach(ifIndex: index)
             return
         }
         // 按压脉冲键:常规渲染产物即基帧,挂给脉冲动画器(编辑/换页后重挂 = 基帧更新)
@@ -792,6 +812,10 @@ final class AppModel {
         }
         if case .mediaKey(let kind) = key.action {
             return MediaTileRenderer.image(kind: kind)
+        }
+        if key.animation == .picModeToggle {
+            let mode = PicModeTileRenderer.Mode(stateFile: PicModeTileRenderer.currentStateFile())
+            return PicModeTileRenderer.image(mode: mode)
         }
         guard key.animation == .monitorInput else { return nil }
         return monitorInput.previewImage(size: StreamDock293S.keySize(column: 0))
