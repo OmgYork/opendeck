@@ -440,6 +440,9 @@ final class AppModel {
         picMode.onLog = { [weak self] line in
             self?.appendLog(line)
         }
+        picMode.applyDDC = { command in
+            await ActionRunner.run(.monitor(command))
+        }
         pluginHost.hooks.backgroundColor = { [weak self] index in
             self?.config.keyConfig(at: index).backgroundColorHex ?? "#3B4252"
         }

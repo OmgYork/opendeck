@@ -47,26 +47,30 @@ final class PicModeAnimator {
         pollTimer = nil
     }
 
-    /// 按下沿:切换到另一档并播扫动过渡。真实动作(preserves picGame1/picReader)
-    /// 由 AppModel 照常执行——动作落盘的档与本动画器推导的目标一致(都读同一状态文件),
-    /// 不一致时轮询对账会纠正(§3 哲学)。
+    /// DDC 执行钩子(AppModel 注线,委托 MonitorDDC.apply;动作层职责不在动画器)
+    var applyDDC: ((MonitorCommand) async -> Void)?
+
+    /// 按下沿:切换到另一档——本动画器**自包含驱动**(自发 DDC 命令,槽上无需绑动作):
+    /// ①发 DDC 命令(ActionRunner 会在成功后写 lg_pic_mode,轮询对账跟随);
+    /// ②同步播扫动过渡(乐观展示,若 DDC 失败由轮询以状态文件实况纠正)
     func handlePress(index: Int) {
         guard activeIndex == index else { return }
         let current = PicModeTileRenderer.Mode(stateFile: PicModeTileRenderer.currentStateFile())
         let target = current.flipped
-        guard current != .unknown else {
-            // 状态未知:不播过渡(首按直接落 game),轮询/ActionRunner 写盘后跟随
-            onLog?("图像模式:状态未知,按压直接落 玩家1")
-            return
-        }
         onLog?("图像模式:\(current.label) → \(target.label)(按压切换)")
-        guard let frames = PicModeTileRenderer.transitionFrames(from: current, to: target),
+        // 自发 DDC:unknown 首按落 game.flipped 逻辑给出 game
+        let command: MonitorCommand = target == .game ? .picGame1 : .picReader
+        Task { [applyDDC] in
+            await applyDDC?(command)
+        }
+        guard current != .unknown,
+              let frames = PicModeTileRenderer.transitionFrames(from: current, to: target),
               let final = PicModeTileRenderer.image(mode: target)
         else { return }
         lastMode = target
         transitioning = true
         fx.play(index: index, frames: frames, final: final)
-        // 过渡播放完再放行轮询对账(0.5s 足够 6 帧@15fps)
+        // 过渡播放完再放行轮询对账(0.5s 足够 6 帧@15fps;DDC 实际耗时更长,由对账收尾)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
             self?.transitioning = false

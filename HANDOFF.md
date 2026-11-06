@@ -467,3 +467,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **ActionRunner 配套**:picGame1/picReader 执行成功后写 lg_pic_mode(game/read)——状态文件的唯一写入者是 DDC 成功路径,与 lg_input 同规。
 - **配置整合**(退 app→备份 .bak-20261106-pictoggle→改→重启):槽 9 保留 picGame1 绑定 + 标题「图像模式」+ picModeToggle 动画;槽 10 清空。槽 10 若用户后悔可从调色盘「显示器」分类拖回。
 - **验证**:170 测 3× 全绿(净增 1:枚举 CaseIterable 断言更新);GUI 截图:槽 9 显「图像模式 -- ↔ 玩家1」待切换态,槽 10 空置。**按压切换的视觉效果与状态跟随待用户物理验收**(首按从 "--" 落玩家1;按压后 DDC 写入 → 状态文件 → 轮询跟随)。
+
+### 6.39 补遗(2026-11-06 晚,用户反馈修复 + 自包含化)
+- **Picker 显空热修**:编辑面板动效 Picker 手写选项清单漏了 picModeToggle——配置值无 tag 匹配即显空。修复 = 选项走 `KeyAnimation.allCases`(防未来漂移)。**第二层坑**:修复后首次部署没生效——编辑 Sheet 开着阻止 osascript 优雅退出(§6.10 已知行为),`open` 只是前置旧实例;PID 不变暴露之。教训:部署脚本前必须确认旧实例真死了(pgrep 对比 PID)。
+- **toggle 自包含化(用户选 a)**:槽 9 动作清空,PicModeAnimator 新增 `applyDDC` 钩子(AppModel 注线 `ActionRunner.run(.monitor(command))`)——按压时动画器自发 DDC 命令(picGame1/picReader 按目标档),槽上不再需要绑定动作。优点:语义单点(toggle 完全自描述),换页/克隆键不带冗余动作;ActionRunner 成功路径仍写 lg_pic_mode,对账链路不变。config 备份 .bak-20261106-pictoggle2。
