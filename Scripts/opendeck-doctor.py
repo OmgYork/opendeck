@@ -22,12 +22,16 @@ BACKUPS = os.path.join(SUPPORT, "backups")
 PENDING = os.path.join(SUPPORT, "pending-import")
 AGENT_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.opendeck.app.plist")
 
+JSON_MODE = "--json" in sys.argv
 results = []
 
 
 def check(name, ok, detail=""):
-    mark = "✓" if ok else ("⚠" if detail.startswith("WARN") else "✗")
-    results.append((ok, detail.startswith("WARN")))
+    warn = detail.startswith("WARN")
+    results.append({"name": name, "ok": ok, "warn": warn, "detail": detail.replace("WARN ", "", 1) if warn else detail})
+    if JSON_MODE:
+        return
+    mark = "✓" if ok else ("⚠" if warn else "✗")
     print(f"{mark} {name}" + (f" — {detail}" if detail else ""))
 
 
@@ -214,8 +218,12 @@ def main():
         check("磁盘余量", True, f"WARN 无法查询: {e}")
 
     # 结论
-    hard = sum(1 for ok, _ in results if not ok)
-    print(f"\n结论: {len(results) - hard}/{len(results)} 项通过" + (f",{hard} 项待处理" if hard else ",全部健康"))
+    hard = sum(1 for r in results if not r["ok"])
+    if JSON_MODE:
+        print(json.dumps({"ok": hard == 0, "failed": hard, "checks": results},
+                         ensure_ascii=False, indent=2))
+    else:
+        print(f"\n结论: {len(results) - hard}/{len(results)} 项通过" + (f",{hard} 项待处理" if hard else ",全部健康"))
 
 
 if __name__ == "__main__":
