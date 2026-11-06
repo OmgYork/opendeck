@@ -163,7 +163,7 @@ enum SleepGuardTileRenderer {
         drawPadlock(ctx: ctx, center: CGPoint(x: 56 * s, y: 56 * s), scale: s,
                     accent: accent, shackleOpen: open, warn: state == .unauthorized)
 
-        let statusText = state == .unauthorized ? "未授权" : (state == .unknown ? "…" : (state == .on ? "ON" : "OFF"))
+        let statusText = Self.statusText(for: state)
         let statusRect = CGRect(x: 0, y: 12 * s, width: CGFloat(side), height: 18 * s)
         DarkTileCanvas.drawText(statusText, size: 12 * s, weight: .bold,
                                 color: accent,
@@ -172,6 +172,17 @@ enum SleepGuardTileRenderer {
 
         guard let upright = ctx.makeImage() else { return nil }
         return DarkTileCanvas.finishRotated(upright, side: side, space: ctx.colorSpace)
+    }
+
+    /// 状态文案:直接陈述合盖行为(「ON/OFF」挂在「睡眠锁」名下有歧义——
+    /// 锁的是睡眠还是开关?行为陈述不可误读)
+    static func statusText(for state: VisualState) -> String {
+        switch state {
+        case .on: return "合盖不休眠"
+        case .off: return "合盖休眠"
+        case .unauthorized: return "未授权"
+        case .unknown: return "…"
+        }
     }
 
     /// 状态翻转过渡帧:shackle 开合 8 帧(shackle 垂直位移 + 角度插值)。
