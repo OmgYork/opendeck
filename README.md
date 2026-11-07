@@ -34,7 +34,7 @@ macOS 平台、针对 MiraBox Stream Dock 的 Swift 实现。目标设备 **293V
 | 显示器 DDC 控制 | **LG 27GP95U** | 亮度、对比度、输入源切换用的 VCP 码是该型号的，换显示器后可能全部失效 |
 | 图像模式切换 | 同上 | `picReader` / `picSRGB` / `picFPS` / `picHDR` 等是 LG 的私有值 |
 | 输入源切换动效 | `~/.cache/lg_input` | 由我自己的 `lg-toggle.sh` 写入，别人没有这个状态文件 |
-| 键盘热力图 | 独立的键盘分析工具 | 键位热度从它自己的日志读，数据源不在本仓库 |
+| 键盘热力图 | 我的 KeyAnalyze fork | 基于开源项目 [MacKeyAnalyze](https://github.com/SherlockGougou/MacKeyAnalyze) 衍生，我加了 `Bridge.swift` 把键位数据外发给 OpenDeck；桥接代码在这两个仓库之外 |
 | 亮度跟随 | 内屏 + 设备背光 | 逻辑本身通用，但只在两者都支持的环境下实测过 |
 
 这些代码留在仓库里，一是作为我日常构建的一部分，二是作为 DDC / 输入源动效实现的参考。**用不上直接忽略，不影响上面那些功能。**
