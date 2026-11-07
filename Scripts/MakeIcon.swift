@@ -39,17 +39,20 @@ ctx.drawLinearGradient(
 // 3×3 键帽(应用默认 Nord 调色板)
 let palette: [UInt32] = [0xBF616A, 0xD08770, 0xEBCB8B, 0xA3BE8C, 0x88C0D0, 0x5E81AC, 0xB48EAD, 0x8FBCBB, 0x5E81AC]
 let gridSide: CGFloat = 3
+// 边缘留白必须 > 键间距:四角键帽要避开底座 230px 圆角弧(几何下限 52px,76px 留 34px 余量),否则被 clip 切角
+let edgeMargin: CGFloat = 76
 let cellGap: CGFloat = 44
-let cellSize = (chassisRect.width - cellGap * (gridSide + 1)) / gridSide
+let cellSize = (chassisRect.width - edgeMargin * 2 - cellGap * (gridSide - 1)) / gridSide
 for index in 0..<9 {
     let row = CGFloat(index / 3)
     let column = CGFloat(index % 3)
-    let x = chassisRect.minX + cellGap + column * (cellSize + cellGap)
+    let x = chassisRect.minX + edgeMargin + column * (cellSize + cellGap)
     // CGContext y 轴朝上:图标视觉上行 0 在顶部
-    let y = chassisRect.maxY - cellGap - (row + 1) * cellSize - row * cellGap
+    let y = chassisRect.maxY - edgeMargin - (row + 1) * cellSize - row * cellGap
     let keyRect = CGRect(x: x, y: y, width: cellSize, height: cellSize)
     let keyPath = CGPath(roundedRect: keyRect, cornerWidth: 52, cornerHeight: 52, transform: nil)
 
+    ctx.saveGState()
     ctx.addPath(keyPath)
     ctx.clip()
     let top = color(palette[index]).lightened(by: 0.12)
@@ -64,7 +67,7 @@ for index in 0..<9 {
         CGGradient(colorsSpace: space, colors: [CGColor(gray: 1, alpha: 0.30), CGColor(gray: 1, alpha: 0.0)] as CFArray, locations: [0, 0.55])!,
         start: CGPoint(x: 0, y: keyRect.maxY), end: CGPoint(x: 0, y: keyRect.midY), options: []
     )
-    ctx.resetClip()
+    ctx.restoreGState()
 }
 
 extension CGColor {
