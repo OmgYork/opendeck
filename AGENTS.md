@@ -7,8 +7,6 @@
 
 - OpenDeck:自研 macOS Stream Dock 管理器,驱动 MiraBox 293V3(15 键,112×112 JPEG,180° 旋转)。
 - **已开源**:`github.com/OmgYork/opendeck`(Public, Apache 2.0)。可以 push;不要改版本号。
-- Git 身份:`Yorklii <me@omgyork.com>`(2026-11-07 起)。GitHub 账号 `OmgYork`(原 `Yorkli1`)。
-- 身份迁移与开源全过程的交接记录:`docs/session-2026-11-07-github-migration.md`。
 - 提交规范:中文一行标题 + 要点正文;`swift test` 全绿(只增不减,当前 167 测)才可提交。
 
 ## 工作循环
