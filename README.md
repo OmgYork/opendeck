@@ -2,6 +2,8 @@
 
 macOS 平台、针对 MiraBox Stream Dock 的 Swift 实现。目标设备 **293V3**，替代 1GB+ 的原厂 app，构建产物 **5.6 MB**。
 
+![OpenDeck 编辑器界面](docs/images/editor.png)
+
 ## 为什么做这个
 
 原厂 StreamDock.app 体积 1GB+，只为改 15 个键位的图标和动作。这个项目做了同一件事，体积是它的 1/180。

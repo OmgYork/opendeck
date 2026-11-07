@@ -495,28 +495,19 @@ struct EditorView: View {
         return Button {
             if let id = scene.id, !isCurrent { appModel.switchScene(to: id) }
         } label: {
-            // 当前场景的芯片亮出名字(信息可见性);其余芯片保持编号紧凑
-            HStack(spacing: 5) {
-                Text("\(offset + 1)")
-                if isCurrent {
-                    Text(scene.name)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+            // 芯片只显示编号(不显示场景名),当前场景靠底色与描边区分
+            Text("\(offset + 1)")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(isCurrent ? .primary : .secondary)
+                .frame(minWidth: 32, minHeight: 30)
+                .background(
+                    Color.primary.opacity(isCurrent ? 0.14 : 0.05),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(isCurrent ? .tertiary : .quaternary, lineWidth: 1)
                 }
-            }
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(isCurrent ? .primary : .secondary)
-            .padding(.horizontal, isCurrent ? 9 : 0)
-            .frame(minWidth: 32, minHeight: 30)
-            .background(
-                Color.primary.opacity(isCurrent ? 0.14 : 0.05),
-                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(isCurrent ? .tertiary : .quaternary, lineWidth: 1)
-            }
         }
         .buttonStyle(.plain)
         .help("\(scene.name) · \(scene.pages.count) 页")
