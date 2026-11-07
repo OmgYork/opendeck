@@ -478,3 +478,8 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 - **实现**:drawPadlock 整体替换为 drawClamshell(盖子横圆角条 + 底座宽薄条 + 中缝光源,awake = 盖子 accent 微光 + 缝亮线大辉光;未授权琥珀角标位置随新构图);transitionFrames 从锁扣开合改为**灯缝渐熄/渐亮** 8 帧(easeOutCubic 插值 lightAmount)。事件名/内部类型名 SleepGuard 保留(pmset sudoers 契约不动)。
 - **过程教训**:python 行号手术替换函数体导致括号失衡(95/94)——大段重写后必须跑括号配平扫描(顶级闭合行号清单)定位,比目测可靠。
 - **验证**:170 测 3× 全绿零警告;GUI 截图终验:合盖剪影 + 缝透光 + 「合盖模式/合盖不休眠」全部正确。翻转动效(灯缝渐熄/渐亮)待用户物理验收。
+
+### 6.41 AGENTS.md 远端约束裁决轮(2026-11-08,交接自 Hermes 迁移会话;docs-only)
+- **缘起**:仓库已开源(`OmgYork/opendeck`,Public,Apache 2.0,145 提交已推送,origin/main 与本地同步),而 AGENTS.md「30 秒事实」仍写「纯本地仓库:无远端,不要 push,不要创建远端」——2026-11-06 旧状态已失效。前一会话两度改写(c8553c8「可以 push」/02f63dd 精简)均被回滚,d98d7e6 恢复原状并把裁决交给 ZCode。
+- **裁决**:更新该行,但保留护栏内核——「无远端」改为「远端仅 origin = OmgYork/opendeck」;「不要 push」从**事实禁令**转为**行为护栏**(push 属对外发布,需用户明确指示,与用户全局规则一致——第一版「可以 push」的毛病就是把这个护栏也拆了);「不要创建远端」并入「远端仅 origin」;「不要改版本号」原样保留。Git 身份/迁移细节不进 AGENTS.md(02f63dd 已示范用户不要这类内容),留在 memory 与 `docs/session-2026-11-07-github-migration.md`。
+- **顺带**:测试基线 167→168(2026-11-08 实测);补记 pre-commit 与 pre-push hook 各跑一轮 `swift test`(每次约 6-7s,属正常)。

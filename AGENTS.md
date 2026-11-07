@@ -6,8 +6,8 @@
 ## 30 秒事实
 
 - OpenDeck:自研 macOS Stream Dock 管理器,驱动 MiraBox 293V3(15 键,112×112 JPEG,180° 旋转)。
-- 纯本地仓库:**无远端,不要 push,不要创建远端,不要改版本号**(用户明确要求)。
-- 提交规范:中文一行标题 + 要点正文;`swift test` 全绿(只增不减,当前 167 测)才可提交。
+- 仓库已开源:远端仅 `origin` = `github.com/OmgYork/opendeck`(Public,Apache 2.0);**push 属对外发布,需用户明确指示**,不要改版本号。
+- 提交规范:中文一行标题 + 要点正文;`swift test` 全绿(只增不减,2026-11-08 为 168 测)才可提交。pre-commit 与 pre-push hook 各跑一轮 `swift test`(每次约 6-7s,属正常)。
 
 ## 工作循环
 
