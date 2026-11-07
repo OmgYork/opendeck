@@ -1,12 +1,10 @@
 # OpenDeck for macOS
 
-MiraBox Stream Dock **293V3** 的 macOS 原生管理器，Swift 重写，替代 1GB+ 的原厂 app。
-
-> **与 [nekename/OpenDeck](https://github.com/nekename/OpenDeck) 无关。** 那个项目是 Linux 平台、针对 Elgato Stream Deck 的 Rust 实现；本项目是 macOS 平台、针对 MiraBox Stream Dock 的 Swift 实现，两者硬件协议不同。
+macOS 平台、针对 MiraBox Stream Dock 的 Swift 实现。目标设备 **293V3**，替代 1GB+ 的原厂 app，构建产物 **5.6 MB**。
 
 ## 为什么做这个
 
-原厂 StreamDock.app 体积 1GB+，只为改 15 个键位的图标和动作。这个项目做了同一件事，构建产物 **5.6 MB**。
+原厂 StreamDock.app 体积 1GB+，只为改 15 个键位的图标和动作。这个项目做了同一件事，体积是它的 1/180。
 
 ## 能力
 
