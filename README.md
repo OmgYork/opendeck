@@ -1,40 +1,59 @@
-# OpenDeck
+# OpenDeck for macOS
 
-自研 macOS 版 Stream Dock 管理器（替代官方 StreamDock.app），目标设备 MiraBox Stream Dock **293V3**：15 键（5×3），键面 **112×112**，JPEG，设备 180° 旋转显示。
+MiraBox Stream Dock **293V3** 的 macOS 原生管理器，Swift 重写，替代 1GB+ 的原厂 app。
 
-## 先读哪份
+> **与 [nekename/OpenDeck](https://github.com/nekename/OpenDeck) 无关。** 那个项目是 Linux 平台、针对 Elgato Stream Deck 的 Rust 实现；本项目是 macOS 平台、针对 MiraBox Stream Dock 的 Swift 实现，两者硬件协议不同。
 
-| 你是 | 读 |
+## 为什么做这个
+
+原厂 StreamDock.app 体积 1GB+，只为改 15 个键位的图标和动作。这个项目做了同一件事，构建产物 **5.6 MB**。
+
+## 能力
+
+| 能力 | 说明 |
 |---|---|
-| 第一次接触本项目的 agent | [`AGENTS.md`](AGENTS.md)（agent 入口）→ [`AGENT-GUIDE.md`](AGENT-GUIDE.md)（操作手册：路径、规矩、插件契约、部署、排障） |
-| 要改 OpenDeck 源码 | [`HANDOFF.md`](HANDOFF.md)（开发史、协议实测、设计决策、各里程碑根因） |
-| 只想给 agent 接一个状态灯 | [`Scripts/状态灯接入指南.md`](Scripts/状态灯接入指南.md)（模板化步骤） |
-| 要看显示器输入源动效 | [`Design/MonitorInputIcon/README.md`](Design/MonitorInputIcon/README.md) |
-| 想知道这版多了什么 | [`CHANGELOG.md`](CHANGELOG.md)（面向用户的变更摘要） |
+| 键位编辑 | 15 键（5×3），键面 112×112 JPEG，设备以 180° 旋转显示 |
+| 插件宿主 | 兼容 Elgato Stream Deck SDK v2 的插件协议（WebSocket + Property Inspector） |
+| 显示器控制 | 通过 DDC/CI 切换输入源、亮度，键面显示当前状态动效 |
+| 键盘热力图 | 从 KeyAnalyze 读键位热度，实时渲染到键面 |
+| 场景路由 | 按前台应用自动切换场景，支持多页 |
+| 亮度跟随 | 内屏亮度变化时同步调整设备背光 |
 
-## 快速开始
+**168 个单元测试**，覆盖协议编解码、配置迁移、状态机、WebSocket 服务端。
+
+## 构建
 
 ```bash
-cd /Users/yorkli/Projects/mirabox
+git clone https://github.com/OmgYork/opendeck.git
+cd opendeck
 
 swift build          # 增量构建
-swift test           # 全部测试（只增不减）
+swift test           # 168 个测试
 ./make-app.sh        # 组装 dist/OpenDeck.app 并 ad-hoc 签名
 
-osascript -e 'quit app "OpenDeck"'
 open dist/OpenDeck.app
 ```
 
-日志：
+要求：macOS 26+，Xcode 26+（Swift 6.2）。
 
-```bash
-log stream --level info --predicate 'subsystem == "opendeck"'
-```
+## 文档
+
+| 你想做的事 | 读 |
+|---|---|
+| 了解开发史、协议实测、设计决策 | [`HANDOFF.md`](HANDOFF.md) |
+| 接入状态灯 / 开发插件 | [`AGENT-GUIDE.md`](AGENT-GUIDE.md) |
+| 看变更记录 | [`CHANGELOG.md`](CHANGELOG.md) |
+| 给 agent 用的入口 | [`AGENTS.md`](AGENTS.md) |
+
+## 许可证
+
+Apache License 2.0，见 [LICENSE](LICENSE)。
+
 
 ## 转发给其他 agent 的模板
 
 ```text
-请在 /Users/yorkli/Projects/mirabox 下工作。
+请在 ~/Projects/mirabox 下工作。
 先读 AGENT-GUIDE.md，并遵守 §2 的硬规矩（不要运行时改配置、不要动保留槽、不要提交）。
 只做状态灯：读 Scripts/状态灯接入指南.md。
 改完跑 swift build && swift test，并把新事实追加到 HANDOFF.md §6.x。

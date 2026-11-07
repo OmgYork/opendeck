@@ -6,7 +6,7 @@
 #     /usr/bin/pmset -a disablesleep 0
 #
 # 用法（会要求输入一次登录密码）：
-#     sudo bash "/Users/yorkli/Downloads/shortcut general/mirabox/Scripts/install-pmset-sudoers.sh"
+#     sudo bash "~/Projects/mirabox/Scripts/install-pmset-sudoers.sh"
 
 set -uo pipefail
 

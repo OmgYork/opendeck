@@ -301,7 +301,7 @@ Property Inspector(WKWebView)、多状态图标、多页面、登录自启、屏
 
 ### 6.22 显示器输入源动效键面(2026-10-22,槽 1;宿主内建 KeyAnimation 首个实例)
 - **需求**:槽 1 的 `Toggle Monitor` 快捷指令实际是切换 LG 27GP95U 的输入源(Mac DP ↔ PC HDMI1)。键面要回答「现在谁在屏」,按压时把「信号搬家」演出来,而不是画一个电源开关。
-- **事实源**:`~/.cache/lg_input`(`mac` / `pc`,由 `/Users/yorkli/bin/lg-toggle.sh` 经 `m1ddc set input-alt` 写入)。键面、状态文件、按压后的乐观目标三方必须收敛。
+- **事实源**:`~/.cache/lg_input`(`mac` / `pc`,由 `~/bin/lg-toggle.sh` 经 `m1ddc set input-alt` 写入)。键面、状态文件、按压后的乐观目标三方必须收敛。
 - **数据模型**:`KeyConfig.animation: KeyAnimation?`(目前仅 `.monitorInput`),可选字段、旧配置缺键可解码;语义由渲染器决定,优先于 `iconPath`/`title`。编辑器外观区新增「动效:显示器输入切换」开关,草稿预览用 `AppModel.animationPreviewFrame(for:)` 取与设备同源的静息帧。
 - **宿主挂载**:`AppModel` 持有单例 `MonitorInputAnimator`(全局只有一路输入状态);`applyKey` 时 `attach(index:size:)`,同页其它键/换页时 `detach(ifIndex:)`。动效键整帧由动画驱动,跳过常规「底色+底图+标题」渲染;帧回调统一走 `setKeyImage`(设备与 UI 镜像同源)。按下沿先起动画再照常执行动作(乐观展示)。
 - **状态机**(`MonitorInputAnimator.swift`):按下立即播 12 帧 / 12fps 迁移(1.0s),不等脚本;动画结束后 1.5s 轮询状态文件对账——对上即销账,3s 仍未变则反向播一次回退动画(红色闪灯,不静默撒谎);外部切换(显示器摇杆/其它触发)由轮询检出并跟随。静息每 8s 一次「信号包」呼吸(6 帧 × 6fps),系统「减弱动态效果」开启时自动关闭。换页离开再回来重新读盘。

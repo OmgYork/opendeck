@@ -12,9 +12,9 @@
 | `Scripts/状态灯接入指南.md` | 只做「agent 状态灯」的模板化步骤，照抄即可 |
 | `Design/MonitorInputIcon/README.md` | 显示器输入源动效键的设计与状态机 |
 
-> 事实基线：2026-11-06（十一轮后，167 测全绿）。仓库已迁至 `/Users/yorkli/Projects/mirabox`。配置与槽位以运行中的 `config.json` 为准，本文的槽位表只是快照。
+> 事实基线：2026-11-06（十一轮后，167 测全绿）。仓库已迁至 `~/Projects/mirabox`。配置与槽位以运行中的 `config.json` 为准，本文的槽位表只是快照。
 > 新增事实：**单实例锁**（第二实例弹窗退出；LaunchAgent 拉起的实例带环境标记静默退出）；`pending-import/` 目录会被下次启动自动应用（导入暂存，勿手碰）；自动备份在 `backups/`；键面 112 与保留槽 13/14 规则不变。
-> **排障第一步用体检脚本**：`python3 /Users/yorkli/Projects/mirabox/Scripts/opendeck-doctor.py`（只读，输出运行中构建指纹/配置健康/插件完整性/备份新鲜度/近期错误，9 项 ✓/✗ 清单；`--json` 供程序化消费；含「运行中构建 vs git HEAD」对账——落后会提示重建）。
+> **排障第一步用体检脚本**：`python3 ~/Projects/mirabox/Scripts/opendeck-doctor.py`（只读，输出运行中构建指纹/配置健康/插件完整性/备份新鲜度/近期错误，9 项 ✓/✗ 清单；`--json` 供程序化消费；含「运行中构建 vs git HEAD」对账——落后会提示重建）。
 > **崩溃自愈**：面板「启动方式」= 关/登录启动/**登录+崩溃自愈**（LaunchAgent `~/Library/LaunchAgents/com.opendeck.app.plist`，KeepAlive.SuccessfulExit=false——崩溃自动重启、正常退出不重启；与登录项互斥，二者至多一个生效）。崩溃后 oslog 取证仅 error/fault 可持久（`log show` 不含 info 历史，§6.13）。
 
 ---
@@ -36,7 +36,7 @@
 
 | 内容 | 路径 |
 |---|---|
-| 源码仓库 | `/Users/yorkli/Projects/mirabox` |
+| 源码仓库 | `~/Projects/mirabox` |
 | 构建产物 | `mirabox/dist/OpenDeck.app` |
 | 配置文件 | `~/Library/Application Support/OpenDeck/config.json` |
 | 已安装插件 | `~/Library/Application Support/OpenDeck/plugins/<uuid>.sdPlugin/` |
@@ -59,7 +59,7 @@ Bundle ID：`com.opendeck.app`。源码入口：`Sources/OpenDeck/OpenDeckApp.sw
    cp "$HOME/Library/Application Support/OpenDeck/config.json" \
       "$HOME/Library/Application Support/OpenDeck/config.json.bak-$(date +%Y%m%d-%H%M)"
    # 编辑……
-   open "/Users/yorkli/Projects/mirabox/dist/OpenDeck.app"
+   open "~/Projects/mirabox/dist/OpenDeck.app"
    ```
 2. **不要同时运行官方 StreamDock.app。** OpenDeck 已能检测并提示退出它；你也不要在后台拉起官方 app。
 3. **不要修改保留槽。** 索引 13/14（位置 14/15）是固定导航键；编辑器禁止编辑，配置里的旧值也不会渲染。索引 5/6/7（位置 6/7/8）自 2026-11-01 起不再是保留槽——统计键（GPU/CPU/温度）动作化为 `KeyAction.stat`，可放任意键位、可清除。
@@ -89,7 +89,7 @@ Bundle ID：`com.opendeck.app`。源码入口：`Sources/OpenDeck/OpenDeckApp.sw
 
 1. 整目录拷贝模板（**必须带上 `whale.js` 和 `hook.py`**）：
    ```bash
-   cp -R "/Users/yorkli/Projects/mirabox/Scripts/com.zcode.status.sdPlugin" \
+   cp -R "~/Projects/mirabox/Scripts/com.zcode.status.sdPlugin" \
          "$HOME/Library/Application Support/OpenDeck/plugins/com.<你的标识>.status.sdPlugin"
    ```
 2. 改 `manifest.json`：目录名、`Name`、`Actions[0].UUID` 三处换成你自己的身份；可选加 `ActivateAppBundleID`（按键抬起时把你的 app 置前）。
@@ -344,7 +344,7 @@ swift test                  # 全部测试（只增不减），全绿才算通�
 
 ```bash
 osascript -e 'quit app "OpenDeck"'
-open "/Users/yorkli/Projects/mirabox/dist/OpenDeck.app"
+open "~/Projects/mirabox/dist/OpenDeck.app"
 ```
 
 插件部署：

@@ -9,7 +9,7 @@
 槽位 1 的动作是 macOS 快捷指令 **Toggle Monitor**，其内容不是“显示器开关”，而是：
 
 ```
-/Users/yorkli/bin/lg-toggle.sh
+~/bin/lg-toggle.sh
   ├─ 读 ~/.cache/lg_input（mac / pc）
   ├─ mac → m1ddc set input-alt 144   （DP / Mac → HDMI1 / PC）
   └─ pc  → m1ddc set input-alt 208   （HDMI1 / PC → DP / Mac）
