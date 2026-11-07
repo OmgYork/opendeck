@@ -254,6 +254,17 @@ final class AppModel {
         statTiles.onFrame = { [weak self] index, image in
             self?.setKeyImage(index: index, image: image)
         }
+        // §2:回调唯一挂接时机 = init(onAppear 的 applyPageToDevice 先于 start(),
+        // start() 才挂会丢首次帧——picMode 静息帧曾因此从未到达设备/UI 镜像)
+        pressPulse.onFrame = { [weak self] index, image in
+            self?.setKeyImage(index: index, image: image)
+        }
+        tileFX.onFrame = { [weak self] index, image in
+            self?.setKeyImage(index: index, image: image)
+        }
+        picMode.onFrame = { [weak self] index, image in
+            self?.setKeyImage(index: index, image: image)
+        }
     }
 
     /// 官方 app 是否正在运行(驱动编辑器顶部的冲突警示条)。
@@ -425,18 +436,7 @@ final class AppModel {
             guard let self else { return }
             self.setKeyImage(index: index, image: image)
         }
-        pressPulse.onFrame = { [weak self] index, image in
-            guard let self else { return }
-            self.setKeyImage(index: index, image: image)
-        }
-        tileFX.onFrame = { [weak self] index, image in
-            guard let self else { return }
-            self.setKeyImage(index: index, image: image)
-        }
-        picMode.onFrame = { [weak self] index, image in
-            guard let self else { return }
-            self.setKeyImage(index: index, image: image)
-        }
+
         picMode.onLog = { [weak self] line in
             self?.appendLog(line)
         }
